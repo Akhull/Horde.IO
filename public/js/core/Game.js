@@ -1,3 +1,4 @@
+// public/js/core/Game.js
 import { CONFIG } from "./config.js";
 import { Unit } from "../entities/Unit.js";
 import * as Utils from "../utils/utils.js";
@@ -7,12 +8,7 @@ import { SoundManager } from "./SoundManager.js";
 import { AssetManager } from "./AssetManager.js";
 
 export class Game {
-
   constructor() {
-    // Canvas und Kontext
-    this.canvas = document.getElementById("gameCanvas");
-    this.ctx = this.canvas.getContext("2d");
-
     // Logische Größe (CSS-Pixel)
     this.logicalWidth = window.innerWidth;
     this.logicalHeight = window.innerHeight;
@@ -57,12 +53,11 @@ export class Game {
     this.socket = null;
     this.remotePlayers = {}; // Remote-Spieler-Daten, synchronisiert über Socket
 
-    // Joystick
+    // Joystick-Vektor (für mobile Steuerung)
     this.joystickVector = { x: 0, y: 0 };
 
-    // Mobile-Erkennung
+    // Mobile-Erkennung und Zoom
     this.isMobile = /Mobi|Android/i.test(navigator.userAgent);
-    // Kein zusätzlicher Zoom – Originalgröße
     this.gameZoom = 1.0;
     this.hudScale = 1.0;
 
@@ -75,21 +70,22 @@ export class Game {
     // Initialisiere Submodule
     this.inputHandler = new InputHandler(this);
     this.soundManager = new SoundManager();
+    // Neuer Renderer, der PixiJS für hardwarebeschleunigtes Rendering nutzt
     this.renderer = new Renderer(this);
 
-    // Fenster-Events (Resize, Orientationchange)
+    // Resizing und Touch-Control-Setup
     window.addEventListener("resize", () => {
-      this.resizeCanvas();
+      this.resizeGame();
       this.resizeTouchControls();
     });
     window.addEventListener("orientationchange", () => {
-      this.resizeCanvas();
+      this.resizeGame();
       this.resizeTouchControls();
     });
-    this.resizeCanvas();
+    this.resizeGame();
     this.resizeTouchControls();
 
-    // Menü-Events
+    // Initialisiere Menü-Events
     this.setupMenuEvents();
 
     // Game Over – Neustart
@@ -101,30 +97,30 @@ export class Game {
     });
   }
 
-  resizeCanvas() {
-    const ratio = window.devicePixelRatio || 1;
-    this.canvas.width = window.innerWidth * ratio;
-    this.canvas.height = window.innerHeight * ratio;
-    this.canvas.style.width = window.innerWidth + "px";
-    this.canvas.style.height = window.innerHeight + "px";
+  // Aktualisiert die logische Größe und resized die PixiJS-Anwendung
+  resizeGame() {
     this.logicalWidth = window.innerWidth;
     this.logicalHeight = window.innerHeight;
-    this.ctx.setTransform(1, 0, 0, 1, 0, 0);
-    this.ctx.scale(ratio, ratio);
+    if (this.renderer && this.renderer.app) {
+      this.renderer.app.renderer.resize(this.logicalWidth, this.logicalHeight);
+    }
   }
 
+  // Passt Touch-Control-Elemente an
   resizeTouchControls() {
-    let scale = 0.4;
-    let containerSize = 420 * scale;
-    let knobSize = 210 * scale;
-    let actionButtonSize = 252 * scale;
-    let actionFontSize = 50 * scale;
+    const scale = 0.4;
+    const containerSize = 420 * scale;
+    const knobSize = 210 * scale;
+    const actionButtonSize = 252 * scale;
+    const actionFontSize = 50 * scale;
     const joystickContainer = document.getElementById("joystickContainer");
     const joystickKnob = document.getElementById("joystickKnob");
-    joystickContainer.style.width = containerSize + "px";
-    joystickContainer.style.height = containerSize + "px";
-    joystickKnob.style.width = knobSize + "px";
-    joystickKnob.style.height = knobSize + "px";
+    if (joystickContainer && joystickKnob) {
+      joystickContainer.style.width = containerSize + "px";
+      joystickContainer.style.height = containerSize + "px";
+      joystickKnob.style.width = knobSize + "px";
+      joystickKnob.style.height = knobSize + "px";
+    }
     document.querySelectorAll("#actionButtons button").forEach(btn => {
       btn.style.width = actionButtonSize + "px";
       btn.style.height = actionButtonSize + "px";
@@ -132,6 +128,7 @@ export class Game {
     });
   }
 
+  // Umschalten in den Vollbildmodus
   toggleFullscreen() {
     if (!document.fullscreenElement) {
       if (document.documentElement.requestFullscreen) {
@@ -148,6 +145,7 @@ export class Game {
     }
   }
 
+  // Aktualisiert die Positionen der Remote-Spieler
   updateRemotePlayers() {
     Object.keys(this.remotePlayers).forEach(id => {
       const remoteData = this.remotePlayers[id];
@@ -162,16 +160,12 @@ export class Game {
         this.units.push(remoteUnit);
       }
     });
-    this.units = this.units.filter(u => {
-      if (u.isRemote) {
-        return this.remotePlayers[u.remoteId] !== undefined;
-      }
-      return true;
-    });
+    this.units = this.units.filter(u => (u.isRemote ? this.remotePlayers[u.remoteId] !== undefined : true));
   }
 
+  // Initialisiert Menü- und UI-Interaktionen
   setupMenuEvents() {
-    // Titelbildschirm
+    // Titelbildschirm: Start des Spiels
     const bgMusic = document.getElementById("bgMusic");
     const titleScreen = document.getElementById("titleScreen");
     titleScreen.addEventListener("click", () => {
@@ -197,7 +191,6 @@ export class Game {
     document.getElementById("btn-multiplayer").addEventListener("click", () => {
       this.isMultiplayerMode = true;
       this.socket = io();
-      // Registrierung der Socket-Events
       this.socket.on("currentPlayers", (players) => {
         for (let id in players) {
           if (id !== this.socket.id) {
@@ -217,15 +210,13 @@ export class Game {
       this.socket.on("playerDisconnected", (playerId) => {
         delete this.remotePlayers[playerId];
       });
-      // Warten: Der Server schickt "showCharacterSelection", wenn mindestens 2 Spieler im Multiplayer sind.
+      // Sobald mindestens zwei Spieler verbunden sind, wechsle in die Charakterauswahl
       this.socket.on("showCharacterSelection", () => {
-        // Wartebildschirm ausblenden, Charakterauswahl anzeigen
         document.getElementById("lobbyScreen").style.display = "none";
         document.getElementById("selectionMenu").style.display = "flex";
       });
-      // "startGame": Wird später gesendet, wenn alle Spieler bereit sind.
+      // Starte das Spiel, wenn alle Spieler bereit sind
       this.socket.on("startGame", () => {
-        // Starte den Spielzustand
         this.initGame(this.playerFaction);
         if (document.documentElement.requestFullscreen) {
           document.documentElement.requestFullscreen();
@@ -237,18 +228,18 @@ export class Game {
       });
       document.getElementById("mainMenu").style.display = "none";
       document.getElementById("mainMenu").style.opacity = "0";
-      // Zeige den Wartebildschirm an
       document.getElementById("lobbyScreen").style.display = "flex";
-      // Sende NICHT sofort "lobbyReady" – wir warten auf die Charakterauswahl!
-      this.canvas.style.pointerEvents = "none";
+      const container = document.getElementById("gameCanvasContainer");
+      if (container) container.style.pointerEvents = "none";
     });
 
-    // Optionen-Menü
+    // Optionen-Menü öffnen
     document.getElementById("btn-options").addEventListener("click", () => {
       document.getElementById("mainMenu").style.display = "none";
       document.getElementById("mainMenu").style.opacity = "0";
       document.getElementById("optionsMenu").style.display = "flex";
-      this.canvas.style.pointerEvents = "none";
+      const container = document.getElementById("gameCanvasContainer");
+      if (container) container.style.pointerEvents = "none";
     });
 
     // Zurück aus dem Optionen-Menü
@@ -256,8 +247,9 @@ export class Game {
       document.getElementById("optionsMenu").style.display = "none";
       document.getElementById("mainMenu").style.display = "flex";
       setTimeout(() => { 
-        document.getElementById("mainMenu").style.opacity = "1";
-        this.canvas.style.pointerEvents = "auto";
+        document.getElementById("mainMenu").style.opacity = "1"; 
+        const container = document.getElementById("gameCanvasContainer");
+        if (container) container.style.pointerEvents = "auto";
       }, 10);
     });
 
@@ -269,8 +261,7 @@ export class Game {
       setTimeout(() => { mainMenu.style.opacity = "1"; }, 10);
     });
 
-    // In der Charakterauswahl: Sobald ein Spieler einen Charakter auswählt,
-    // sendet der Client "characterSelected" und dann "lobbyReady".
+    // In der Charakterauswahl: Sobald ein Spieler einen Charakter auswählt, starte das Spiel
     document.querySelectorAll("#selectionMenu button").forEach(btn => {
       btn.addEventListener("click", () => {
         const selected = btn.getAttribute("data-faction");
@@ -280,7 +271,6 @@ export class Game {
         if (this.isMultiplayerMode && this.socket) {
           this.socket.emit("characterSelected", { faction: selected });
           this.socket.emit("lobbyReady");
-          // Warten auf "startGame" vom Server.
         } else {
           this.initGame(selected);
           if (document.documentElement.requestFullscreen) {
@@ -295,6 +285,7 @@ export class Game {
     });
   }
 
+  // Initialisiert das Spiel (Einheiten, Gebäude, statische Objekte etc.)
   initGame(selectedFaction) {
     this.units = [];
     this.buildings = [];
@@ -315,7 +306,7 @@ export class Game {
     this.safeZoneTarget = { centerX: CONFIG.worldWidth / 2, centerY: CONFIG.worldHeight / 2, radius: 7000 };
 
     if (!this.isMultiplayerMode) {
-      // Singleplayer: Erzeuge komplette Welt (Spieler, KI, Gebäude, etc.)
+      // Singleplayer: Erzeuge vollständige Welt (Spieler, KI, Gebäude etc.)
       const totalKings = 11;
       const margin = 200;
       const L1 = CONFIG.worldWidth - 2 * margin;
@@ -335,24 +326,30 @@ export class Game {
       let playerIndex = Math.floor(Math.random() * totalKings);
       this.playerKing = new Unit(kingPositions[playerIndex].x, kingPositions[playerIndex].y, selectedFaction, "king");
       this.units.push(this.playerKing);
-      for (let i = 0; i < 10; i++) { this.units.push(Utils.spawnVassal(this.playerKing)); }
+      for (let i = 0; i < 10; i++) { 
+        this.units.push(Utils.spawnVassal(this.playerKing)); 
+      }
       const factions = ["human", "elf", "orc"];
       for (let i = 0; i < totalKings; i++) {
         if (i === playerIndex) continue;
         let faction = factions[Math.floor(Math.random() * factions.length)];
         let aiKing = new Unit(kingPositions[i].x, kingPositions[i].y, faction, "king");
         this.units.push(aiKing);
-        for (let j = 0; j < 10; j++) { this.units.push(Utils.spawnVassal(aiKing)); }
+        for (let j = 0; j < 10; j++) { 
+          this.units.push(Utils.spawnVassal(aiKing)); 
+        }
       }
     } else {
-      // Multiplayer: Erzeuge nur den lokalen Spieler.
+      // Multiplayer: Erzeuge nur den lokalen Spieler
       this.playerKing = new Unit(CONFIG.worldWidth / 2, CONFIG.worldHeight / 2, selectedFaction, "king");
       this.playerKing.isLocal = true;
       this.units.push(this.playerKing);
-      for (let i = 0; i < 10; i++) { this.units.push(Utils.spawnVassal(this.playerKing)); }
+      for (let i = 0; i < 10; i++) { 
+        this.units.push(Utils.spawnVassal(this.playerKing)); 
+      }
       this.socket.emit("playerJoined", { x: this.playerKing.x, y: this.playerKing.y, faction: selectedFaction });
     }
-    // Beide Modi: Erzeuge statische Weltobjekte (Buildings, Obstacles) – idealerweise basierend auf einem gemeinsamen Seed.
+    // Beide Modi: Erzeuge statische Weltobjekte (Obstacles, Gebäude) – basierend auf einem gemeinsamen Seed
     Utils.generateObstacles(this);
     Utils.generateBuildingClusters(this);
   }
@@ -401,7 +398,7 @@ export class Game {
     Utils.handleBuildings(this);
     Utils.resolveUnitCollisions(this);
     Utils.applySeparationForce(this, deltaTime);
-    
+
     if (!this.playerKing || this.playerKing.hp <= 0) {
       this.gameOver = true;
       Utils.showGameOverMenu("Verloren");
@@ -412,7 +409,7 @@ export class Game {
         Utils.showGameOverMenu("Gewonnen");
       }
     }
-    
+
     if (this.isMultiplayerMode && this.socket && this.playerKing) {
       this.socket.emit("playerMoved", { x: this.playerKing.x, y: this.playerKing.y });
     }
@@ -486,6 +483,7 @@ export class Game {
       let deltaTime = timestamp - this.lastTime;
       this.lastTime = timestamp;
       this.update(deltaTime);
+      // Nutze den neuen Renderer, der die PixiJS-Anwendung steuert
       this.renderer.draw();
       this.fpsCount++;
       this.fpsTime += deltaTime;

@@ -26,10 +26,12 @@ export const AssetManager = {
     this.assets.souls.green.src = "assets/sprites/Collectables/Green.png";
     this.assets.souls.blue.src  = "assets/sprites/Collectables/Blue.png";
     this.assets.souls.purple.src = "assets/sprites/Collectables/Purple.png";
+    
     // Buildings
     this.assets.buildings.barn.src  = "assets/sprites/Buildings/Barn.png";
     this.assets.buildings.house.src = "assets/sprites/Buildings/House.png";
     this.assets.buildings.tower.src = "assets/sprites/Buildings/Tower.png";
+    
     // Factions
     this.assets.factions.human.king.src   = "assets/sprites/Units/Mensch/King.png";
     this.assets.factions.human.level1.src   = "assets/sprites/Units/Mensch/Level 1.png";
@@ -49,9 +51,7 @@ export const AssetManager = {
     // Weitere Assets
     this.assets.arrow.src = "assets/sprites/ATTACKS/Arrow.png";
     this.assets.ground.src = "https://opengameart.org/sites/default/files/grass_0.png";
-    // Slash-Sprite laden
     this.assets.slash.src = "assets/sprites/ATTACKS/slash.png";
-    // Forest-Asset laden (neuer Pfad)
     this.assets.forest.src = "assets/sprites/Trees/angepasst/Forest dark.PNG";
   }
 };

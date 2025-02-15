@@ -21,41 +21,47 @@ export class Forest {
   }
   
   /**
-   * Zeichnet den Wald, indem das Forest-Bild getiled wird.
-   * @param {CanvasRenderingContext2D} ctx - Zeichenkontext
-   * @param {number} [cameraX=0] - X-Verschiebung (z. B. Kameraposition)
-   * @param {number} [cameraY=0] - Y-Verschiebung (z. B. Kameraposition)
+   * Erstellt ein PIXI TilingSprite, das den Wald als getiled Bild darstellt.
+   * Falls das Forest-Asset nicht verfügbar ist, wird ein gefülltes Grafik-Objekt zurückgegeben.
+   * @returns {PIXI.Sprite|PIXI.Graphics}
    */
-  draw(ctx, cameraX = 0, cameraY = 0) {
+  createSprite() {
     const forestImg = AssetManager.assets.forest;
     if (forestImg.complete && forestImg.naturalWidth && forestImg.naturalHeight) {
-      const DESIRED_TILE_WIDTH = 210; // Ca. 3,5-mal so groß wie ein Building (60px)
+      // Gewünschte Tile-Breite (hier ca. 210px, anpassbar)
+      const DESIRED_TILE_WIDTH = 210;
+      // Berechne den Skalierungsfaktor basierend auf der Originalbreite
       const scale = DESIRED_TILE_WIDTH / forestImg.naturalWidth;
-      const tileWidth = DESIRED_TILE_WIDTH;
-      const tileHeight = forestImg.naturalHeight * scale;
-      const cols = Math.ceil(this.width / tileWidth);
-      const rows = Math.ceil(this.height / tileHeight);
-      
-      for (let i = 0; i < cols; i++) {
-        for (let j = 0; j < rows; j++) {
-          const dx = this.x - cameraX + i * tileWidth;
-          const dy = this.y - cameraY + j * tileHeight;
-          ctx.drawImage(forestImg, dx, dy, tileWidth, tileHeight);
-        }
-      }
+      // Erstelle ein Texture-Objekt anhand des Forest-Assets
+      const texture = PIXI.Texture.from(forestImg.src);
+      // Erzeuge ein TilingSprite, das den Bereich abdeckt
+      const tilingSprite = new PIXI.TilingSprite(texture, this.width, this.height);
+      // Setze den Skalierungsfaktor für die Tiles
+      tilingSprite.tileScale.set(scale, scale);
+      // Positioniere das Sprite an der gewünschten Stelle
+      tilingSprite.x = this.x;
+      tilingSprite.y = this.y;
+      return tilingSprite;
     } else {
-      // Fallback: Dunkelgrünes Rechteck
-      ctx.fillStyle = "#0a4f0a";
-      ctx.fillRect(this.x - cameraX, this.y - cameraY, this.width, this.height);
+      // Fallback: Erzeuge ein Grafik-Objekt mit einem dunkelgrünen Rechteck
+      const graphics = new PIXI.Graphics();
+      graphics.beginFill(0x0a4f0a);
+      graphics.drawRect(this.x, this.y, this.width, this.height);
+      graphics.endFill();
+      return graphics;
     }
   }
   
   /**
-   * Zeichnet eine vereinfachte Darstellung (z. B. für die Minimap)
-   * @param {CanvasRenderingContext2D} ctx - Zeichenkontext
+   * Gibt eine vereinfachte Darstellung für die Minimap zurück.
+   * Hier kannst du beispielsweise ein gefülltes Grafik-Objekt erzeugen.
+   * @returns {PIXI.Graphics}
    */
-  drawMinimap(ctx) {
-    ctx.fillStyle = "#0a4f0a";
-    ctx.fillRect(this.x, this.y, this.width, this.height);
+  createMinimapSprite() {
+    const graphics = new PIXI.Graphics();
+    graphics.beginFill(0x0a4f0a);
+    graphics.drawRect(this.x, this.y, this.width, this.height);
+    graphics.endFill();
+    return graphics;
   }
 }

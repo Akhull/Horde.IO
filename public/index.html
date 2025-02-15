@@ -10,6 +10,8 @@
   <link rel="stylesheet" href="css/styles.css">
   <!-- Socket.IO Client (für Multiplayer) -->
   <script src="https://cdn.socket.io/4.6.1/socket.io.min.js"></script>
+  <!-- PixiJS (für hardwarebeschleunigtes Rendering) -->
+  <script src="https://pixijs.download/release/pixi.min.js"></script>
 </head>
 <body>
   <!-- TITELBILDSCHIRM -->
@@ -74,8 +76,8 @@
   </div>
   <!-- Vollbild-Button -->
   <button id="fullscreenButton">Vollbild</button>
-  <!-- Canvas -->
-  <canvas id="gameCanvas"></canvas>
+  <!-- Container für PixiJS Canvas -->
+  <div id="gameCanvasContainer" style="width:100%; height:100%;"></div>
   <!-- Joystick & Aktions-Buttons (für mobile Steuerung) -->
   <div id="joystickContainer">
     <div id="joystickKnob"></div>
