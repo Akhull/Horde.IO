@@ -1,4 +1,4 @@
+// public/js/ui/joystick.js
 export function initJoystick(game) {
-    // Der Joystick wird bereits im InputHandler initialisiert.
-  }
-  
+  // Zusätzliche Joystick‑Interaktionen können hier initialisiert werden.
+}

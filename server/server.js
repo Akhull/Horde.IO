@@ -1,10 +1,30 @@
+// public/server/server.js
 import express from 'express';
 import http from 'http';
 import { Server as SocketIOServer } from 'socket.io';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
 const app = express();
 const server = http.createServer(app);
 const io = new SocketIOServer(server);
+const PORT = process.env.PORT || 8080;
+
+// __dirname in ES Modules definieren
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Bestimme den Pfad zum übergeordneten Ordner "public"
+const publicPath = path.join(__dirname, '..', 'public');
+console.log("Static files served from:", publicPath);
+
+// Statische Dateien aus dem "public"-Ordner bereitstellen
+app.use(express.static(publicPath));
+
+// Sende index.html als Startseite (liegt unter public/index.html)
+app.get('/', (req, res) => {
+  res.sendFile(path.join(publicPath, 'index.html'));
+});
 
 // Beispielhafte Map-Daten (könnten dynamisch generiert werden)
 function generateMap() {
@@ -36,13 +56,11 @@ io.on('connection', (socket) => {
       y: data.y,
       faction: data.faction,
       hp: 100,
-      ready: false // noch nicht bereit – wartet auf Charakterauswahl
+      ready: false // wartet auf Charakterauswahl
     };
     socket.emit('stateUpdate', gameState);
     socket.broadcast.emit('newPlayer', gameState.players[socket.id]);
     
-    // Sobald mindestens zwei Spieler verbunden sind und wir noch nicht in der Charakterauswahl sind,
-    // weise den Zustand zu und sende das Event an alle Clients.
     if (Object.keys(gameState.players).length >= 2 && !gameState.inCharacterSelection) {
       gameState.inCharacterSelection = true;
       io.emit('showCharacterSelection');
@@ -59,7 +77,6 @@ io.on('connection', (socket) => {
   });
   
   socket.on('lobbyReady', () => {
-    // Falls der Spieler noch nicht als ready markiert wurde, setze ihn hier
     if (gameState.players[socket.id] && !gameState.players[socket.id].ready) {
       gameState.players[socket.id].ready = true;
       console.log(`Player ${socket.id} wurde in lobbyReady als bereit markiert.`);
@@ -93,6 +110,6 @@ setInterval(() => {
   io.emit('stateUpdate', gameState);
 }, 100);
 
-server.listen(8080, () => {
-  console.log('Server listening on port 8080');
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`Server listening on port ${PORT}`);
 });

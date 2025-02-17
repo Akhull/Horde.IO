@@ -19,7 +19,7 @@ canvas {
   top: 0;
   left: 0;
   display: block;
-  z-index: 0;  /* Neu: Canvas liegt hinter den UI-Elementen */
+  z-index: 0;  /* Canvas liegt hinter den UI-Elementen */
 }
 
 /* TITELBILDSCHIRM */
@@ -329,11 +329,9 @@ canvas {
   background: url('/assets/images/multiplayerwaitscreen.png') no-repeat center center;
   background-size: cover;
   display: none;
-  z-index: 1000;  /* Neu: Höherer z-index, damit der Wartebildschirm oben liegt */
+  z-index: 1000;  /* Höherer z-index für den Wartebildschirm */
   color: white;
   text-shadow: 2px 2px 4px black;
-  /* Neue Flexbox-Regeln für zentrierten Inhalt */
-
   flex-direction: column;
   justify-content: center;
   align-items: center;

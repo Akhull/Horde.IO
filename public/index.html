@@ -1,9 +1,16 @@
 <!DOCTYPE html>
 <html lang="de">
 <head>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.128.0/build/three.module.js"
+      }
+    }
+    </script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Horde of Kings</title>
+  <title>Horde of Kings 3D</title>
   <!-- Google Font -->
   <link href="https://fonts.googleapis.com/css?family=Cinzel" rel="stylesheet">
   <!-- CSS -->
@@ -14,22 +21,22 @@
 <body>
   <!-- TITELBILDSCHIRM -->
   <div id="titleScreen">
-    <h1>Horde of Kings</h1>
+    <h1>Horde of Kings 3D</h1>
     <p id="startText">press start to play</p>
   </div>
-  <!-- Neues Hauptmenü -->
+  <!-- Hauptmenü -->
   <div id="mainMenu">
-    <h1>Horde of Kings</h1>
+    <h1>Horde of Kings 3D</h1>
     <button id="btn-singleplayer">Singleplayer</button>
     <button id="btn-multiplayer">Multiplayer</button>
     <button id="btn-options">Optionen</button>
   </div>
-  <!-- Lobby-Bereich (wird im Multiplayer-Modus angezeigt) -->
+  <!-- Lobby-Bereich (Multiplayer) -->
   <div id="lobbyScreen">
     <h1>Warte auf weitere Spieler...</h1>
     <p>Bitte warten, bis mindestens ein weiterer Spieler beigetreten ist.</p>
   </div>
-  <!-- Options-Menü (mit Lautstärkereglern) -->
+  <!-- Options-Menü -->
   <div id="optionsMenu">
     <h1>Optionen</h1>
     <div id="volumeControls">
@@ -41,7 +48,7 @@
     </div>
     <button id="btn-back">Zurück</button>
   </div>
-  <!-- Ursprüngliches Archetyp-Auswahlmenü -->
+  <!-- Archetyp-Auswahlmenü (für die 3D-Variante, alte 2D-Grafiken wurden ersetzt) -->
   <div id="selectionMenu">
     <h1>Wähle deinen Archetyp</h1>
     <button data-faction="human">
@@ -61,7 +68,7 @@
   <div id="gameUI">
     <h2>Steuerung</h2>
     <ul>
-      <li><strong>WASD</strong>: Bewegung (bei PC oder über Joystick)</li>
+      <li><strong>WASD</strong>: Bewegung (PC oder Joystick)</li>
       <li><strong>Leertaste</strong>: Dash (Schnell vorwärts springen)</li>
       <li><strong>Q</strong>: Schild aktivieren (reduziert eingehenden Schaden)</li>
     </ul>
@@ -74,7 +81,7 @@
   </div>
   <!-- Vollbild-Button -->
   <button id="fullscreenButton">Vollbild</button>
-  <!-- Canvas -->
+  <!-- Canvas für ThreeJS (wird entweder von main.js referenziert oder als Container genutzt) -->
   <canvas id="gameCanvas"></canvas>
   <!-- Joystick & Aktions-Buttons (für mobile Steuerung) -->
   <div id="joystickContainer">
@@ -84,12 +91,12 @@
     <button id="btn-dash">Dash</button>
     <button id="btn-shield">Shield</button>
   </div>
-  <!-- Hintergrundmusik (wird unsichtbar geladen) -->
+  <!-- Hintergrundmusik -->
   <audio id="bgMusic" loop autoplay style="display:none;">
     <source src="assets/music/Theme Music.mp3" type="audio/mp3">
     Dein Browser unterstützt dieses Audioformat nicht.
   </audio>
-  <!-- Haupt-Clientcode als ES-Modul -->
+  <!-- Haupt-Clientcode als ES-Modul (importiert u.a. ThreeJS und den neuen MapGenerator) -->
   <script type="module" src="js/main.js"></script>
 </body>
 </html>
