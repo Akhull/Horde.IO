@@ -1,37 +1,38 @@
 // public/js/entities/Building.js
 import { Entity } from "./Entity.js";
+import * as THREE from "https://unpkg.com/three@0.128.0/build/three.module.js";
 
 export class Building extends Entity {
-  constructor(x, y, buildingType) {
-    // Setze Standardgrößen, z. B. 60x60 (anpassen falls nötig)
-    super(x, y, 60, 60);
-    this.buildingType = buildingType; // z. B. "barn", "house", "tower"
+  /**
+   * @param {number} x - X-Position (linke obere Ecke in der XZ-Ebene)
+   * @param {number} z - Z-Position (linke obere Ecke in der XZ-Ebene)
+   * @param {string} buildingType - z.B. "barn", "house", "tower"
+   */
+  constructor(x, z, buildingType) {
+    // Standardgröße 60x60 (Breite x Tiefe)
+    super(x, z, 60, 60);
+    this.buildingType = buildingType;
     this.hp = 100;
+    this.mesh = null;
   }
   
-  // Die draw()-Methode erwartet nun den assets Parameter
-  draw(ctx, cameraX, cameraY, assets) {
-    // Wähle den entsprechenden Sprite aus dem zentralen AssetManager
-    let sprite = assets.buildings[this.buildingType];
-    if (sprite && sprite.complete) {
-      ctx.drawImage(sprite, this.x - cameraX, this.y - cameraY, this.width, this.height);
+  /**
+   * Erzeugt ein Three.js-Mesh für das Gebäude.
+   */
+  initMesh(assets) {
+    let texture = assets.buildings[this.buildingType];
+    let material;
+    if (texture) {
+      material = new THREE.MeshBasicMaterial({ map: texture });
     } else {
-      ctx.fillStyle = "gray";
-      ctx.fillRect(this.x - cameraX, this.y - cameraY, this.width, this.height);
+      material = new THREE.MeshBasicMaterial({ color: 0x808080 });
     }
-    
-    // Zeichne einen kleinen Lebensbalken oberhalb des Gebäudes
-    const barWidth = this.width;
-    const barHeight = 5;
-    ctx.fillStyle = "black";
-    ctx.fillRect(this.x - cameraX, this.y - cameraY - barHeight - 2, barWidth, barHeight);
-    ctx.fillStyle = "red";
-    ctx.fillRect(this.x - cameraX, this.y - cameraY - barHeight - 2, barWidth * (this.hp / 100), barHeight);
-  }
-  
-  // Optional: Zeichne das Gebäude in der Minimap
-  drawMinimap(ctx) {
-    ctx.fillStyle = "gray";
-    ctx.fillRect(this.x, this.y, this.width, this.height);
+    // BoxGeometry: Breite, Höhe, Tiefe (hier Höhe z.B. 60, anpassbar)
+    const height = 60;
+    const geometry = new THREE.BoxGeometry(this.width, height, this.depth);
+    this.mesh = new THREE.Mesh(geometry, material);
+    // Positioniere das Mesh so, dass die Basis auf y=0 liegt.
+    this.mesh.position.set(this.position.x + this.width / 2, height / 2, this.position.z + this.depth / 2);
+    return this.mesh;
   }
 }

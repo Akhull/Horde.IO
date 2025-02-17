@@ -1,61 +1,56 @@
 // public/js/entities/Forest.js
-import { AssetManager } from "../core/AssetManager.js";
+import * as THREE from "https://unpkg.com/three@0.128.0/build/three.module.js";
 
 export class Forest {
   /**
-   * @param {number} x - X-Position der Waldfläche (linke obere Ecke)
-   * @param {number} y - Y-Position der Waldfläche (linke obere Ecke)
-   * @param {number} width - Breite des Waldbereichs (Kollisionsbox)
-   * @param {number} height - Höhe des Waldbereichs (Kollisionsbox)
+   * @param {number} x - X-Position (linke obere Ecke in der XZ-Ebene)
+   * @param {number} z - Z-Position (linke obere Ecke in der XZ-Ebene)
+   * @param {number} width - Breite
+   * @param {number} depth - Tiefe
    */
-  constructor(x, y, width, height) {
+  constructor(x, z, width, depth) {
     this.x = x;
-    this.y = y;
+    this.z = z;
     this.width = width;
-    this.height = height;
+    this.depth = depth;
+    this.mesh = null;
   }
   
-  // Forest bleibt stationär; update() wird bei Bedarf erweitert.
   update(deltaTime) {
-    // Keine Animation – der Wald ist statisch.
+    // Wald bleibt statisch.
   }
   
   /**
-   * Zeichnet den Wald, indem das Forest-Bild getiled wird.
-   * @param {CanvasRenderingContext2D} ctx - Zeichenkontext
-   * @param {number} [cameraX=0] - X-Verschiebung (z. B. Kameraposition)
-   * @param {number} [cameraY=0] - Y-Verschiebung (z. B. Kameraposition)
+   * Erzeugt ein Three.js-Mesh für den Wald.
    */
-  draw(ctx, cameraX = 0, cameraY = 0) {
-    const forestImg = AssetManager.assets.forest;
-    if (forestImg.complete && forestImg.naturalWidth && forestImg.naturalHeight) {
-      const DESIRED_TILE_WIDTH = 210; // Ca. 3,5-mal so groß wie ein Building (60px)
-      const scale = DESIRED_TILE_WIDTH / forestImg.naturalWidth;
-      const tileWidth = DESIRED_TILE_WIDTH;
-      const tileHeight = forestImg.naturalHeight * scale;
-      const cols = Math.ceil(this.width / tileWidth);
-      const rows = Math.ceil(this.height / tileHeight);
-      
-      for (let i = 0; i < cols; i++) {
-        for (let j = 0; j < rows; j++) {
-          const dx = this.x - cameraX + i * tileWidth;
-          const dy = this.y - cameraY + j * tileHeight;
-          ctx.drawImage(forestImg, dx, dy, tileWidth, tileHeight);
-        }
-      }
-    } else {
-      // Fallback: Dunkelgrünes Rechteck
-      ctx.fillStyle = "#0a4f0a";
-      ctx.fillRect(this.x - cameraX, this.y - cameraY, this.width, this.height);
+  initMesh(assets) {
+    const texture = assets.forest;
+    if (texture) {
+      texture.wrapS = THREE.RepeatWrapping;
+      texture.wrapT = THREE.RepeatWrapping;
+      const DESIRED_TILE_WIDTH = 210;
+      const repeatX = this.width / DESIRED_TILE_WIDTH;
+      const repeatY = this.depth / DESIRED_TILE_WIDTH;
+      texture.repeat.set(repeatX, repeatY);
     }
+    
+    const geometry = new THREE.PlaneGeometry(this.width, this.depth);
+    const material = new THREE.MeshBasicMaterial({
+      map: texture,
+      side: THREE.DoubleSide
+    });
+    
+    this.mesh = new THREE.Mesh(geometry, material);
+    this.mesh.rotation.x = -Math.PI / 2;
+    this.mesh.position.set(this.x + this.width / 2, 0, this.z + this.depth / 2);
+    return this.mesh;
   }
   
   /**
-   * Zeichnet eine vereinfachte Darstellung (z. B. für die Minimap)
-   * @param {CanvasRenderingContext2D} ctx - Zeichenkontext
+   * Fallback für die Minimap.
    */
   drawMinimap(ctx) {
     ctx.fillStyle = "#0a4f0a";
-    ctx.fillRect(this.x, this.y, this.width, this.height);
+    ctx.fillRect(this.x, this.z, this.width, this.depth);
   }
 }

@@ -1,3 +1,4 @@
+// public/js/core/Game.js
 import { CONFIG } from "./config.js";
 import { Unit } from "../entities/Unit.js";
 import * as Utils from "../utils/utils.js";
@@ -5,21 +6,18 @@ import { Renderer } from "./Renderer.js";
 import { InputHandler } from "./InputHandler.js";
 import { SoundManager } from "./SoundManager.js";
 import { AssetManager } from "./AssetManager.js";
+import MapGenerator from "../mapgenerator/mapgenerator.js";
+import * as THREE from "https://unpkg.com/three@0.128.0/build/three.module.js";
 
 export class Game {
-
   constructor() {
-    // Canvas und Kontext
     this.canvas = document.getElementById("gameCanvas");
-    this.ctx = this.canvas.getContext("2d");
-
-    // Logische Größe (CSS-Pixel)
     this.logicalWidth = window.innerWidth;
     this.logicalHeight = window.innerHeight;
-
+    
     // Spielzustand
-    this.units = [];         // Alle Einheiten (lokal und remote)
-    this.buildings = [];     // Gebäude
+    this.units = [];
+    this.buildings = [];
     this.souls = [];
     this.obstacles = [];
     this.powerUps = [];
@@ -33,51 +31,43 @@ export class Game {
     this.fps = 0;
     this.fpsCount = 0;
     this.fpsTime = 0;
-
-    // Kamera und View
-    this.cameraX = 0;
-    this.cameraY = 0;
-    this.viewWidth = 0;
-    this.viewHeight = 0;
-
-    // Safe-Zone
+    
+    // Safe-Zone (X-Z-Ebene)
     this.safeZoneState = "delay";
     this.safeZoneTimer = 0;
-    this.safeZoneCurrent = { centerX: CONFIG.worldWidth / 2, centerY: CONFIG.worldHeight / 2, radius: 7000 };
-    this.safeZoneTarget = { centerX: CONFIG.worldWidth / 2, centerY: CONFIG.worldHeight / 2, radius: 7000 };
-
-    // Zeit und Bewegung
+    this.safeZoneCurrent = { centerX: CONFIG.worldWidth / 2, centerZ: CONFIG.worldHeight / 2, radius: 7000 };
+    this.safeZoneTarget = { centerX: CONFIG.worldWidth / 2, centerZ: CONFIG.worldHeight / 2, radius: 7000 };
+    
     this.timeOfDay = 0;
-    this.lastKingX = 0;
-    this.lastKingY = 0;
+    this.lastKingPos = new THREE.Vector2(0, 0);
     this.kingStationaryTime = 0;
-
+    
     // Multiplayer
     this.isMultiplayerMode = false;
     this.socket = null;
-    this.remotePlayers = {}; // Remote-Spieler-Daten, synchronisiert über Socket
-
+    this.remotePlayers = {};
+    
     // Joystick
     this.joystickVector = { x: 0, y: 0 };
-
-    // Mobile-Erkennung
+    
     this.isMobile = /Mobi|Android/i.test(navigator.userAgent);
-    // Kein zusätzlicher Zoom – Originalgröße
     this.gameZoom = 1.0;
     this.hudScale = 1.0;
-
+    
     // Assets laden
     AssetManager.loadAssets();
     this.assets = AssetManager.assets;
-    // Sicherstellen, dass der Slash-Sprite vorhanden ist
     this.slashImage = this.assets.slash;
-
+    
     // Initialisiere Submodule
     this.inputHandler = new InputHandler(this);
     this.soundManager = new SoundManager();
     this.renderer = new Renderer(this);
-
-    // Fenster-Events (Resize, Orientationchange)
+    
+    // Integration des neuen MapGenerators:
+    this.mapGenerator = new MapGenerator();
+    this.renderer.scene.add(this.mapGenerator.getMap());
+    
     window.addEventListener("resize", () => {
       this.resizeCanvas();
       this.resizeTouchControls();
@@ -88,11 +78,9 @@ export class Game {
     });
     this.resizeCanvas();
     this.resizeTouchControls();
-
-    // Menü-Events
+    
     this.setupMenuEvents();
-
-    // Game Over – Neustart
+    
     document.getElementById("restartButton").addEventListener("click", () => {
       this.initGame(this.playerFaction);
       this.gameOver = false;
@@ -100,7 +88,7 @@ export class Game {
       requestAnimationFrame((ts) => this.gameLoop(ts));
     });
   }
-
+  
   resizeCanvas() {
     const ratio = window.devicePixelRatio || 1;
     this.canvas.width = window.innerWidth * ratio;
@@ -109,10 +97,11 @@ export class Game {
     this.canvas.style.height = window.innerHeight + "px";
     this.logicalWidth = window.innerWidth;
     this.logicalHeight = window.innerHeight;
-    this.ctx.setTransform(1, 0, 0, 1, 0, 0);
-    this.ctx.scale(ratio, ratio);
+    if (this.renderer && this.renderer.setSize) {
+      this.renderer.setSize(window.innerWidth, window.innerHeight);
+    }
   }
-
+  
   resizeTouchControls() {
     let scale = 0.4;
     let containerSize = 420 * scale;
@@ -131,7 +120,7 @@ export class Game {
       btn.style.fontSize = actionFontSize + "px";
     });
   }
-
+  
   toggleFullscreen() {
     if (!document.fullscreenElement) {
       if (document.documentElement.requestFullscreen) {
@@ -147,14 +136,14 @@ export class Game {
       }
     }
   }
-
+  
   updateRemotePlayers() {
     Object.keys(this.remotePlayers).forEach(id => {
       const remoteData = this.remotePlayers[id];
       let remoteUnit = this.units.find(u => u.isRemote && u.remoteId === id);
       if (remoteUnit) {
-        remoteUnit.x = remoteData.x;
-        remoteUnit.y = remoteData.y;
+        remoteUnit.position.x = remoteData.x;
+        remoteUnit.position.z = remoteData.y; // Netzwerk: y entspricht Z
       } else {
         remoteUnit = new Unit(remoteData.x, remoteData.y, remoteData.faction, "king");
         remoteUnit.remoteId = id;
@@ -169,9 +158,8 @@ export class Game {
       return true;
     });
   }
-
+  
   setupMenuEvents() {
-    // Titelbildschirm
     const bgMusic = document.getElementById("bgMusic");
     const titleScreen = document.getElementById("titleScreen");
     titleScreen.addEventListener("click", () => {
@@ -184,20 +172,17 @@ export class Game {
         setTimeout(() => { mainMenu.style.opacity = "1"; }, 10);
       }, 1000);
     });
-
-    // Hauptmenü – Singleplayer
+    
     document.getElementById("btn-singleplayer").addEventListener("click", () => {
       this.isMultiplayerMode = false;
       document.getElementById("mainMenu").style.display = "none";
       document.getElementById("mainMenu").style.opacity = "0";
       document.getElementById("selectionMenu").style.display = "flex";
     });
-
-    // Hauptmenü – Multiplayer
+    
     document.getElementById("btn-multiplayer").addEventListener("click", () => {
       this.isMultiplayerMode = true;
       this.socket = io();
-      // Registrierung der Socket-Events
       this.socket.on("currentPlayers", (players) => {
         for (let id in players) {
           if (id !== this.socket.id) {
@@ -217,15 +202,11 @@ export class Game {
       this.socket.on("playerDisconnected", (playerId) => {
         delete this.remotePlayers[playerId];
       });
-      // Warten: Der Server schickt "showCharacterSelection", wenn mindestens 2 Spieler im Multiplayer sind.
       this.socket.on("showCharacterSelection", () => {
-        // Wartebildschirm ausblenden, Charakterauswahl anzeigen
         document.getElementById("lobbyScreen").style.display = "none";
         document.getElementById("selectionMenu").style.display = "flex";
       });
-      // "startGame": Wird später gesendet, wenn alle Spieler bereit sind.
       this.socket.on("startGame", () => {
-        // Starte den Spielzustand
         this.initGame(this.playerFaction);
         if (document.documentElement.requestFullscreen) {
           document.documentElement.requestFullscreen();
@@ -237,21 +218,17 @@ export class Game {
       });
       document.getElementById("mainMenu").style.display = "none";
       document.getElementById("mainMenu").style.opacity = "0";
-      // Zeige den Wartebildschirm an
       document.getElementById("lobbyScreen").style.display = "flex";
-      // Sende NICHT sofort "lobbyReady" – wir warten auf die Charakterauswahl!
       this.canvas.style.pointerEvents = "none";
     });
-
-    // Optionen-Menü
+    
     document.getElementById("btn-options").addEventListener("click", () => {
       document.getElementById("mainMenu").style.display = "none";
       document.getElementById("mainMenu").style.opacity = "0";
       document.getElementById("optionsMenu").style.display = "flex";
       this.canvas.style.pointerEvents = "none";
     });
-
-    // Zurück aus dem Optionen-Menü
+    
     document.getElementById("btn-back").addEventListener("click", () => {
       document.getElementById("optionsMenu").style.display = "none";
       document.getElementById("mainMenu").style.display = "flex";
@@ -260,7 +237,7 @@ export class Game {
         this.canvas.style.pointerEvents = "auto";
       }, 10);
     });
-
+    
     document.getElementById("mainMenuButton").addEventListener("click", () => {
       document.getElementById("gameOverMenu").style.display = "none";
       const mainMenu = document.getElementById("mainMenu");
@@ -268,9 +245,7 @@ export class Game {
       mainMenu.style.opacity = "0";
       setTimeout(() => { mainMenu.style.opacity = "1"; }, 10);
     });
-
-    // In der Charakterauswahl: Sobald ein Spieler einen Charakter auswählt,
-    // sendet der Client "characterSelected" und dann "lobbyReady".
+    
     document.querySelectorAll("#selectionMenu button").forEach(btn => {
       btn.addEventListener("click", () => {
         const selected = btn.getAttribute("data-faction");
@@ -280,7 +255,6 @@ export class Game {
         if (this.isMultiplayerMode && this.socket) {
           this.socket.emit("characterSelected", { faction: selected });
           this.socket.emit("lobbyReady");
-          // Warten auf "startGame" vom Server.
         } else {
           this.initGame(selected);
           if (document.documentElement.requestFullscreen) {
@@ -294,7 +268,7 @@ export class Game {
       });
     });
   }
-
+  
   initGame(selectedFaction) {
     this.units = [];
     this.buildings = [];
@@ -304,18 +278,16 @@ export class Game {
     this.projectiles = [];
     this.nextTeamId = 1;
     this.gameOver = false;
-    this.lastKingX = 0;
-    this.lastKingY = 0;
+    this.lastKingPos.set(0, 0);
     this.kingStationaryTime = 0;
     this.gameTime = 0;
     document.getElementById("gameOverMenu").style.display = "none";
     this.safeZoneState = "delay";
     this.safeZoneTimer = 0;
-    this.safeZoneCurrent = { centerX: CONFIG.worldWidth / 2, centerY: CONFIG.worldHeight / 2, radius: 7000 };
-    this.safeZoneTarget = { centerX: CONFIG.worldWidth / 2, centerY: CONFIG.worldHeight / 2, radius: 7000 };
-
+    this.safeZoneCurrent = { centerX: CONFIG.worldWidth / 2, centerZ: CONFIG.worldHeight / 2, radius: 7000 };
+    this.safeZoneTarget = { centerX: CONFIG.worldWidth / 2, centerZ: CONFIG.worldHeight / 2, radius: 7000 };
+    
     if (!this.isMultiplayerMode) {
-      // Singleplayer: Erzeuge komplette Welt (Spieler, KI, Gebäude, etc.)
       const totalKings = 11;
       const margin = 200;
       const L1 = CONFIG.worldWidth - 2 * margin;
@@ -326,46 +298,55 @@ export class Game {
       for (let i = 0; i < totalKings; i++) {
         let d = i * spacing;
         let pos;
-        if (d < L1) { pos = { x: margin + d, y: margin }; }
-        else if (d < L1 + L2) { pos = { x: CONFIG.worldWidth - margin, y: margin + (d - L1) }; }
-        else if (d < L1 + L2 + L1) { pos = { x: CONFIG.worldWidth - margin - (d - (L1 + L2)), y: CONFIG.worldHeight - margin }; }
-        else { pos = { x: margin, y: CONFIG.worldHeight - margin - (d - (2 * L1 + L2)) }; }
+        if (d < L1) { 
+          pos = new THREE.Vector3(margin + d, 0, margin);
+        } else if (d < L1 + L2) { 
+          pos = new THREE.Vector3(CONFIG.worldWidth - margin, 0, margin + (d - L1));
+        } else if (d < L1 + L2 + L1) { 
+          pos = new THREE.Vector3(CONFIG.worldWidth - margin - (d - (L1 + L2)), 0, CONFIG.worldHeight - margin);
+        } else { 
+          pos = new THREE.Vector3(margin, 0, CONFIG.worldHeight - margin - (d - (2 * L1 + L2)));
+        }
         kingPositions.push(pos);
       }
       let playerIndex = Math.floor(Math.random() * totalKings);
-      this.playerKing = new Unit(kingPositions[playerIndex].x, kingPositions[playerIndex].y, selectedFaction, "king");
+      this.playerKing = new Unit(kingPositions[playerIndex].x, kingPositions[playerIndex].z, selectedFaction, "king");
+      this.playerKing.isLocal = true;
       this.units.push(this.playerKing);
-      for (let i = 0; i < 10; i++) { this.units.push(Utils.spawnVassal(this.playerKing)); }
+      for (let i = 0; i < 10; i++) { 
+        this.units.push(Utils.spawnVassal(this.playerKing)); 
+      }
       const factions = ["human", "elf", "orc"];
       for (let i = 0; i < totalKings; i++) {
         if (i === playerIndex) continue;
         let faction = factions[Math.floor(Math.random() * factions.length)];
-        let aiKing = new Unit(kingPositions[i].x, kingPositions[i].y, faction, "king");
+        let aiKing = new Unit(kingPositions[i].x, kingPositions[i].z, faction, "king");
         this.units.push(aiKing);
-        for (let j = 0; j < 10; j++) { this.units.push(Utils.spawnVassal(aiKing)); }
+        for (let j = 0; j < 10; j++) { 
+          this.units.push(Utils.spawnVassal(aiKing)); 
+        }
       }
     } else {
-      // Multiplayer: Erzeuge nur den lokalen Spieler.
       this.playerKing = new Unit(CONFIG.worldWidth / 2, CONFIG.worldHeight / 2, selectedFaction, "king");
       this.playerKing.isLocal = true;
       this.units.push(this.playerKing);
-      for (let i = 0; i < 10; i++) { this.units.push(Utils.spawnVassal(this.playerKing)); }
-      this.socket.emit("playerJoined", { x: this.playerKing.x, y: this.playerKing.y, faction: selectedFaction });
+      for (let i = 0; i < 10; i++) { 
+        this.units.push(Utils.spawnVassal(this.playerKing)); 
+      }
+      this.socket.emit("playerJoined", { x: this.playerKing.position.x, y: this.playerKing.position.z, faction: selectedFaction });
     }
-    // Beide Modi: Erzeuge statische Weltobjekte (Buildings, Obstacles) – idealerweise basierend auf einem gemeinsamen Seed.
     Utils.generateObstacles(this);
     Utils.generateBuildingClusters(this);
   }
-
+  
   update(deltaTime) {
     if (this.gameOver) return;
     this.updateTime(deltaTime);
     this.gameTime += deltaTime;
-
+    
     if (this.playerKing) {
-      let dxKing = this.playerKing.x - this.lastKingX;
-      let dyKing = this.playerKing.y - this.lastKingY;
-      let distKing = Math.hypot(dxKing, dyKing);
+      let currentKingPos = new THREE.Vector2(this.playerKing.position.x, this.playerKing.position.z);
+      let distKing = currentKingPos.distanceTo(this.lastKingPos);
       if (distKing < 5) {
         this.kingStationaryTime += deltaTime;
         if (this.kingStationaryTime >= CONFIG.formationUpdateInterval) {
@@ -378,19 +359,18 @@ export class Game {
         }
       } else {
         this.kingStationaryTime = 0;
-        this.lastKingX = this.playerKing.x;
-        this.lastKingY = this.playerKing.y;
+        this.lastKingPos.copy(currentKingPos);
       }
     }
-
+    
     if (this.isMultiplayerMode) {
       this.updateRemotePlayers();
     }
-
+    
     this.units.forEach(unit => unit.update(deltaTime, this));
     this.projectiles.forEach(proj => proj.update(deltaTime));
     this.projectiles = this.projectiles.filter(proj => !proj.expired);
-
+    
     Utils.resolveUnitUnitCollisions(this);
     Utils.resolveUnitBuildingCollisions(this);
     Utils.resolveUnitObstacleCollisions(this);
@@ -414,21 +394,21 @@ export class Game {
     }
     
     if (this.isMultiplayerMode && this.socket && this.playerKing) {
-      this.socket.emit("playerMoved", { x: this.playerKing.x, y: this.playerKing.y });
+      this.socket.emit("playerMoved", { x: this.playerKing.position.x, y: this.playerKing.position.z });
     }
   }
-
+  
   updateTime(deltaTime) {
     this.timeOfDay = (this.timeOfDay + deltaTime / 60000) % 1;
   }
-
+  
   updateSafeZone(deltaTime) {
     if (this.safeZoneState === "delay") {
       this.safeZoneTimer += deltaTime;
       if (this.safeZoneTimer >= CONFIG.safeZoneDelay) {
-        this.safeZoneCurrent = { centerX: CONFIG.worldWidth / 2, centerY: CONFIG.worldHeight / 2, radius: 7000 };
+        this.safeZoneCurrent = { centerX: CONFIG.worldWidth / 2, centerZ: CONFIG.worldHeight / 2, radius: 7000 };
         this.safeZoneTarget.centerX = this.safeZoneCurrent.centerX + (Math.random() - 0.5) * this.safeZoneCurrent.radius * 0.5;
-        this.safeZoneTarget.centerY = this.safeZoneCurrent.centerY + (Math.random() - 0.5) * this.safeZoneCurrent.radius * 0.5;
+        this.safeZoneTarget.centerZ = this.safeZoneCurrent.centerZ + (Math.random() - 0.5) * this.safeZoneCurrent.radius * 0.5;
         this.safeZoneTarget.radius = Math.max(this.safeZoneCurrent.radius * 0.6, CONFIG.safeZoneMinRadius);
         this.safeZoneState = "shrinking";
         this.safeZoneTimer = 0;
@@ -438,11 +418,11 @@ export class Game {
       if (this.safeZoneCurrent.radius - shrinkAmount > this.safeZoneTarget.radius) {
         this.safeZoneCurrent.radius -= shrinkAmount;
         this.safeZoneCurrent.centerX += (this.safeZoneTarget.centerX - this.safeZoneCurrent.centerX) * (shrinkAmount / (this.safeZoneCurrent.radius - this.safeZoneTarget.radius + shrinkAmount));
-        this.safeZoneCurrent.centerY += (this.safeZoneTarget.centerY - this.safeZoneCurrent.centerY) * (shrinkAmount / (this.safeZoneCurrent.radius - this.safeZoneTarget.radius + shrinkAmount));
+        this.safeZoneCurrent.centerZ += (this.safeZoneTarget.centerZ - this.safeZoneCurrent.centerZ) * (shrinkAmount / (this.safeZoneCurrent.radius - this.safeZoneTarget.radius + shrinkAmount));
       } else {
         this.safeZoneCurrent.radius = this.safeZoneTarget.radius;
         this.safeZoneCurrent.centerX = this.safeZoneTarget.centerX;
-        this.safeZoneCurrent.centerY = this.safeZoneTarget.centerY;
+        this.safeZoneCurrent.centerZ = this.safeZoneTarget.centerZ;
         this.safeZoneState = "pause";
         this.safeZoneTimer = 0;
       }
@@ -454,33 +434,33 @@ export class Game {
           this.safeZoneState = "shrinking";
           this.safeZoneTimer = 0;
           this.safeZoneTarget.centerX = this.safeZoneCurrent.centerX + (Math.random() - 0.5) * this.safeZoneCurrent.radius * 0.5;
-          this.safeZoneTarget.centerY = this.safeZoneCurrent.centerY + (Math.random() - 0.5) * this.safeZoneCurrent.radius * 0.5;
+          this.safeZoneTarget.centerZ = this.safeZoneCurrent.centerZ + (Math.random() - 0.5) * this.safeZoneCurrent.radius * 0.5;
           this.safeZoneTarget.radius = Math.max(this.safeZoneCurrent.radius * 0.6, CONFIG.safeZoneMinRadius);
         } else {
           this.safeZoneState = "moving";
           this.safeZoneTimer = 0;
           this.safeZoneTarget.centerX = this.safeZoneCurrent.centerX + (Math.random() - 0.5) * this.safeZoneCurrent.radius * 0.5;
-          this.safeZoneTarget.centerY = this.safeZoneCurrent.centerY + (Math.random() - 0.5) * this.safeZoneCurrent.radius * 0.5;
+          this.safeZoneTarget.centerZ = this.safeZoneCurrent.centerZ + (Math.random() - 0.5) * this.safeZoneCurrent.radius * 0.5;
           this.safeZoneTarget.radius = this.safeZoneCurrent.radius;
         }
       }
     } else if (this.safeZoneState === "moving") {
       let moveAmount = CONFIG.safeZoneMoveRate * deltaTime;
       let dx = this.safeZoneTarget.centerX - this.safeZoneCurrent.centerX;
-      let dy = this.safeZoneTarget.centerY - this.safeZoneCurrent.centerY;
-      let dist = Math.hypot(dx, dy);
+      let dz = this.safeZoneTarget.centerZ - this.safeZoneCurrent.centerZ;
+      let dist = Math.hypot(dx, dz);
       if (dist > moveAmount) {
         this.safeZoneCurrent.centerX += (dx / dist) * moveAmount;
-        this.safeZoneCurrent.centerY += (dy / dist) * moveAmount;
+        this.safeZoneCurrent.centerZ += (dz / dist) * moveAmount;
       } else {
         this.safeZoneCurrent.centerX = this.safeZoneTarget.centerX;
-        this.safeZoneCurrent.centerY = this.safeZoneTarget.centerY;
+        this.safeZoneCurrent.centerZ = this.safeZoneTarget.centerZ;
         this.safeZoneState = "pause";
         this.safeZoneTimer = 0;
       }
     }
   }
-
+  
   gameLoop(timestamp) {
     try {
       let deltaTime = timestamp - this.lastTime;

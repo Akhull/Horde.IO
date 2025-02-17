@@ -1,53 +1,89 @@
+// public/js/entities/Projectile.js
 import { Entity } from "./Entity.js";
+import * as THREE from "https://unpkg.com/three@0.128.0/build/three.module.js";
 
 export class Projectile extends Entity {
-  constructor(x, y, target, damage) {
-    super(x, y, 35, 7);
+  /**
+   * @param {number} x - Start-X (linke obere Ecke in der XZ-Ebene)
+   * @param {number} z - Start-Z (linke obere Ecke in der XZ-Ebene)
+   * @param {Entity} target - Zielentität (erwartet target.position, target.width, target.depth)
+   * @param {number} damage - Schaden
+   */
+  constructor(x, z, target, damage) {
+    // Standard: 35 x 7 (Breite x Tiefe)
+    super(x, z, 35, 7);
     this.target = target;
     this.damage = damage;
-    let originX = x + this.width/2;
-    let originY = y + this.height/2;
-    let targetCenterX = target.x + (target.width ? target.width/2 : 0);
-    let targetCenterY = target.y + (target.height ? target.height/2 : 0);
+    
+    // Verwende this.position (x, z) als Basis; füge separate Höhe hinzu:
+    this.elevation = 30; // Start-Höhe
+    let originX = x + this.width / 2;
+    let originZ = z + this.depth / 2;
+    
+    let targetCenterX = target.position.x + (target.width ? target.width / 2 : 0);
+    let targetCenterZ = target.position.z + (target.depth ? target.depth / 2 : 0);
+    
     let deviationRadius = 10;
     let angleDeviation = Math.random() * 2 * Math.PI;
     targetCenterX += Math.cos(angleDeviation) * deviationRadius;
-    targetCenterY += Math.sin(angleDeviation) * deviationRadius;
+    targetCenterZ += Math.sin(angleDeviation) * deviationRadius;
+    
     let dx = targetCenterX - originX;
-    let dy = targetCenterY - originY;
-    let d = Math.hypot(dx, dy);
+    let dz = targetCenterZ - originZ;
+    let d = Math.hypot(dx, dz);
     let T_min = 20;
     let T_desired = (d / 9) + 5;
     let T = Math.max(T_min, T_desired);
+    
     this.vx = dx / T;
-    this.vy = dy / T;
-    this.vz = (0.5 * 0.15 * T * T - 30) / T;
-    this.z = 30;
+    this.vz = dz / T;
+    this.vy = (0.5 * 0.15 * T * T - 30) / T;  // vertikale Geschwindigkeit
     this.onGround = false;
     this.groundHitTime = 0;
-    this.rotation = Math.atan2(this.vy, this.vx);
+    this.rotation = Math.atan2(this.vz, this.vx);
+    this.expired = false;
+    
+    this.mesh = null;
+  }
+  
+  /**
+   * Erzeugt ein Three.js-Mesh für das Projektil.
+   * @param {THREE.Texture} texture - Textur für das Projektil (z. B. Arrow)
+   */
+  initMesh(texture) {
+    const geometry = new THREE.PlaneGeometry(this.width, this.depth);
+    const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true });
+    this.mesh = new THREE.Mesh(geometry, material);
+    this.mesh.rotation.x = -Math.PI / 2;
+    this.mesh.position.set(this.position.x + this.width / 2, this.elevation + this.depth / 2, this.position.z + this.depth / 2);
+    this.mesh.rotation.y = -this.rotation;
+    return this.mesh;
   }
   
   update(deltaTime) {
     if (!this.onGround) {
-      this.x += this.vx * deltaTime / 16;
-      this.y += this.vy * deltaTime / 16;
+      this.position.x += this.vx * deltaTime / 16;
+      this.position.z += this.vz * deltaTime / 16;
       const gravity = 0.15;
-      this.vz -= gravity * deltaTime / 16;
-      this.z += this.vz * deltaTime / 16;
-      if (this.z <= 0) {
-        this.z = 0;
+      this.vy -= gravity * deltaTime / 16;
+      this.elevation += this.vy * deltaTime / 16;
+      if (this.elevation <= 0) {
+        this.elevation = 0;
         this.onGround = true;
         this.vx = 0;
-        this.vy = 0;
+        this.vz = 0;
         this.groundHitTime = 0;
       }
-      this.rotation = Math.atan2(this.vy, this.vx);
-      let targetCenterX = this.target.x + (this.target.width ? this.target.width/2 : 0);
-      let targetCenterY = this.target.y + (this.target.height ? this.target.height/2 : 0);
-      let projCenterX = this.x + this.width/2;
-      let projCenterY = this.y + this.height/2 - this.z;
-      if (Math.hypot(targetCenterX - projCenterX, targetCenterY - projCenterY) < 15) {
+      this.rotation = Math.atan2(this.vz, this.vx);
+      if (this.mesh) {
+        this.mesh.position.set(this.position.x + this.width / 2, this.elevation + this.depth / 2, this.position.z + this.depth / 2);
+        this.mesh.rotation.y = -this.rotation;
+      }
+      let targetCenterX = this.target.position.x + (this.target.width ? this.target.width / 2 : 0);
+      let targetCenterZ = this.target.position.z + (this.target.depth ? this.target.depth / 2 : 0);
+      let projCenterX = this.position.x + this.width / 2;
+      let projCenterZ = this.position.z + this.depth / 2;
+      if (Math.hypot(targetCenterX - projCenterX, targetCenterZ - projCenterZ) < 15) {
         this.target.hp -= this.damage;
         this.expired = true;
       }
@@ -57,25 +93,5 @@ export class Projectile extends Entity {
         this.expired = true;
       }
     }
-  }
-  
-  draw(ctx, cameraX, cameraY, assetsArrow) {
-    ctx.save();
-    let angle = Math.atan2(this.vy, this.vx);
-    let pivotX = this.width;
-    let pivotY = 0;
-    ctx.translate(this.x - cameraX + this.width/2, this.y - cameraY + this.height/2 - this.z);
-    ctx.rotate(angle);
-    if (!this.onGround) {
-      ctx.drawImage(assetsArrow, -pivotX, -pivotY, this.width, this.height);
-    } else {
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(-pivotX, -pivotY, this.width/2, this.height);
-      ctx.clip();
-      ctx.drawImage(assetsArrow, -pivotX, -pivotY, this.width, this.height);
-      ctx.restore();
-    }
-    ctx.restore();
   }
 }
