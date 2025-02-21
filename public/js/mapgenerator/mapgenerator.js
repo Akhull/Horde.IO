@@ -1,6 +1,7 @@
 // public/js/mapgenerator/mapgenerator.js
 import * as THREE from "https://unpkg.com/three@0.128.0/build/three.module.js";
 import { EXRLoader } from "https://unpkg.com/three@0.128.0/examples/jsm/loaders/EXRLoader.js";
+import { CONFIG } from "../core/config.js";
 
 /**
  * Minimale Perlin Noise-Implementierung (2D)
@@ -196,6 +197,8 @@ class MapGenerator {
     terrainGeometry.computeVertexNormals();
 
     this.terrainMesh = new THREE.Mesh(terrainGeometry, terrainMaterial);
+    // Positioniere das Terrain so, dass es den Bereich [0, CONFIG.worldWidth] x [0, CONFIG.worldHeight] abdeckt
+    this.terrainMesh.position.set(CONFIG.worldWidth / 2, 0, CONFIG.worldHeight / 2);
     this.group.add(this.terrainMesh);
   }
 
@@ -210,8 +213,9 @@ class MapGenerator {
       void main() {
         vUv = uv;
         vec3 pos = position;
-        pos.y += sin(pos.x * 0.01 + time * 0.5) * 1.5;
-        pos.y += cos(pos.z * 0.01 + time * 0.5) * 1.5;
+        // Sanftere Wellen
+        pos.y += sin(pos.x * 0.01 + time * 0.5) * 2.0;
+        pos.y += cos(pos.z * 0.01 + time * 0.5) * 2.0;
         vPos = pos;
         vNormal = normalize(normalMatrix * normal);
         gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
@@ -232,7 +236,8 @@ class MapGenerator {
         float fresnel = pow(1.0 - max(dot(vNormal, viewDir), 0.0), 3.0);
         vec3 reflectDir = reflect(-viewDir, vNormal);
         vec3 envColor = textureCube(envMap, reflectDir).rgb;
-        vec3 finalColor = mix(baseColor, envColor, 0.2 * fresnel);
+        // Verstärkter Fresnel-Effekt für mehr Reflexion
+        vec3 finalColor = mix(baseColor, envColor, 0.4 * fresnel);
         gl_FragColor = vec4(finalColor, opacity);
       }
     `;
@@ -245,17 +250,22 @@ class MapGenerator {
       vertexShader: waterVertexShader,
       fragmentShader: waterFragmentShader,
       transparent: true,
-      side: THREE.DoubleSide
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -1
     });
 
     this.waterMesh = new THREE.Mesh(waterGeometry, this.waterMaterial);
-    this.waterMesh.position.y = waterLevel;
+    // Positioniere das Wasser an derselben Stelle wie das Terrain
+    this.waterMesh.position.set(CONFIG.worldWidth / 2, waterLevel, CONFIG.worldHeight / 2);
     this.group.add(this.waterMesh);
   }
 
   /**
-   * Falls du Animationen (z. B. den Wasser-Effekt) integrieren möchtest,
-   * rufe diese Methode in der Haupt-Render-Schleife mit dem entsprechenden Delta (Sekunden) auf.
+   * Aktualisiert den Wasser-Effekt (Animation).
+   * @param {number} delta - Zeitdifferenz in Sekunden.
    */
   update(delta) {
     this.waterUniforms.time.value += delta;
@@ -266,6 +276,38 @@ class MapGenerator {
    */
   getMap() {
     return this.group;
+  }
+
+  /**
+   * Berechnet den Spawnpunkt basierend auf dem Mittelpunkt des Terrains.
+   * @returns {THREE.Vector3} Spawnposition in Weltkoordinaten.
+   */
+  getSpawnPosition() {
+    if (!this.terrainMesh) return new THREE.Vector3(0, 0, 0);
+    this.terrainMesh.geometry.computeBoundingBox();
+    const bbox = this.terrainMesh.geometry.boundingBox;
+    const centerLocal = new THREE.Vector3();
+    bbox.getCenter(centerLocal);
+    // Konvertiere in Weltkoordinaten
+    const spawn = centerLocal.applyMatrix4(this.terrainMesh.matrixWorld);
+    return spawn;
+  }
+
+  /**
+   * Berechnet die Höhe des Terrains an den Weltkoordinaten (x, z).
+   * Hierbei werden die lokalen Koordinaten des Terrains ermittelt und
+   * anhand der gleichen Perlin-Noise-Berechnungen wie bei der Terrain-Generierung der y-Wert bestimmt.
+   * @param {number} x - Weltkoordinate X
+   * @param {number} z - Weltkoordinate Z
+   * @returns {number} Die Höhe (y) des Terrains an der Position (x, z)
+   */
+  getHeightAt(x, z) {
+    // Umrechnung in lokale Koordinaten des Terrains:
+    const localX = x - (CONFIG.worldWidth / 2);
+    const localZ = z - (CONFIG.worldHeight / 2);
+    const n1 = noise.perlin2(localX * 0.001, localZ * 0.001);
+    const n2 = noise.perlin2(localX * 0.01, localZ * 0.01);
+    return (n1 * 0.8 + n2 * 0.2) * 100.0 + this.options.bias;
   }
 }
 

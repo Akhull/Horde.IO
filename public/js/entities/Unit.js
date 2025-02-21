@@ -1,6 +1,9 @@
 // public/js/entities/Unit.js
 import { Entity } from "./Entity.js";
 import * as Utils from "../utils/utils.js";
+import { CONFIG } from "../core/config.js";
+import * as THREE from "https://unpkg.com/three@0.128.0/build/three.module.js";
+import { AssetManager } from "../core/AssetManager.js";
 
 export class Unit extends Entity {
   /**
@@ -10,12 +13,14 @@ export class Unit extends Entity {
    * @param {string} unitType - "king", "archer" oder "vassal"
    * @param {number} level 
    * @param {Unit|null} leader 
+   * @param {THREE.Texture|HTMLImageElement|null} texture - Falls vorhanden, wird diese Textur für den Sprite genutzt.
    */
-  constructor(x, z, faction, unitType, level = 1, leader = null) {
+  constructor(x, z, faction, unitType, level = 1, leader = null, texture = null) {
     super(x, z, 40, 40); // Standard: 40x40 (Breite x Tiefe)
     this.faction = faction;
     this.unitType = unitType;
     this.level = level;
+    this.texture = texture; // Optionale Sprite-Textur
     if (unitType === "king" || unitType === "vassal") {
       this.slashEffect = null;
     }
@@ -29,8 +34,9 @@ export class Unit extends Entity {
       this.shieldTimer = 0;
       this.isShieldActive = false;
       this.leader = this;
-      this.width = 40 * 1.3;
-      this.depth = 40 * 1.3;
+      // Erhöhe die Größe für bessere Sichtbarkeit
+      this.width = 100;
+      this.depth = 100;
       this.vassalSpawnTimer = 0;
       this.isAttacking = false;
       this.attackTimer = 0;
@@ -45,9 +51,10 @@ export class Unit extends Entity {
       this.lastAttackTimer = 0;
       this.formationOffset = null;
       this.formationTimer = 0;
-      this.width = 40;
-      this.depth = 40;
-    } else { // vassal
+      // Erhöhe auch die Größe von Archers
+      this.width = 60;
+      this.depth = 60;
+    } else {
       this.team = leader.team;
       this.hp = 100;
       this.speed = 1.35 * 0.95 * 1.88;
@@ -55,14 +62,14 @@ export class Unit extends Entity {
       this.formationOffset = null;
       this.formationTimer = 0;
       if (this.level === 1) {
-        this.width = 40;
-        this.depth = 40;
+        this.width = 60;
+        this.depth = 60;
       } else if (this.level === 2) {
-        this.width = 40 * 1.1;
-        this.depth = 40 * 1.1;
+        this.width = 60 * 1.1;
+        this.depth = 60 * 1.1;
       } else if (this.level === 3) {
-        this.width = 40 * 1.2;
-        this.depth = 40 * 1.2;
+        this.width = 60 * 1.2;
+        this.depth = 60 * 1.2;
       }
       this.isAttacking = false;
       this.attackTimer = 0;
@@ -71,10 +78,58 @@ export class Unit extends Entity {
     }
     this.idleTarget = null;
     this.dead = false;
+    
+    // Erstelle die 3D-Darstellung (Sprite) für diese Einheit
+    this.initMesh();
+  }
+  
+  initMesh() {
+    // Falls keine Textur übergeben wurde, verwende den Standard-Sprite aus dem AssetManager.
+    if (!this.texture) {
+      if (this.unitType === "king") {
+        this.texture = AssetManager.assets.factions[this.faction].king;
+      } else {
+        if (this.level === 1) {
+          this.texture = AssetManager.assets.factions[this.faction].level1;
+        } else if (this.level === 2) {
+          this.texture = AssetManager.assets.factions[this.faction].level2;
+        } else {
+          this.texture = AssetManager.assets.factions[this.faction].level3;
+        }
+      }
+    }
+    
+    if (this.texture) {
+      let spriteTexture;
+      if (this.texture instanceof THREE.Texture) {
+        spriteTexture = this.texture;
+      } else {
+        spriteTexture = new THREE.Texture(this.texture);
+        spriteTexture.needsUpdate = true;
+      }
+      const material = new THREE.SpriteMaterial({ 
+        map: spriteTexture, 
+        transparent: true,
+        alphaTest: 0.5  // Verhindert unsaubere Kanten
+      });
+      // Hier belassen wir den Standard-Center (0.5, 0.5)
+      // Wir korrigieren die Positionierung in update() so, dass die untere Kante am Boden liegt.
+      this.mesh = new THREE.Sprite(material);
+      this.mesh.scale.set(this.width, this.depth, 1);
+    } else {
+      // Fallback: Erstelle ein farbiges Plane-Mesh
+      const geometry = new THREE.PlaneGeometry(this.width, this.depth);
+      geometry.translate(this.width / 2, 0, this.depth / 2);
+      const material = new THREE.MeshBasicMaterial({
+        color: 0x00ff00,
+        side: THREE.DoubleSide
+      });
+      this.mesh = new THREE.Mesh(geometry, material);
+    }
+    this.mesh.position.set(this.position.x, this.position.y, this.position.z);
   }
   
   update(deltaTime, game) {
-    // Mittelpunkt in der XZ-Ebene:
     let centerX = this.position.x + this.width / 2;
     let centerZ = this.position.z + this.depth / 2;
     let dxSafe = centerX - game.safeZoneCurrent.centerX;
@@ -133,7 +188,7 @@ export class Unit extends Entity {
       let targetInfo = Utils.determineVassalTarget(this, game);
       if (targetInfo && targetInfo.type === "attack") {
         let dx = targetInfo.x - this.position.x;
-        let dz = targetInfo.y - this.position.z; // targetInfo.y entspricht der Z-Koordinate
+        let dz = targetInfo.y - this.position.z;
         let d = Math.hypot(dx, dz);
         const meleeThreshold = 50;
         if (d <= meleeThreshold) {
@@ -387,7 +442,7 @@ export class Unit extends Entity {
             this.idleTarget = null;
           } else {
             if (!this.idleTarget || Math.hypot(this.idleTarget.x - this.position.x, this.idleTarget.y - this.position.z) < 10) {
-              this.idleTarget = { x: Math.random() * Utils.CONFIG.worldWidth, y: Math.random() * Utils.CONFIG.worldHeight };
+              this.idleTarget = { x: Math.random() * CONFIG.worldWidth, y: Math.random() * CONFIG.worldHeight };
             }
             let dx = this.idleTarget.x - this.position.x,
                 dz = this.idleTarget.y - this.position.z,
@@ -446,11 +501,24 @@ export class Unit extends Entity {
         this.slashEffect.alpha = 0.5 * (this.slashEffect.timer / 500);
       }
     }
+    
+    // Setze die Einheit so, dass ihre untere Kante des zentrierten Sprites am Boden liegt.
+    if (game.mapGenerator && typeof game.mapGenerator.getHeightAt === "function") {
+      const centerX = this.position.x + this.width / 2;
+      const centerZ = this.position.z + this.depth / 2;
+      const groundY = game.mapGenerator.getHeightAt(centerX, centerZ);
+      // Da das Sprite standardmäßig zentriert ist (0.5, 0.5),
+      // wollen wir die Einheit so anpassen, dass die untere Hälfte des Sprites (also 0.5 * this.depth) unter der Einheit liegt.
+      this.position.y = groundY + (this.depth * 0.5);
+    }
+    
+    // Synchronisiere die 3D-Darstellung (Mesh) mit der Logikposition.
+    if (this.mesh) {
+      this.mesh.position.set(this.position.x, this.position.y, this.position.z);
+    }
   }
   
-  /**
-   * Fallback: Zeichnet die Einheit in 2D (z.B. für die Minimap).
-   */
+  // Fallback: Zeichnet die Einheit in 2D (z.B. für die Minimap)
   draw(ctx, cameraX, cameraY, slashImage, assets, playerTeam) {
     if (this.slashEffect) {
       ctx.save();

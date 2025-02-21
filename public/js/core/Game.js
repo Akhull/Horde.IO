@@ -32,7 +32,7 @@ export class Game {
     this.fpsCount = 0;
     this.fpsTime = 0;
     
-    // Safe-Zone (X-Z-Ebene)
+    // Safe-Zone (in der XZ-Ebene)
     this.safeZoneState = "delay";
     this.safeZoneTimer = 0;
     this.safeZoneCurrent = { centerX: CONFIG.worldWidth / 2, centerZ: CONFIG.worldHeight / 2, radius: 7000 };
@@ -54,7 +54,7 @@ export class Game {
     this.gameZoom = 1.0;
     this.hudScale = 1.0;
     
-    // Assets laden
+    // Assets laden – wir starten erst, wenn die Assets (und insbesondere die Environment Map) verfügbar sind.
     AssetManager.loadAssets();
     this.assets = AssetManager.assets;
     this.slashImage = this.assets.slash;
@@ -64,10 +64,40 @@ export class Game {
     this.soundManager = new SoundManager();
     this.renderer = new Renderer(this);
     
-    // Integration des neuen MapGenerators:
+    // Erstelle den MapGenerator und füge ihn der Szene hinzu.
     this.mapGenerator = new MapGenerator();
     this.renderer.scene.add(this.mapGenerator.getMap());
     
+    // Skybox: Sobald das Environment-Map geladen ist, setzen wir es als Background und erstellen eine SkySphere.
+    const skyCheck = setInterval(() => {
+      if (this.mapGenerator.waterUniforms.envMap.value) {
+        const envMap = this.mapGenerator.waterUniforms.envMap.value;
+        // Setze das Environment-Map als Szenehintergrund
+        this.renderer.scene.background = envMap;
+        // Erzeuge eine große SkySphere mit BackSide
+        const skyGeo = new THREE.SphereGeometry(6000, 32, 32);
+        const skyMat = new THREE.MeshBasicMaterial({
+          map: envMap,
+          side: THREE.BackSide,
+          depthWrite: false
+        });
+        const skySphere = new THREE.Mesh(skyGeo, skyMat);
+        this.renderer.scene.add(skySphere);
+        clearInterval(skyCheck);
+      }
+    }, 100);
+    
+    // Sicherstellen, dass UI-Elemente (z. B. Titelbildschirm) nach dem Archetyp-Start vollständig ausgeblendet werden.
+    this.hideAllUI = () => {
+      document.getElementById("titleScreen").style.display = "none";
+      document.getElementById("mainMenu").style.display = "none";
+      document.getElementById("selectionMenu").style.display = "none";
+      document.getElementById("lobbyScreen").style.display = "none";
+      document.getElementById("optionsMenu").style.display = "none";
+      document.getElementById("gameOverMenu").style.display = "none";
+      this.canvas.style.pointerEvents = "auto";
+    };
+
     window.addEventListener("resize", () => {
       this.resizeCanvas();
       this.resizeTouchControls();
@@ -149,6 +179,9 @@ export class Game {
         remoteUnit.remoteId = id;
         remoteUnit.isRemote = true;
         this.units.push(remoteUnit);
+        if (remoteUnit.mesh) {
+          this.renderer.scene.add(remoteUnit.mesh);
+        }
       }
     });
     this.units = this.units.filter(u => {
@@ -213,6 +246,7 @@ export class Game {
         } else if (document.documentElement.webkitRequestFullscreen) {
           document.documentElement.webkitRequestFullscreen();
         }
+        this.hideAllUI();
         this.lastTime = performance.now();
         requestAnimationFrame((ts) => this.gameLoop(ts));
       });
@@ -262,6 +296,7 @@ export class Game {
           } else if (document.documentElement.webkitRequestFullscreen) {
             document.documentElement.webkitRequestFullscreen();
           }
+          this.hideAllUI();
           this.lastTime = performance.now();
           requestAnimationFrame((ts) => this.gameLoop(ts));
         }
@@ -270,6 +305,7 @@ export class Game {
   }
   
   initGame(selectedFaction) {
+    // Zurücksetzen der Spielvariablen
     this.units = [];
     this.buildings = [];
     this.souls = [];
@@ -287,56 +323,75 @@ export class Game {
     this.safeZoneCurrent = { centerX: CONFIG.worldWidth / 2, centerZ: CONFIG.worldHeight / 2, radius: 7000 };
     this.safeZoneTarget = { centerX: CONFIG.worldWidth / 2, centerZ: CONFIG.worldHeight / 2, radius: 7000 };
     
-    if (!this.isMultiplayerMode) {
-      const totalKings = 11;
-      const margin = 200;
-      const L1 = CONFIG.worldWidth - 2 * margin;
-      const L2 = CONFIG.worldHeight - 2 * margin;
-      const perimeter = 2 * (L1 + L2);
-      const spacing = perimeter / totalKings;
-      const kingPositions = [];
-      for (let i = 0; i < totalKings; i++) {
-        let d = i * spacing;
-        let pos;
-        if (d < L1) { 
-          pos = new THREE.Vector3(margin + d, 0, margin);
-        } else if (d < L1 + L2) { 
-          pos = new THREE.Vector3(CONFIG.worldWidth - margin, 0, margin + (d - L1));
-        } else if (d < L1 + L2 + L1) { 
-          pos = new THREE.Vector3(CONFIG.worldWidth - margin - (d - (L1 + L2)), 0, CONFIG.worldHeight - margin);
-        } else { 
-          pos = new THREE.Vector3(margin, 0, CONFIG.worldHeight - margin - (d - (2 * L1 + L2)));
-        }
-        kingPositions.push(pos);
-      }
-      let playerIndex = Math.floor(Math.random() * totalKings);
-      this.playerKing = new Unit(kingPositions[playerIndex].x, kingPositions[playerIndex].z, selectedFaction, "king");
-      this.playerKing.isLocal = true;
-      this.units.push(this.playerKing);
-      for (let i = 0; i < 10; i++) { 
-        this.units.push(Utils.spawnVassal(this.playerKing)); 
-      }
-      const factions = ["human", "elf", "orc"];
-      for (let i = 0; i < totalKings; i++) {
-        if (i === playerIndex) continue;
-        let faction = factions[Math.floor(Math.random() * factions.length)];
-        let aiKing = new Unit(kingPositions[i].x, kingPositions[i].z, faction, "king");
-        this.units.push(aiKing);
-        for (let j = 0; j < 10; j++) { 
-          this.units.push(Utils.spawnVassal(aiKing)); 
-        }
-      }
-    } else {
-      this.playerKing = new Unit(CONFIG.worldWidth / 2, CONFIG.worldHeight / 2, selectedFaction, "king");
-      this.playerKing.isLocal = true;
-      this.units.push(this.playerKing);
-      for (let i = 0; i < 10; i++) { 
-        this.units.push(Utils.spawnVassal(this.playerKing)); 
-      }
-      this.socket.emit("playerJoined", { x: this.playerKing.position.x, y: this.playerKing.position.z, faction: selectedFaction });
+    // Spieler-König: Nutze den Spawnpunkt aus dem MapGenerator
+    const spawn = this.mapGenerator.getSpawnPosition();
+    this.playerKing = new Unit(spawn.x, spawn.z, selectedFaction, "king");
+    this.playerKing.position.y = spawn.y;
+    this.playerKing.isLocal = true;
+    this.units.push(this.playerKing);
+    if (this.playerKing.mesh) {
+      this.renderer.scene.add(this.playerKing.mesh);
     }
+    for (let i = 0; i < 10; i++) { 
+      let vassal = Utils.spawnVassal(this.playerKing);
+      this.units.push(vassal);
+      if (vassal.mesh) {
+        this.renderer.scene.add(vassal.mesh);
+      }
+    }
+    
+    // Erzeuge Gegner-Könige entlang eines vorgegebenen Rands,
+    // wobei Positionen, die zu nahe am zentralen Spawn liegen, übersprungen werden.
+    const totalKings = 11;
+    const margin = 1000;
+    const L1 = CONFIG.worldWidth - 2 * margin;
+    const L2 = CONFIG.worldHeight - 2 * margin;
+    const perimeter = 2 * (L1 + L2);
+    const spacing = perimeter / totalKings;
+    const kingPositions = [];
+    for (let i = 0; i < totalKings; i++) {
+      let d = i * spacing;
+      let pos;
+      if (d < L1) { 
+        pos = new THREE.Vector3(margin + d, 0, margin);
+      } else if (d < L1 + L2) { 
+        pos = new THREE.Vector3(CONFIG.worldWidth - margin, 0, margin + (d - L1));
+      } else if (d < L1 + L2 + L1) { 
+        pos = new THREE.Vector3(CONFIG.worldWidth - margin - (d - (L1 + L2)), 0, CONFIG.worldHeight - margin);
+      } else { 
+        pos = new THREE.Vector3(margin, 0, CONFIG.worldHeight - margin - (d - (2 * L1 + L2)));
+      }
+      kingPositions.push(pos);
+    }
+    const factions = ["human", "elf", "orc"];
+    for (let i = 0; i < kingPositions.length; i++) {
+      if (kingPositions[i].distanceTo(spawn) < 1500) continue;
+      let faction = factions[Math.floor(Math.random() * factions.length)];
+      let aiKing = new Unit(kingPositions[i].x, kingPositions[i].z, faction, "king");
+      aiKing.position.y = spawn.y;
+      this.units.push(aiKing);
+      if (aiKing.mesh) {
+        this.renderer.scene.add(aiKing.mesh);
+      }
+      for (let j = 0; j < 10; j++) { 
+        let vassal = Utils.spawnVassal(aiKing);
+        this.units.push(vassal);
+        if (vassal.mesh) {
+          this.renderer.scene.add(vassal.mesh);
+        }
+      }
+    }
+    
+    // Hindernisse und Gebäude generieren
     Utils.generateObstacles(this);
     Utils.generateBuildingClusters(this);
+    
+    // Kamera auf den Spieler ausrichten (falls verfügbar)
+    if (this.renderer && this.renderer.camera) {
+      const cam = this.renderer.camera;
+      cam.position.set(spawn.x, spawn.y + 100, spawn.z + 100);
+      cam.lookAt(new THREE.Vector3(spawn.x, spawn.y, spawn.z));
+    }
   }
   
   update(deltaTime) {
@@ -482,3 +537,5 @@ export class Game {
     }
   }
 }
+
+export default Game;
