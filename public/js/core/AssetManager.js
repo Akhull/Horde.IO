@@ -24,7 +24,20 @@ export const AssetManager = {
     forest: null
   },
   loadAssets() {
-    const loader = new THREE.TextureLoader();
+    const manager = new THREE.LoadingManager();
+    manager.onProgress = function(item, loaded, total) {
+      // Update des Ladebalkens (als Prozentsatz)
+      if (window.updateLoadingProgress) {
+        window.updateLoadingProgress(loaded / total);
+      }
+    };
+    manager.onLoad = function() {
+      // Alle Assets sind geladen
+      if (window.onAssetsLoaded) {
+        window.onAssetsLoaded();
+      }
+    };
+    const loader = new THREE.TextureLoader(manager);
     // Souls
     this.assets.souls.green = loader.load("assets/sprites/Collectables/Green.png");
     this.assets.souls.blue  = loader.load("assets/sprites/Collectables/Blue.png");
@@ -49,11 +62,11 @@ export const AssetManager = {
     this.assets.factions.orc.level2   = loader.load("assets/sprites/Units/Orc/level 2.png");
     this.assets.factions.orc.level3   = loader.load("assets/sprites/Units/Orc/level 3.png");
 
-    // Weitere Assets
+    // Additional Assets
     this.assets.arrow  = loader.load("assets/sprites/ATTACKS/Arrow.png");
-    this.assets.ground = loader.load("/js/mapgenerator/gras.jpg");
+    
     this.assets.slash  = loader.load("assets/sprites/ATTACKS/slash.png");
-    // Forest-Asset laden
+    // Forest Asset
     this.assets.forest = loader.load("assets/sprites/Trees/angepasst/Forest dark.PNG");
   }
 };
