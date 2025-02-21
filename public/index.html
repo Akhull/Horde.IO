@@ -7,7 +7,7 @@
         "three": "https://unpkg.com/three@0.128.0/build/three.module.js"
       }
     }
-    </script>
+  </script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Horde of Kings 3D</title>
@@ -17,13 +17,64 @@
   <link rel="stylesheet" href="css/styles.css">
   <!-- Socket.IO Client (für Multiplayer) -->
   <script src="https://cdn.socket.io/4.6.1/socket.io.min.js"></script>
+  <style>
+    /* Ladebildschirm-Overlay */
+    #loadingScreen {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background-color: #000; /* Schwarz */
+      z-index: 9999;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      color: white;
+      font-family: 'Cinzel', serif;
+    }
+    #loadingBarContainer {
+      width: 80%;
+      height: 20px;
+      background: #333;
+      margin-top: 20px;
+    }
+    #loadingBar {
+      width: 0%;
+      height: 100%;
+      background: #00aaff;
+      transition: width 0.3s;
+    }
+    /* Zentrierter Titelbildschirm */
+    #titleScreen {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      text-align: center;
+      color: white;
+      font-family: 'Cinzel', serif;
+      display: none; /* Wird erst angezeigt, wenn die Assets geladen sind */
+      z-index: 9000;
+    }
+  </style>
 </head>
 <body>
+  <!-- Ladebildschirm, der vor dem Start angezeigt wird -->
+  <div id="loadingScreen">
+    <div id="loadingText">Lade Assets...</div>
+    <div id="loadingBarContainer">
+      <div id="loadingBar"></div>
+    </div>
+  </div>
+  
   <!-- TITELBILDSCHIRM -->
   <div id="titleScreen">
     <h1>Horde of Kings 3D</h1>
     <p id="startText">press start to play</p>
   </div>
+  
   <!-- Hauptmenü -->
   <div id="mainMenu">
     <h1>Horde of Kings 3D</h1>
@@ -48,7 +99,7 @@
     </div>
     <button id="btn-back">Zurück</button>
   </div>
-  <!-- Archetyp-Auswahlmenü (für die 3D-Variante, alte 2D-Grafiken wurden ersetzt) -->
+  <!-- Archetyp-Auswahlmenü -->
   <div id="selectionMenu">
     <h1>Wähle deinen Archetyp</h1>
     <button data-faction="human">
@@ -81,7 +132,7 @@
   </div>
   <!-- Vollbild-Button -->
   <button id="fullscreenButton">Vollbild</button>
-  <!-- Canvas für ThreeJS (wird entweder von main.js referenziert oder als Container genutzt) -->
+  <!-- Canvas für ThreeJS -->
   <canvas id="gameCanvas"></canvas>
   <!-- Joystick & Aktions-Buttons (für mobile Steuerung) -->
   <div id="joystickContainer">
@@ -96,7 +147,20 @@
     <source src="assets/music/Theme Music.mp3" type="audio/mp3">
     Dein Browser unterstützt dieses Audioformat nicht.
   </audio>
-  <!-- Haupt-Clientcode als ES-Modul (importiert u.a. ThreeJS und den neuen MapGenerator) -->
+  <!-- Haupt-Clientcode als ES-Modul -->
   <script type="module" src="js/main.js"></script>
+  <script>
+    // Globale Funktionen zur Aktualisierung des Ladebalkens
+    window.updateLoadingProgress = function(progress) {
+      const loadingBar = document.getElementById("loadingBar");
+      loadingBar.style.width = (progress * 100) + "%";
+    };
+    window.onAssetsLoaded = function() {
+      // Sobald alle Assets geladen sind, wird der Ladebildschirm ausgeblendet
+      // und der Titelbildschirm angezeigt.
+      document.getElementById("loadingScreen").style.display = "none";
+      document.getElementById("titleScreen").style.display = "block";
+    };
+  </script>
 </body>
 </html>
