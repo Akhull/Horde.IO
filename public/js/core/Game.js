@@ -63,6 +63,7 @@ export class Game {
     this.isMultiplayerMode = false;
     this.socket = null;
     this.remotePlayers = {}; // Remote-Spieler-Daten, synchronisiert über Socket
+    this.mapData = null; // Store map data from server
 
     // Joystick
     this.joystickVector = { x: 0, y: 0 };
@@ -158,21 +159,84 @@ export class Game {
 
   updateRemotePlayers() {
     Object.keys(this.remotePlayers).forEach(id => {
-      const remoteData = this.remotePlayers[id];
-      let remoteUnit = this.units.find(u => u.isRemote && u.remoteId === id);
-      if (remoteUnit) {
-        remoteUnit.x = remoteData.x;
-        remoteUnit.y = remoteData.y;
+      const remotePlayer = this.remotePlayers[id];
+
+      // 1. Sync King (treated as the primary remote unit for this player)
+      let remoteKing = this.units.find(u => u.isRemote && u.remoteId === id && u.unitType === 'king');
+
+      if (remoteKing) {
+        remoteKing.x = remotePlayer.x;
+        remoteKing.y = remotePlayer.y;
+        remoteKing.faction = remotePlayer.faction; // Update faction if changed (e.g. char select)
       } else {
-        remoteUnit = new Unit(remoteData.x, remoteData.y, remoteData.faction, "king");
-        remoteUnit.remoteId = id;
-        remoteUnit.isRemote = true;
-        this.units.push(remoteUnit);
+        // Spawn remote king
+        remoteKing = new Unit(remotePlayer.x, remotePlayer.y, remotePlayer.faction || 'human', "king");
+        remoteKing.remoteId = id;
+        remoteKing.isRemote = true;
+        remoteKing.team = 100 + Object.keys(this.remotePlayers).indexOf(id); // Simple distinct team ID assignment
+        this.units.push(remoteKing);
+        if (this.grid) this.grid.addEntity(remoteKing);
+      }
+
+      // 2. Sync Army (Vassals/Archers)
+      if (remotePlayer.units && Array.isArray(remotePlayer.units)) {
+        // Mark all current remote non-king units for this player as unchecked
+        const currentRemoteUnits = this.units.filter(u => u.isRemote && u.remoteId === id && u.unitType !== 'king');
+        const matchedRemoteUnitIds = new Set();
+
+        remotePlayer.units.forEach(unitData => {
+            // Skip the King, as it is handled separately in Step 1
+            if (unitData.type === 'king') return;
+
+            // Find existing unit with this specific unitData.id (which we need to make sure is set!)
+            let remoteUnit = currentRemoteUnits.find(u => u.remoteUnitId === unitData.id);
+
+            if (remoteUnit) {
+                remoteUnit.x = unitData.x;
+                remoteUnit.y = unitData.y;
+                remoteUnit.hp = unitData.hp;
+
+                // Sync attack state
+                if (unitData.isAttacking && !remoteUnit.isAttacking) {
+                    remoteUnit.isAttacking = true;
+                    remoteUnit.attackTimer = 500; // Reset animation timer
+                }
+
+                matchedRemoteUnitIds.add(remoteUnit.remoteUnitId);
+            } else {
+                // Spawn new remote unit
+                const newUnit = new Unit(unitData.x, unitData.y, remotePlayer.faction, unitData.type, unitData.level, remoteKing);
+                newUnit.isRemote = true;
+                newUnit.remoteId = id; // Owner ID
+                newUnit.remoteUnitId = unitData.id; // Specific unit ID
+                newUnit.team = remoteKing.team;
+                this.units.push(newUnit);
+                if (this.grid) this.grid.addEntity(newUnit);
+                matchedRemoteUnitIds.add(unitData.id);
+            }
+        });
+
+        // Remove remote units that are no longer in the update
+        currentRemoteUnits.forEach(u => {
+            if (!matchedRemoteUnitIds.has(u.remoteUnitId)) {
+                u.hp = 0; // Mark for death
+                u.dead = true;
+                if (this.grid) this.grid.removeEntity(u);
+                // Clean up from main list will happen in update loop or here
+                const idx = this.units.indexOf(u);
+                if (idx > -1) this.units.splice(idx, 1);
+            }
+        });
       }
     });
+
+    // Remove units for players who disconnected
     this.units = this.units.filter(u => {
       if (u.isRemote) {
-        return this.remotePlayers[u.remoteId] !== undefined;
+        if (this.remotePlayers[u.remoteId] === undefined) {
+            if (this.grid) this.grid.removeEntity(u);
+            return false;
+        }
       }
       return true;
     });
@@ -228,7 +292,61 @@ export class Game {
       this.socket.on("playerDisconnected", (playerId) => {
         delete this.remotePlayers[playerId];
       });
+      this.socket.on("mapData", (data) => {
+        this.mapData = data;
+        console.log("Map data received from server");
+      });
+      this.socket.on("shoot", (projectileData) => {
+        // projectileData: { startX, startY, targetX, targetY, attackerId }
+        // Create a visual projectile. Target is just a position or we find the entity if needed.
+        // For visual simplicity, we create a dummy target at the destination coordinates.
+        const dummyTarget = { x: projectileData.targetX - 20, y: projectileData.targetY - 20, width: 40, height: 40 }; // Approximated
+        const newProjectile = new Utils.ProjectileWrapper(projectileData.startX, projectileData.startY, dummyTarget, 0);
+        // Maybe mark it as visual only to prevent it from doing damage logic if it hits something locally?
+        // But ProjectileWrapper creates a normal Projectile.
+        // Let's rely on damage being authoritative from shooter. So this projectile should have damage=0.
+        // But 'damage' arg in ProjectileWrapper is passed as 0 above.
+
+        this.projectiles.push(newProjectile);
+        if (this.grid) this.grid.addEntity(newProjectile);
+        if (this.soundManager) {
+            this.soundManager.playSound('attack_arrow', projectileData.startX, projectileData.startY, 1.0);
+        }
+      });
+      this.socket.on("hit", (hitData) => {
+          // hitData: { targetId, damage, attackerId }
+          // Find unit with targetId
+          // Check remoteId (King) or remoteUnitId (Vassal) or maybe local unit ID?
+          // Since we are the receiver, if targetId matches *us* or *our unit*, we apply damage.
+          // BUT, we don't have persistent IDs for local units fully synced yet except for King (remoteId matches socketId for others).
+
+          let targetUnit = this.units.find(u =>
+              (u.isLocal && u.networkId === hitData.targetId) || // If I assigned networkId to local units
+              (u.isRemote && (u.remoteId === hitData.targetId || u.remoteUnitId === hitData.targetId)) || // If it hit a remote unit (e.g. another player)
+              (u === this.playerKing && this.socket.id === hitData.targetId) // King check
+          );
+
+          if (targetUnit) {
+              targetUnit.hp -= hitData.damage;
+              if (this.soundManager) {
+                  // Play hit sound?
+              }
+          }
+      });
       // Warten: Der Server schickt "showCharacterSelection", wenn mindestens 2 Spieler im Multiplayer sind.
+      this.socket.on("gameOver", (data) => {
+          // data: { winnerId, winnerFaction, message }
+          this.gameOver = true;
+          let msg = "Spiel vorbei";
+          if (data.message) {
+              msg = data.message;
+          } else if (data.winnerId === this.socket.id) {
+              msg = "Gewonnen!";
+          } else {
+              msg = "Verloren!"; // Though we might already have shown "Verloren" if we died earlier
+          }
+          Utils.showGameOverMenu(msg);
+      });
       this.socket.on("showCharacterSelection", () => {
         // Wartebildschirm ausblenden, Charakterauswahl anzeigen
         document.getElementById("lobbyScreen").style.display = "none";
@@ -367,14 +485,30 @@ export class Game {
       for (let i = 0; i < 10; i++) { this.units.push(Utils.spawnVassal(this.playerKing)); }
       this.socket.emit("playerJoined", { x: this.playerKing.x, y: this.playerKing.y, faction: selectedFaction });
     }
-    // Beide Modi: Erzeuge statische Weltobjekte (Buildings, Obstacles) – idealerweise basierend auf einem gemeinsamen Seed.
-    Utils.generateObstacles(this);
-    if (this.grid) {
-        this.obstacles.forEach(o => this.grid.addEntity(o));
+    // Beide Modi: Erzeuge statische Weltobjekte
+    if (this.isMultiplayerMode && this.mapData) {
+      // Use map data from server
+      this.obstacles = [];
+      this.mapData.obstacles.forEach(obsData => {
+        if (obsData.type === "forest") {
+          this.obstacles.push(new Forest(obsData.x, obsData.y, obsData.width, obsData.height));
+        } else {
+          this.obstacles.push(new Obstacle(obsData.x, obsData.y, obsData.width, obsData.height, obsData.type));
+        }
+      });
+
+      this.buildings = [];
+      this.mapData.buildings.forEach(bData => {
+        this.buildings.push(new Building(bData.x, bData.y, bData.type));
+      });
+    } else {
+      // Singleplayer or fallback: Use local generation
+      Utils.generateObstacles(this);
+      Utils.generateBuildingClusters(this);
     }
     
-    Utils.generateBuildingClusters(this);
     if (this.grid) {
+        this.obstacles.forEach(o => this.grid.addEntity(o));
         this.buildings.forEach(b => this.grid.addEntity(b));
     }
 
@@ -445,6 +579,11 @@ export class Game {
     if (!this.playerKing || this.playerKing.hp <= 0) {
       this.gameOver = true;
       Utils.showGameOverMenu("Verloren");
+
+      if (this.isMultiplayerMode && this.socket && !this.sentPlayerDied) {
+          this.socket.emit("playerDied");
+          this.sentPlayerDied = true;
+      }
     } else if (!this.isMultiplayerMode) {
       let enemyKings = this.units.filter(u => u.unitType === "king" && u !== this.playerKing);
       if (enemyKings.length === 0) {
@@ -455,6 +594,29 @@ export class Game {
     
     if (this.isMultiplayerMode && this.socket && this.playerKing) {
       this.socket.emit("playerMoved", { x: this.playerKing.x, y: this.playerKing.y });
+
+      // Send Army Update periodically (e.g., every 200ms)
+      const now = performance.now();
+      if (!this.lastArmyUpdate || now - this.lastArmyUpdate > 200) {
+          const myArmy = this.units.filter(u => u.leader === this.playerKing || u === this.playerKing);
+          const armyData = myArmy.map((u, index) => {
+              // Ensure networkId exists and persists
+              if (!u.networkId) {
+                  u.networkId = this.socket.id + "_" + index + "_" + Date.now();
+              }
+              return {
+                  id: u.networkId,
+                  type: u.unitType,
+                  x: u.x,
+                  y: u.y,
+                  hp: u.hp,
+                  level: u.level || 1,
+                  isAttacking: u.isAttacking // Sync attack state for visuals
+              };
+          });
+          this.socket.emit("updateArmy", armyData);
+          this.lastArmyUpdate = now;
+      }
     }
 
     // Update active visual effects

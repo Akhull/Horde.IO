@@ -83,6 +83,36 @@ export class Unit extends Entity {
     this.prevY = this.y;
     this.isMoving = false; // Assume not moving this tick
 
+    if (this.isRemote) {
+        // Skip AI logic for remote units, they are synced via server
+        // But we still want to update visuals like bobbing or attack animation timers if triggered
+        if (this.isAttacking) {
+            this.attackTimer -= deltaTime;
+            if (this.attackTimer <= 0) {
+                this.isAttacking = false;
+            }
+        }
+
+        // Calculate movement for animation
+        const movementThreshold = 0.1;
+        if (Math.abs(this.x - this.prevX) > movementThreshold || Math.abs(this.y - this.prevY) > movementThreshold) {
+            this.isMoving = true;
+        }
+
+        if (this.isMoving) {
+            this.bobbingPhase = (this.bobbingPhase || 0) + deltaTime * 0.01;
+            this.bobbingOffset = Math.sin(this.bobbingPhase) * 2;
+        } else {
+            this.bobbingOffset = 0;
+            this.bobbingPhase = 0;
+        }
+
+        if (game.grid && !this.dead) {
+            game.grid.updateEntity(this);
+        }
+        return;
+    }
+
     if (this.hp <= 0 && !this.dead && !this.deathSoundPlayed) {
       if (game.soundManager) {
         let deathSoundName = '';
@@ -216,7 +246,29 @@ export class Unit extends Entity {
         this.attackTimer -= deltaTime;
         if (this.attackTimer < 250 && !this.attackDamageDealt) {
           if (this.currentTarget && !this.currentTarget.dead) {
-            this.currentTarget.hp -= 20;
+            if (!this.isRemote) { // Only apply damage if I am the owner of this unit (simulated here)
+                // For a simpler "finished game" feel where every client simulates their own units damage application:
+                this.currentTarget.hp -= 20;
+
+                if (game.isMultiplayerMode && game.socket) {
+                    let targetId = this.currentTarget.remoteId || this.currentTarget.remoteUnitId || (this.currentTarget.team ? "local_" + this.currentTarget.team : "unknown");
+                    // Again, finding the right target ID is key.
+                    // If hitting a player King: target.remoteId is set.
+                    // If hitting a vassal: target.remoteUnitId is set.
+                    // If hitting AI (singleplayer mixed in?): target.team might be all we have but that's local.
+
+                    // Actually, if we are in multiplayer, and we hit something, it SHOULD be either a remote unit or a local unit.
+                    // If we hit a remote unit, we tell the server "I hit X".
+
+                    if (targetId !== "unknown") {
+                         game.socket.emit("hit", {
+                            targetId: targetId,
+                            damage: 20,
+                            attackerId: this.networkId || this.remoteUnitId
+                        });
+                    }
+                }
+            }
           }
           this.attackDamageDealt = true;
           if (game.soundManager) {
@@ -304,9 +356,29 @@ export class Unit extends Entity {
         if (this.lastAttackTimer >= this.attackCooldown) {
           let projX = this.x + this.width / 2;
           let projY = this.y + this.height / 2;
-          const newProjectile = new Utils.ProjectileWrapper(projX, projY, target, 10);
-          game.projectiles.push(newProjectile);
-          if (game.grid) game.grid.addEntity(newProjectile); // Add to spatial grid
+
+          if (!this.isRemote) { // Only local units shoot logic
+            const newProjectile = new Utils.ProjectileWrapper(projX, projY, target, 10);
+            game.projectiles.push(newProjectile);
+            if (game.grid) game.grid.addEntity(newProjectile); // Add to spatial grid
+
+            if (game.isMultiplayerMode && game.socket) {
+                // Determine target ID
+                let targetId = target.remoteId || target.remoteUnitId || (target.team ? "local_" + target.team : "unknown");
+                // Note: Target ID is tricky if target is local to this client but not remote.
+                // Better approach: send target coordinates, and let receiver find target or just aim there.
+                // Sending just coords is easier for "visual" projectile.
+
+                game.socket.emit("shoot", {
+                    startX: projX,
+                    startY: projY,
+                    targetX: target.x + target.width/2,
+                    targetY: target.y + target.height/2,
+                    attackerId: this.networkId || this.remoteUnitId
+                });
+            }
+          }
+
           if (game.soundManager) {
             game.soundManager.playSound('attack_arrow', this.x, this.y, 1.0);
             if (game.notifyCombatEvent) game.notifyCombatEvent(); // Notify combat event on attack
@@ -401,7 +473,20 @@ export class Unit extends Entity {
           this.attackTimer -= deltaTime;
           if (this.attackTimer < 250 && !this.attackDamageDealt) {
             if (this.currentTarget && !this.currentTarget.dead) {
-              this.currentTarget.hp -= 20;
+              if (!this.isRemote) {
+                  this.currentTarget.hp -= 20;
+
+                  if (game.isMultiplayerMode && game.socket) {
+                    let targetId = this.currentTarget.remoteId || this.currentTarget.remoteUnitId || "unknown";
+                    if (targetId !== "unknown") {
+                         game.socket.emit("hit", {
+                            targetId: targetId,
+                            damage: 20,
+                            attackerId: this.networkId || this.remoteUnitId
+                        });
+                    }
+                  }
+              }
             }
             this.attackDamageDealt = true;
             if (game.soundManager) {
