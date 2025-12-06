@@ -1,34 +1,27 @@
 import express from 'express';
 import http from 'http';
 import { Server as SocketIOServer } from 'socket.io';
+import { MapGenerator } from './MapGenerator.js';
 
 const app = express();
 const server = http.createServer(app);
 const io = new SocketIOServer(server);
 
-// Beispielhafte Map-Daten (könnten dynamisch generiert werden)
-function generateMap() {
-  return {
-    buildings: [
-      { id: 1, x: 500, y: 300, type: 'house' },
-      { id: 2, x: 1200, y: 800, type: 'castle' }
-    ],
-    obstacles: [
-      { id: 1, x: 800, y: 600, type: 'rock' },
-      { id: 2, x: 1000, y: 400, type: 'tree' }
-    ]
-  };
-}
+// Generate map once when server starts
+const mapData = MapGenerator.generateMap();
 
 let gameState = {
   players: {},
-  map: generateMap(),
+  map: mapData,
   inCharacterSelection: false
 };
 
 io.on('connection', (socket) => {
   console.log(`Client connected: ${socket.id}`);
   
+  // Send the map data immediately upon connection (or with initial state)
+  socket.emit('mapData', gameState.map);
+
   socket.on('playerJoined', (data) => {
     gameState.players[socket.id] = {
       id: socket.id,
@@ -36,9 +29,10 @@ io.on('connection', (socket) => {
       y: data.y,
       faction: data.faction,
       hp: 100,
-      ready: false // noch nicht bereit – wartet auf Charakterauswahl
+      ready: false, // noch nicht bereit – wartet auf Charakterauswahl
+      units: [] // Array to hold this player's unit data
     };
-    socket.emit('stateUpdate', gameState);
+    socket.emit('stateUpdate', gameState); // Consider trimming map from this if it's huge and static
     socket.broadcast.emit('newPlayer', gameState.players[socket.id]);
     
     // Sobald mindestens zwei Spieler verbunden sind und wir noch nicht in der Charakterauswahl sind,
@@ -80,6 +74,40 @@ io.on('connection', (socket) => {
       gameState.players[socket.id].y = data.y;
     }
   });
+
+  socket.on('updateArmy', (unitsData) => {
+    if (gameState.players[socket.id]) {
+      // unitsData should be array of { id, type, x, y, hp, level }
+      gameState.players[socket.id].units = unitsData;
+    }
+  });
+
+  socket.on('shoot', (projectileData) => {
+      // Broadcast shooting event to all other clients
+      socket.broadcast.emit('shoot', projectileData);
+  });
+
+  socket.on('hit', (hitData) => {
+      // Broadcast hit event
+      socket.broadcast.emit('hit', hitData);
+  });
+
+  socket.on('playerDied', () => {
+      console.log(`Player ${socket.id} died.`);
+      if (gameState.players[socket.id]) {
+          gameState.players[socket.id].dead = true;
+      }
+
+      // Check for winner
+      const alivePlayers = Object.values(gameState.players).filter(p => !p.dead && p.ready);
+      if (alivePlayers.length === 1 && Object.keys(gameState.players).length > 1) {
+          // We have a winner
+          io.emit('gameOver', { winnerId: alivePlayers[0].id, winnerFaction: alivePlayers[0].faction });
+      } else if (alivePlayers.length === 0 && Object.keys(gameState.players).length > 0) {
+          // All dead?
+          io.emit('gameOver', { winnerId: null, message: "Draw" });
+      }
+  });
   
   socket.on('disconnect', () => {
     console.log(`Client disconnected: ${socket.id}`);
@@ -90,7 +118,12 @@ io.on('connection', (socket) => {
 
 // Sende 10-mal pro Sekunde den aktuellen Zustand an alle Clients
 setInterval(() => {
-  io.emit('stateUpdate', gameState);
+  // We can optimize this by not sending the static map every time
+  const updatePacket = {
+      players: gameState.players,
+      inCharacterSelection: gameState.inCharacterSelection
+  };
+  io.emit('stateUpdate', updatePacket);
 }, 100);
 
 server.listen(8080, () => {
