@@ -5,8 +5,6 @@ import type { AIPersonality } from "../config/gameConfig";
 import type { Faction, UnitType } from "../types";
 import type { Vec2 } from "../systems/AI";
 import { determineVassalTarget, chooseAIKingTarget, findKingCollectible, computeKingAvoidance } from "../systems/AI";
-import { resolveUnitSheet, animKey } from "../systems/animations";
-import { FACTION_TINT, type AnimName } from "../config/spriteConfig";
 import type { ProjectileTarget } from "./Projectile";
 import type { GameScene } from "../scenes/GameScene";
 
@@ -119,13 +117,9 @@ export class Unit extends Entity {
   private readonly footstepMin = 300;
   private readonly footstepMax = 450;
 
-  // Darstellung
+  // Darstellung (statisches Kenney-Sprite, Faktionsfarbe ist ins PNG gebacken).
   private sprite: Phaser.GameObjects.Sprite;
   private spriteKey: string;
-  private sheetKey: string | null = null;
-  private isDemoSheet = false;
-  private currentAnim: string | null = null;
-  private wasAttacking = false;
   private barBg: Phaser.GameObjects.Rectangle;
   private barFill: Phaser.GameObjects.Rectangle;
   private shieldRing?: Phaser.GameObjects.Arc;
@@ -197,16 +191,12 @@ export class Unit extends Entity {
     this.prevY = y;
     this.footstepTimer = this.footstepMin + Math.random() * (this.footstepMax - this.footstepMin);
 
-    // Champion nutzt das schwere Legion-Sheet (l3) für eine elitäre Optik.
+    // Champion nutzt das schwere Legion-Sprite (l3) für eine elitäre Optik.
+    // Der Texture-Key IST der spriteKey (BootScene lädt die Kenney-PNGs unter
+    // genau diesen Keys); kein Tint, die Faktionsfarbe steckt im Sprite.
     this.spriteKey = unitType === "king" ? `${faction}_king` : unitType === "champion" ? `${faction}_l3` : `${faction}_l${level}`;
-    const sheet = resolveUnitSheet(this.spriteKey);
-    const texKey = sheet ? sheet.textureKey : this.spriteKey;
-    this.sheetKey = sheet ? sheet.sheetKey : null;
-    this.isDemoSheet = sheet?.isDemo ?? false;
-    this.sprite = scene.add.sprite(this.centerX, this.centerY, texKey).setDepth(DEPTH.unit);
+    this.sprite = scene.add.sprite(this.centerX, this.centerY, this.spriteKey).setDepth(DEPTH.unit);
     this.sprite.setDisplaySize(this.width, this.height);
-    if (this.isDemoSheet) this.sprite.setTint(FACTION_TINT[faction]);
-    this.playAnim("idle");
 
     const barH = unitType === "king" ? 8 : 5;
     this.barBg = scene.add.rectangle(this.x, this.y, this.width, barH, 0x000000).setOrigin(0, 0.5).setDepth(DEPTH.healthbar);
@@ -224,49 +214,17 @@ export class Unit extends Entity {
     }
   }
 
-  // Spielt eine Animation (idle/walk/attack/death), falls für das Sheet vorhanden.
-  private playAnim(name: AnimName, restart = false): void {
-    if (!this.sheetKey) return;
-    const key = animKey(this.sheetKey, name);
-    if (!this.sprite.scene.anims.exists(key)) return;
-    if (this.currentAnim === key && !restart) return;
-    this.currentAnim = key;
-    this.sprite.play(key, true);
-  }
-
-  // Wählt die Animation passend zum Zustand: Angriff > Laufen > Idle.
-  private updateAnimationState(): void {
-    if (!this.sheetKey) return;
-    if (this.isAttacking) {
-      this.playAnim("attack", !this.wasAttacking); // bei neuem Angriff neu starten
-    } else if (this.isMoving) {
-      this.playAnim("walk");
-    } else {
-      this.playAnim("idle");
-    }
-    this.wasAttacking = this.isAttacking;
-  }
-
-  // Vasall auf eine höhere Stufe heben: Grösse/Sprite/Animation aktualisieren + Aufleucht-Pop.
+  // Vasall auf eine höhere Stufe heben: Grösse/Sprite aktualisieren + Aufleucht-Pop.
   setLevel(n: number): void {
     this.level = n;
     const s = UNIT_STATS.vassal.sizeByLevel[n] ?? 40;
     this.width = s;
     this.height = s;
 
+    // Neuer Texture-Key = neuer Stufen-spriteKey (statisches Kenney-PNG, kein Tint).
     this.spriteKey = `${this.faction}_l${n}`;
-    const sheet = resolveUnitSheet(this.spriteKey);
-    const texKey = sheet ? sheet.textureKey : this.spriteKey;
-    this.sheetKey = sheet ? sheet.sheetKey : null;
-    this.isDemoSheet = sheet?.isDemo ?? false;
-
-    this.sprite.setTexture(texKey);
+    this.sprite.setTexture(this.spriteKey);
     this.sprite.setDisplaySize(s, s);
-    if (this.isDemoSheet) this.sprite.setTint(FACTION_TINT[this.faction]);
-    else this.sprite.clearTint();
-
-    this.currentAnim = null;
-    this.playAnim(this.isMoving ? "walk" : "idle");
 
     // Level-up: kurzer Skalierungs-Pop
     this.sprite.scene.tweens.add({
@@ -510,10 +468,10 @@ export class Unit extends Entity {
     if (this === scene.playerKing) scene.onPlayerKingHit(dmg);
   }
 
-  // Stellt die Grund-Färbung nach einem Treffer-Flash wieder her.
+  // Stellt die Grund-Färbung nach einem Treffer-Flash wieder her. Einheiten haben
+  // keinen Basis-Tint (Faktionsfarbe steckt im PNG), daher genügt clearTint.
   private restoreTint(): void {
-    if (this.isDemoSheet) this.sprite.setTint(FACTION_TINT[this.faction]);
-    else this.sprite.clearTint();
+    this.sprite.clearTint();
   }
 
   // Wendet im Angriffsfenster den typ-/levelabhängigen Nahkampfschaden an,
@@ -1012,7 +970,6 @@ export class Unit extends Entity {
       this.bobbingPhase = 0;
     }
 
-    this.updateAnimationState();
     if (!this.dead) scene.grid.updateEntity(this);
   }
 
@@ -1057,13 +1014,16 @@ export class Unit extends Entity {
     this.archerOutline?.destroy();
     this.championRing?.destroy();
 
+    // Anmutiger Tod ohne Sheet-Animation: kurz umkippen + ausblenden, dann zerstören.
     const s = this.sprite;
-    if (this.sheetKey && s.scene.anims.exists(animKey(this.sheetKey, "death"))) {
-      // Tod-Animation abspielen und dann sanft ausblenden
-      s.play(animKey(this.sheetKey, "death"), true);
-      s.scene.tweens.add({ targets: s, alpha: 0, duration: 600, delay: 150, onComplete: () => s.destroy() });
-    } else {
-      s.destroy();
-    }
+    s.scene.tweens.add({
+      targets: s,
+      alpha: 0,
+      angle: this.facingDirection === -1 ? 80 : -80,
+      scaleX: s.scaleX * 0.85,
+      scaleY: s.scaleY * 0.85,
+      duration: 500,
+      onComplete: () => s.destroy(),
+    });
   }
 }

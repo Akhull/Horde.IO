@@ -1,9 +1,9 @@
 import Phaser from "phaser";
-import { preloadSheets, setupAnimations } from "../systems/animations";
 import { bus } from "../ui/bus";
 
-// Lädt alle Assets (Sprites, Sounds, Menühintergründe) und erzeugt prozedurale
-// Texturen (Gras-Boden, Partikel), damit keine externen URLs nötig sind.
+// Lädt alle Assets (statische Kenney-Sprites, Sounds) und erzeugt die wenigen
+// rein prozeduralen Texturen (Pfeil, Slash, Gefahren-Vignette), für die es im
+// medieval-rts-Pack kein Gegenstück gibt.
 export class BootScene extends Phaser.Scene {
   constructor() {
     super("Boot");
@@ -15,23 +15,43 @@ export class BootScene extends Phaser.Scene {
     this.load.once("complete", () => bus.emit("loadProgress", 1));
 
     const A = "assets/";
+    // Kenney medieval-rts (Retina = 128px-Quellen) als Basisverzeichnisse.
+    const U = `${A}kenney/medieval-rts/PNG/Retina/Unit`;
+    const S = `${A}kenney/medieval-rts/PNG/Retina/Structure`;
+    const T = `${A}kenney/medieval-rts/PNG/Retina/Tile`;
+    const P = `${A}kenney/particle-pack/PNG (Transparent)`;
 
-    // Fraktions-Einheiten (Mensch/Elf/Ork je König + 3 Stufen) kommen jetzt als
-    // animierte LPC-Sprite-Sheets über preloadSheets() / REAL_SHEETS (s. unten).
+    // Fraktions-Einheiten (Mensch=blau, Elf=grün, Ork=grau). Faktionsfarbe ist ins
+    // Sprite gebacken -> KEIN Tint. Texture-Key = spriteKey, den Unit.ts berechnet.
+    this.load.image("human_king", `${U}/medievalUnit_05.png`);
+    this.load.image("human_l1", `${U}/medievalUnit_02.png`);
+    this.load.image("human_l2", `${U}/medievalUnit_03.png`);
+    this.load.image("human_l3", `${U}/medievalUnit_04.png`);
+    this.load.image("elf_king", `${U}/medievalUnit_17.png`);
+    this.load.image("elf_l1", `${U}/medievalUnit_14.png`);
+    this.load.image("elf_l2", `${U}/medievalUnit_15.png`);
+    this.load.image("elf_l3", `${U}/medievalUnit_16.png`);
+    this.load.image("orc_king", `${U}/medievalUnit_23.png`);
+    this.load.image("orc_l1", `${U}/medievalUnit_20.png`);
+    this.load.image("orc_l2", `${U}/medievalUnit_21.png`);
+    this.load.image("orc_l3", `${U}/medievalUnit_22.png`);
 
     // Gebäude
-    this.load.image("barn", `${A}sprites/Buildings/Barn.png`);
-    this.load.image("house", `${A}sprites/Buildings/House.png`);
-    this.load.image("tower", `${A}sprites/Buildings/Tower.png`);
+    this.load.image("barn", `${S}/medievalStructure_19.png`);
+    this.load.image("house", `${S}/medievalStructure_17.png`);
+    this.load.image("tower", `${S}/medievalStructure_12.png`);
 
-    // Seelen/Orbs: eine einzige weiße Orb-Textur ("orb"), die pro Rarität via
-    // setTint(ORB_TINT[...]) eingefärbt wird – wird in create() prozedural erzeugt
-    // (s. makeOrbTexture). Keine farbspezifischen PNGs mehr nötig.
+    // Boden-/Terrain-Kacheln (als TileSprite genutzt). "grass" behält seinen Key,
+    // damit der GameScene-Boden + die Tag/Nacht-Tönung unangetastet bleiben.
+    this.load.image("grass", `${T}/medievalTile_57.png`);
+    this.load.image("water", `${T}/medievalTile_27.png`);
+    this.load.image("forest", `${T}/medievalTile_46.png`);
 
-    // Angriffe / Deko
-    this.load.image("arrow", `${A}sprites/ATTACKS/Arrow.png`);
-    this.load.image("slash", `${A}sprites/ATTACKS/slash.png`);
-    this.load.image("forest", `${A}sprites/Trees/angepasst/Forest dark.PNG`);
+    // Partikel-/Pickup-Basen aus dem particle-pack (near-weiss -> pro Instanz getönt).
+    // "orb" (Seelen + Partikel), "powerup" (Pickup-Glow), "dot" (Effekt-Partikel).
+    this.load.image("orb", `${P}/circle_05.png`);
+    this.load.image("powerup", `${P}/light_03.png`);
+    this.load.image("dot", `${P}/circle_05.png`);
 
     // Menü-Hintergründe werden vom DOM-UI direkt als CSS-Bilder geladen
     // (siehe src/ui) – Phaser muss sie nicht mehr in den Texturspeicher ziehen.
@@ -48,73 +68,50 @@ export class BootScene extends Phaser.Scene {
     this.load.audio("ui_click", `${A}audiosfx/Building Colapse/Building Cilapse 1.mp3`);
     this.load.audio("war_ambience", `${A}audiosfx/Medieval Fight Ambient Dynamic Sound/MedievalFightAmbientLoop.mp3`);
     this.load.audio("music", `${A}music/Theme Music.mp3`);
-
-    // Eigene animierte Sprite-Sheets (falls in spriteConfig hinterlegt)
-    preloadSheets(this);
   }
 
   create(): void {
-    this.makeGrassTexture();
-    this.makeDotTexture();
+    // Pfeil + Slash gibt es im medieval-rts-Pack nicht -> prozedural erzeugen
+    // (weiss, damit sie auf der dunklen Welt lesbar sind).
+    this.makeArrowTexture();
+    this.makeSlashTexture();
     this.makeVignetteTexture();
-    this.makeOrbTexture();
-    setupAnimations(this); // Demo-Charakter erzeugen + Animationen registrieren
-    // Assets + Animationen fertig -> das DOM-UI zeigt jetzt den Titelbildschirm.
+    // Assets fertig -> das DOM-UI zeigt jetzt den Titelbildschirm.
     bus.emit("bootReady", undefined);
   }
 
-  // Prozedurale, kachelbare Gras-Textur (ersetzt die externe opengameart-URL des Originals).
-  private makeGrassTexture(): void {
-    const size = 64;
-    const tex = this.textures.createCanvas("grass", size, size);
-    if (!tex) return;
-    const ctx = tex.getContext();
-    ctx.fillStyle = "#2f5d2a";
-    ctx.fillRect(0, 0, size, size);
-    const shades = ["#356b2f", "#295226", "#3c7536", "#244b22"];
-    for (let i = 0; i < 420; i++) {
-      ctx.fillStyle = shades[(Math.random() * shades.length) | 0];
-      const x = (Math.random() * size) | 0;
-      const y = (Math.random() * size) | 0;
-      ctx.fillRect(x, y, 2, 2);
-    }
-    tex.refresh();
+  // Prozeduraler Pfeil: weisser Schaft + Dreiecks-Spitze, zeigt nach +x. Das
+  // Projectile rotiert ihn zur Flugrichtung (setRotation in Projectile.sync).
+  private makeArrowTexture(): void {
+    const W = 32;
+    const H = 10;
+    const g = this.make.graphics({ x: 0, y: 0 }, false);
+    g.fillStyle(0xffffff, 1);
+    // Schaft (mittiges Band)
+    g.fillRect(0, H / 2 - 1.5, W - 10, 3);
+    // Spitze (Dreieck nach rechts)
+    g.fillTriangle(W - 12, 0, W - 12, H, W, H / 2);
+    g.generateTexture("arrow", W, H);
+    g.destroy();
   }
 
-  // Eine einzige WEISSE Orb-Textur (heller Kern -> weicher Glührand -> transparent).
-  // Pro Seele wird sie über setTint(ORB_TINT[type]) eingefärbt – ein Asset, beliebig
-  // viele Raritätsfarben. Reines Weiss, damit der Tint-Multiply jede Farbe sauber zeigt.
-  private makeOrbTexture(): void {
-    const S = 48;
-    const tex = this.textures.createCanvas("orb", S, S);
-    if (!tex) return;
-    const ctx = tex.getContext();
-    const g = ctx.createRadialGradient(S / 2, S / 2, 1, S / 2, S / 2, S / 2);
-    g.addColorStop(0, "#ffffff");
-    g.addColorStop(0.45, "#ffffff");
-    g.addColorStop(0.78, "rgba(255,255,255,0.55)");
-    g.addColorStop(1, "rgba(255,255,255,0)");
-    ctx.fillStyle = g;
-    ctx.beginPath();
-    ctx.arc(S / 2, S / 2, S / 2, 0, Math.PI * 2);
-    ctx.fill();
-    tex.refresh();
-  }
-
-  // Kleine weisse Kreis-Textur für Partikel-Effekte.
-  private makeDotTexture(): void {
-    const tex = this.textures.createCanvas("dot", 16, 16);
-    if (!tex) return;
-    const ctx = tex.getContext();
-    ctx.fillStyle = "#ffffff";
-    ctx.beginPath();
-    ctx.arc(8, 8, 8, 0, Math.PI * 2);
-    ctx.fill();
-    tex.refresh();
+  // Prozeduraler Slash: dünner weisser Sichel-Bogen. spawnSlash skaliert/rotiert/
+  // tweent ihn beim Nahkampftreffer.
+  private makeSlashTexture(): void {
+    const S = 40;
+    const g = this.make.graphics({ x: 0, y: 0 }, false);
+    g.lineStyle(5, 0xffffff, 1);
+    // Bogen von ~ -55° bis +55° (offene Sichel) um die Mitte.
+    g.beginPath();
+    g.arc(S / 2, S / 2, S / 2 - 4, Phaser.Math.DegToRad(-55), Phaser.Math.DegToRad(55), false);
+    g.strokePath();
+    g.generateTexture("slash", S, S);
+    g.destroy();
   }
 
   // Radialer roter Vignette-Verlauf (transparente Mitte -> rote Ränder) für den
-  // Schaden-/Gefahren-Flash. Wird in der GameScene bildschirmfest skaliert.
+  // Schaden-/Gefahren-Flash. Reine UI-Overlay-Textur ohne medieval-rts-Pendant,
+  // bleibt darum prozedural. Wird in der GameScene bildschirmfest skaliert.
   private makeVignetteTexture(): void {
     const W = 256;
     const H = 256;

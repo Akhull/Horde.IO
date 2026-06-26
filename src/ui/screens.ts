@@ -184,9 +184,17 @@ function syncSliders(): void {
   });
 }
 
+// König-Vorschau-PNGs für die Auswahlkarten: dieselben statischen Kenney-Sprites,
+// die Phaser unter human_king/elf_king/orc_king lädt (kein altes anim-Sheet mehr).
+const KING_PREVIEW: Record<Faction, string> = {
+  human: "/assets/kenney/medieval-rts/PNG/Retina/Unit/medievalUnit_05.png",
+  elf: "/assets/kenney/medieval-rts/PNG/Retina/Unit/medievalUnit_17.png",
+  orc: "/assets/kenney/medieval-rts/PNG/Retina/Unit/medievalUnit_23.png",
+};
+
 function buildSelection(): HTMLElement[] {
   const cards = FACTION_UI.map((f) => {
-    const sprite = el("div", { class: "king-sprite", style: { backgroundImage: `url("/sprites/anim/${f.id}_king.png")` } });
+    const sprite = el("div", { class: "king-sprite", style: { backgroundImage: `url("${KING_PREVIEW[f.id]}")` } });
     const card = el("div", { class: "card", tabIndex: 0 }, [
       el("div", { class: "card-stage" }, [sprite]),
       el("div", { class: "card-name", textContent: f.label }),

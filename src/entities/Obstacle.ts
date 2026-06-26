@@ -5,14 +5,17 @@ import { DEPTH } from "../config/gameConfig";
 // Nicht begehbares Hindernis (z. B. Wasser). Wälder werden über die Forest-Klasse abgebildet.
 export class Obstacle extends Entity {
   readonly type: "water";
-  private rect: Phaser.GameObjects.Rectangle;
+  private tile: Phaser.GameObjects.TileSprite;
 
   constructor(scene: Phaser.Scene, x: number, y: number, width: number, height: number) {
     super(x, y, width, height);
     this.type = "water";
-    this.rect = scene.add
-      .rectangle(x, y, width, height, 0x3366ff, 0.85)
+    // Gekacheltes Wasser-Sprite statt einer flachen Fläche. tileScale 0.5 verkleinert
+    // die 128px-Kachel auf eine lesbare Wellen-Wiederholung.
+    this.tile = scene.add
+      .tileSprite(x, y, width, height, "water")
       .setOrigin(0, 0)
+      .setTileScale(0.5, 0.5)
       .setDepth(DEPTH.obstacle);
   }
 
@@ -21,6 +24,6 @@ export class Obstacle extends Entity {
   }
 
   destroyView(): void {
-    this.rect.destroy();
+    this.tile.destroy();
   }
 }

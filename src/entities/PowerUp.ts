@@ -8,7 +8,7 @@ import type { PowerUpType } from "../types";
 export class PowerUp extends Entity {
   effectType: PowerUpType;
   duration: number;
-  private sprite: Phaser.GameObjects.Arc;
+  private sprite: Phaser.GameObjects.Image;
 
   constructor(scene: Phaser.Scene, x: number, y: number, effectType: PowerUpType, duration = 6000) {
     super(x, y, 28, 28);
@@ -33,11 +33,14 @@ export class PowerUp extends Entity {
                 : effectType === "regen"
                   ? 0x2ecc71
                   : 0x8b5a2b;
+    // Near-weisser Glow aus dem particle-pack, pro Typ getönt (kein Kreis/Stroke mehr –
+    // der Glow liest sich auf der dunklen Welt von allein klar als Pickup).
     this.sprite = scene.add
-      .circle(this.centerX, this.centerY, 14, color, 0.9)
-      .setStrokeStyle(3, 0xffffff)
+      .image(this.centerX, this.centerY, "powerup")
+      .setDisplaySize(28, 28)
+      .setTint(color)
       .setDepth(DEPTH.powerup);
-    scene.tweens.add({ targets: this.sprite, scale: 1.2, duration: 500, yoyo: true, repeat: -1 });
+    scene.tweens.add({ targets: this.sprite, scale: this.sprite.scale * 1.2, duration: 500, yoyo: true, repeat: -1 });
   }
 
   sync(): void {
