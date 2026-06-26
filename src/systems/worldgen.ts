@@ -15,6 +15,13 @@ export function spawnVassal(scene: GameScene, leader: Unit): Unit {
   return new Unit(scene, x, y, leader.faction, type, 1, leader);
 }
 
+// Beschwört einen Champion (legendäre Spezialeinheit) nahe dem König – aus einem Gold-Orb.
+export function spawnChampion(scene: GameScene, king: Unit): Unit {
+  const x = king.x + (Math.random() - 0.5) * 60;
+  const y = king.y + (Math.random() - 0.5) * 60;
+  return new Unit(scene, x, y, king.faction, "champion", 1, king);
+}
+
 function isAreaClear(x: number, y: number, w: number, h: number, obstacles: { x: number; y: number; width: number; height: number }[]): boolean {
   for (const o of obstacles) {
     if (!(x + w < o.x || x > o.x + o.width || y + h < o.y || y > o.y + o.height)) return false;

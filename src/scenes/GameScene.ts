@@ -1,7 +1,9 @@
 import Phaser from "phaser";
-import { CONFIG, DEPTH, FEEDBACK } from "../config/gameConfig";
+import { CONFIG, DEPTH, FEEDBACK, DIFFICULTY, DEFAULT_DIFFICULTY } from "../config/gameConfig";
+import type { Difficulty } from "../config/gameConfig";
 import type { Faction, RGB, SafeZoneCircle } from "../types";
 import type { Vec2 } from "../systems/AI";
+import { buildScaledPersonalities, type ScaledPersonalities } from "../systems/difficulty";
 import { Unit } from "../entities/Unit";
 import { Building } from "../entities/Building";
 import { Soul } from "../entities/Soul";
@@ -20,8 +22,16 @@ import {
   resolveUnitObstacleCollisions,
   applySeparationForce,
 } from "../systems/collision";
-import { applySafeZoneDamage, handlePowerUps, handleSouls, handleBuildings, removeDeadUnits } from "../systems/gameplay";
+import {
+  applySafeZoneDamage,
+  handlePowerUps,
+  handleSouls,
+  handleBuildings,
+  removeDeadUnits,
+  applySoulMagnetism,
+} from "../systems/gameplay";
 import { updateTowers } from "../systems/combat";
+import { bus, gameRef } from "../ui/bus";
 
 interface Particle {
   x: number;
@@ -32,6 +42,10 @@ interface Particle {
   maxLife: number;
   color: RGB;
   size: number;
+  // Vorberechneter Phaser-Farbwert (einmal beim Spawn statt pro Frame in drawParticles).
+  colorInt: number;
+  // Reziproke maxLife, um die Division pro Frame in drawParticles zu sparen.
+  invMaxLife: number;
 }
 
 // Haupt-Gameplay-Szene: hält den Weltzustand und treibt den Spiel-Loop an.
@@ -47,6 +61,16 @@ export class GameScene extends Phaser.Scene {
   projectiles: Projectile[] = [];
   playerKing: Unit | null = null;
   playerFaction: Faction = "human";
+
+  // Gewählte Schwierigkeit + daraus abgeleitete Laufzeitwerte. Die Persönlichkeiten
+  // sind eine FRISCHE, skalierte Kopie (kein Leak in die globale Konfiguration).
+  // Unit/AI lesen diese Werte über die Szene, statt direkt AI.personalities zu nehmen.
+  difficulty: Difficulty = DEFAULT_DIFFICULTY;
+  scaledPersonalities: ScaledPersonalities = buildScaledPersonalities(DEFAULT_DIFFICULTY);
+  // Multiplikator NUR für von KI-Einheiten verursachten Schaden (Spieler bleibt 1.0).
+  aiDamageMultiplier = 1;
+  // Multiplikator für vom SPIELER-König genommenen Schaden (nur Hardcore > 1.0).
+  playerDamageTaken = 1;
 
   grid!: SpatialGrid;
   safeZone!: SafeZone;
@@ -70,6 +94,9 @@ export class GameScene extends Phaser.Scene {
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private wasd!: Record<string, Phaser.Input.Keyboard.Key>;
   private particles: Particle[] = [];
+  // Frei-Pool ausgemusterter Partikel-Objekte – wiederverwendet statt neu zu allokieren,
+  // damit Burst-Effekte (Tode, Dash, Level-ups) keinen GC-Müll pro Frame erzeugen.
+  private particlePool: Particle[] = [];
   private fxGfx!: Phaser.GameObjects.Graphics;
   private safeGfx!: Phaser.GameObjects.Graphics;
   private ground!: Phaser.GameObjects.TileSprite;
@@ -78,6 +105,10 @@ export class GameScene extends Phaser.Scene {
   private vignette!: Phaser.GameObjects.Image;
   private hitVignette = 0;
   private activeDamageTexts = 0;
+
+  // Hit-Stop: kurzer Zeit-Freeze für "Wucht" bei einem Königstod. Der Loop returnt
+  // früh, solange dieser Timer > 0 ist (Sub-Logik wird kurz angehalten – subtil).
+  private hitStopTimer = 0;
 
   constructor() {
     super("Game");
@@ -103,11 +134,24 @@ export class GameScene extends Phaser.Scene {
     this.recentCombatEvents = 0;
     this.combatDecayTimer = 0;
     this.kingStationaryTime = 0;
+    this.hitStopTimer = 0;
     Unit.nextTeamId = 1;
+    // Schwierigkeit hart auf Default zurücksetzen, bevor create() die echte Wahl
+    // anwendet – so leakt nichts zwischen Runden, falls create() mal früh abbricht.
+    this.difficulty = DEFAULT_DIFFICULTY;
+    this.scaledPersonalities = buildScaledPersonalities(DEFAULT_DIFFICULTY);
+    this.aiDamageMultiplier = 1;
+    this.playerDamageTaken = 1;
   }
 
-  create(data: { faction: Faction }): void {
+  create(data: { faction: Faction; difficulty?: Difficulty }): void {
     this.playerFaction = data.faction ?? "human";
+    // Schwierigkeit anwenden: skalierte Persönlichkeits-Kopie + Schadens-Multiplikatoren.
+    // DIFFICULTY[...] bleibt unangetastet; buildScaledPersonalities liefert eine Kopie.
+    this.difficulty = data.difficulty && data.difficulty in DIFFICULTY ? data.difficulty : DEFAULT_DIFFICULTY;
+    this.scaledPersonalities = buildScaledPersonalities(this.difficulty);
+    this.aiDamageMultiplier = DIFFICULTY[this.difficulty].aiDamage;
+    this.playerDamageTaken = DIFFICULTY[this.difficulty].playerDamageTaken;
     this.cameras.main.fadeIn(400, 0, 0, 0);
     this.cameras.main.setBounds(0, 0, CONFIG.worldWidth, CONFIG.worldHeight);
 
@@ -143,12 +187,12 @@ export class GameScene extends Phaser.Scene {
     // Kamera folgt dem Spielerkönig (manuell zentriert – siehe update)
     if (this.playerKing) this.cameras.main.centerOn(this.playerKing.centerX, this.playerKing.centerY);
 
-    // HUD-Overlay als parallele Szene
-    this.scene.launch("HUD");
+    // Aktive Szene fürs DOM-HUD registrieren (liest den Zustand pro Frame).
+    gameRef.current = this;
 
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.audio.stopAll();
-      this.scene.stop("HUD");
+      gameRef.current = null;
     });
   }
 
@@ -156,6 +200,8 @@ export class GameScene extends Phaser.Scene {
     const kb = this.input.keyboard!;
     this.cursors = kb.createCursorKeys();
     this.wasd = kb.addKeys("W,A,S,D,SPACE,Q") as Record<string, Phaser.Input.Keyboard.Key>;
+    // Pause (ESC/P, Touch-Button) wird vom DOM-UI auf Fensterebene behandelt;
+    // die Szene wird dabei von aussen via scene.pause("Game") eingefroren.
   }
 
   // Erzeugt die Welt: 11 Königreiche im Ring, Welt-Objekte, Power-Ups.
@@ -204,6 +250,15 @@ export class GameScene extends Phaser.Scene {
     this.recentCombatEvents++;
   }
 
+  // Wird von gameplay.removeDeadUnits beim Tod eines KÖNIGS gerufen (nicht für Vasallen).
+  // Löst den Hit-Stop ("Wucht"-Freeze) aus und gibt das Kill-Feed-Event an das HUD weiter.
+  // Kommunikationsweg HUD <- Game: Phaser-Scene-Event "kingKilled" auf dieser Szene.
+  onKingKilled(faction: Faction, kingsLeft: number): void {
+    // Sehr kurzer Zeit-Freeze (60ms) – subtil, schadet der Logik nicht (Loop returnt früh).
+    this.hitStopTimer = HIT_STOP_MS;
+    bus.emit("kingKilled", { faction, kingsLeft });
+  }
+
   spawnProjectile(x: number, y: number, target: ProjectileTarget, damage: number, team: number): void {
     this.projectiles.push(new Projectile(this, x, y, target, damage, team));
   }
@@ -227,19 +282,31 @@ export class GameScene extends Phaser.Scene {
   }
 
   spawnVisualEffect(x: number, y: number, color: RGB, count = 10, lifetime = 300, size = 2, speed = 1): void {
+    // Farbe einmal pro Burst berechnen (alle Partikel teilen sie) statt pro Frame/Partikel.
+    const colorInt = Phaser.Display.Color.GetColor(color.r, color.g, color.b);
+    const invMaxLife = lifetime > 0 ? 1 / lifetime : 0;
     for (let i = 0; i < count; i++) {
       const angle = Math.random() * Math.PI * 2;
       const sp = Math.random() * speed;
-      this.particles.push({
-        x,
-        y,
-        vx: Math.cos(angle) * sp,
-        vy: Math.sin(angle) * sp,
-        life: lifetime,
-        maxLife: lifetime,
-        color,
-        size,
-      });
+      const vx = Math.cos(angle) * sp;
+      const vy = Math.sin(angle) * sp;
+      // Aus dem Frei-Pool wiederverwenden, sonst neu anlegen (allokationsarm).
+      const p = this.particlePool.pop();
+      if (p) {
+        p.x = x;
+        p.y = y;
+        p.vx = vx;
+        p.vy = vy;
+        p.life = lifetime;
+        p.maxLife = lifetime;
+        p.color = color;
+        p.size = size;
+        p.colorInt = colorInt;
+        p.invMaxLife = invMaxLife;
+        this.particles.push(p);
+      } else {
+        this.particles.push({ x, y, vx, vy, life: lifetime, maxLife: lifetime, color, size, colorInt, invMaxLife });
+      }
     }
   }
 
@@ -321,6 +388,15 @@ export class GameScene extends Phaser.Scene {
 
   update(_time: number, delta: number): void {
     if (this.gameOver) return;
+
+    // Hit-Stop: Simulation für wenige ms einfrieren (Wucht bei Königstod). Kamera folgt
+    // weiter, Tweens/Partikel laufen über Phaser-Manager normal weiter. Danach normal fort.
+    if (this.hitStopTimer > 0) {
+      this.hitStopTimer -= delta;
+      if (this.playerKing) this.cameras.main.centerOn(this.playerKing.centerX, this.playerKing.centerY);
+      return;
+    }
+
     const dt = Math.min(delta, 100); // gegen Tunneln bei Frame-Spikes
 
     this.readInput();
@@ -346,6 +422,7 @@ export class GameScene extends Phaser.Scene {
     this.safeZone.update(dt);
     applySafeZoneDamage(this, dt);
     handlePowerUps(this);
+    applySoulMagnetism(this, dt);
     handleSouls(this);
     handleBuildings(this);
     removeDeadUnits(this);
@@ -429,33 +506,45 @@ export class GameScene extends Phaser.Scene {
   private endGame(message: string): void {
     this.gameOver = true;
     this.audio.stopAll();
-    this.scene.stop("HUD");
     if (message === "Verloren") this.cameras.main.shake(260, 0.011);
     this.cameras.main.fadeOut(600, 0, 0, 0);
     this.cameras.main.once("camerafadeoutcomplete", () => {
-      this.scene.start("GameOver", { message, faction: this.playerFaction });
+      bus.emit("gameOver", { result: message === "Gewonnen" ? "win" : "loss", faction: this.playerFaction });
+      this.scene.stop();
     });
   }
 
   private updateParticles(dt: number): void {
-    for (let i = this.particles.length - 1; i >= 0; i--) {
-      const p = this.particles[i];
+    const step = dt / 16;
+    const arr = this.particles;
+    // Swap-Remove statt splice: tote Partikel werden mit dem letzten getauscht und
+    // per pop() entfernt (O(1) je Entfernung statt O(n)). Reihenfolge ist für reine
+    // Visuals ohne Belang. Ausgemusterte Objekte wandern in den Frei-Pool zurück.
+    for (let i = arr.length - 1; i >= 0; i--) {
+      const p = arr[i];
       p.life -= dt;
       if (p.life <= 0) {
-        this.particles.splice(i, 1);
+        const last = arr.length - 1;
+        if (i !== last) arr[i] = arr[last];
+        arr.pop();
+        this.particlePool.push(p);
       } else {
-        p.x += p.vx * (dt / 16);
-        p.y += p.vy * (dt / 16);
+        p.x += p.vx * step;
+        p.y += p.vy * step;
       }
     }
   }
 
   private drawParticles(): void {
-    this.fxGfx.clear();
+    const g = this.fxGfx;
+    g.clear();
+    // colorInt/invMaxLife sind beim Spawn vorberechnet -> kein GetColor und keine
+    // Division pro Partikel pro Frame mehr.
     for (const p of this.particles) {
-      const alpha = Math.max(0, p.life / p.maxLife);
-      this.fxGfx.fillStyle(Phaser.Display.Color.GetColor(p.color.r, p.color.g, p.color.b), alpha);
-      this.fxGfx.fillCircle(p.x, p.y, p.size);
+      let alpha = p.life * p.invMaxLife;
+      if (alpha < 0) alpha = 0;
+      g.fillStyle(p.colorInt, alpha);
+      g.fillCircle(p.x, p.y, p.size);
     }
   }
 
@@ -490,3 +579,6 @@ interface Vec2Pos {
   x: number;
   y: number;
 }
+
+// Dauer des Hit-Stop-Freezes bei einem Königstod (ms) – subtil im Bereich 40–80ms.
+const HIT_STOP_MS = 60;

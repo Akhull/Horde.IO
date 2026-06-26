@@ -1,8 +1,10 @@
 // Gemeinsame Typen für das gesamte Spiel.
 
 export type Faction = "human" | "elf" | "orc";
-export type UnitType = "king" | "vassal" | "archer";
-export type SoulType = "green" | "blue" | "purple";
+export type UnitType = "king" | "vassal" | "archer" | "champion";
+// Orb-Raritäten (Fortnite-Stil): grün < blau < lila < gold.
+// gold = legendärer Orb -> nur der König sammelt ihn ein und beschwört einen Champion.
+export type SoulType = "green" | "blue" | "purple" | "gold";
 export type BuildingType = "barn" | "house" | "tower";
 export type ObstacleType = "forest" | "water";
 export type PowerUpType = "speed" | "shield";
@@ -14,6 +16,9 @@ export interface Box {
   width: number;
   height: number;
   _gridCells?: Set<Set<GridEntity>>;
+  // Besuchsstempel für allokationsfreie Deduplizierung in SpatialgGrid-Queries
+  // (getPotentialCollidersInto/getEntitiesInBoundingBoxInto). Intern, nicht Gameplay.
+  _visit?: number;
 }
 
 export type GridEntity = Box & { dead?: boolean };

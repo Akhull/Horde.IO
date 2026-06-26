@@ -1,9 +1,10 @@
 import Phaser from "phaser";
 import { Entity } from "./Entity";
-import { CONFIG, UNIT_STATS, DEPTH, FEEDBACK } from "../config/gameConfig";
+import { CONFIG, UNIT_STATS, DEPTH, FEEDBACK, AI, FACTION_STATS, LEGENDARY } from "../config/gameConfig";
+import type { AIPersonality } from "../config/gameConfig";
 import type { Faction, UnitType } from "../types";
 import type { Vec2 } from "../systems/AI";
-import { determineVassalTarget } from "../systems/AI";
+import { determineVassalTarget, chooseAIKingTarget, findKingCollectible, computeKingAvoidance } from "../systems/AI";
 import { resolveUnitSheet, animKey } from "../systems/animations";
 import { FACTION_TINT, type AnimName } from "../config/spriteConfig";
 import type { ProjectileTarget } from "./Projectile";
@@ -19,7 +20,16 @@ export class Unit extends Entity {
   level: number;
   team!: number;
   hp!: number;
+  // Fraktions-skaliertes Maximum (für Healthbar-Clamping/Ratio). Wird im
+  // Konstruktor EINMAL aus dem UNIT_STATS-Grundwert * FACTION_STATS.hp gesetzt;
+  // hp startet identisch (Vollleben). Ersetzt den alten Konstanten-Getter, der
+  // den Fraktions-Modifikator ignoriert hätte (Orc-König: 330 statt 300).
+  maxHp!: number;
   speed!: number;
+  // Fraktions-Schadensmodifikator (FACTION_STATS.damage). Wird in meleeDamage()
+  // und beim Pfeilschaden multipliziert, damit ein Level-up (Schaden wird pro
+  // Stufe neu gelesen) den Modifikator weiterhin korrekt widerspiegelt.
+  private factionDamageMod = 1;
   leader!: Unit;
 
   // König
@@ -28,13 +38,28 @@ export class Unit extends Entity {
   shieldCooldownTimer = 0;
   shieldTimer = 0;
   isShieldActive = false;
+  // Tempo-Power-Up: zeitbasiert statt gestapelter delayedCall-Resets. Solange
+  // speedBoostTimer > 0 ist, gilt der x1.5-Boost; erneutes Aufsammeln verlängert
+  // nur die Dauer (kein erneutes Multiplizieren -> kein Speed-Stacking/Leak).
+  speedBoostTimer = 0;
   dashReadyFlashTimer = 0;
   shieldReadyFlashTimer = 0;
   idleTarget: Vec2 | null = null;
 
+  // KI-König-Persönlichkeit (nur für unitType === "king" gesetzt). Steuert
+  // Aggro-Reichweite, Rückzugs-Schwelle und Seelen-Gier in updateAIKing.
+  // Der Spielerkönig bekommt zwar ein Tier zugewiesen, nutzt es aber nicht.
+  aiPersonality: AIPersonality = "balanced";
+  // true, solange der König nach einem HP-Einbruch flieht (Hysterese, damit er
+  // nicht am Schwellenwert flackert: Rückzug bis regroupHpFactor erreicht ist).
+  private isRetreating = false;
+
   // Bogenschütze
   attackCooldown = 0;
   lastAttackTimer = 0;
+
+  // Paladin-Champion (Mensch): Countdown bis zum nächsten Heil-Puls der Aura.
+  private healPulseTimer = 0;
 
   // Nahkampf
   isAttacking = false;
@@ -71,6 +96,7 @@ export class Unit extends Entity {
   private barFill: Phaser.GameObjects.Rectangle;
   private shieldRing?: Phaser.GameObjects.Arc;
   private archerOutline?: Phaser.GameObjects.Rectangle;
+  private championRing?: Phaser.GameObjects.Arc;
 
   constructor(scene: Phaser.Scene, x: number, y: number, faction: Faction, unitType: UnitType, level = 1, leader: Unit | null = null) {
     super(x, y, 40, 40);
@@ -87,6 +113,10 @@ export class Unit extends Entity {
       this.leader = this;
       this.width = UNIT_STATS.king.size;
       this.height = UNIT_STATS.king.size;
+      // Persönlichkeit gleichverteilt würfeln. So verhalten sich die 10 KI-Könige
+      // spürbar unterschiedlich (Aggro/Rückzug/Sammeln), statt 10x identisch.
+      const pool = AI.personalityPool;
+      this.aiPersonality = pool[Math.floor(Math.random() * pool.length)];
     } else if (unitType === "archer") {
       this.team = leader!.team;
       this.hp = UNIT_STATS.archer.hp;
@@ -95,6 +125,18 @@ export class Unit extends Entity {
       this.attackCooldown = UNIT_STATS.archer.attackCooldown;
       this.width = UNIT_STATS.archer.size;
       this.height = UNIT_STATS.archer.size;
+    } else if (unitType === "champion") {
+      // Legendäre Spezialeinheit (aus Gold-Orb). Deutlich größer/zäher als ein Vasall;
+      // die fraktionsspezifische Mechanik (Aura/Reichweite/AoE) steckt in LEGENDARY.
+      this.team = leader!.team;
+      this.hp = UNIT_STATS.champion.hp;
+      this.speed = UNIT_STATS.champion.speed;
+      this.leader = leader!;
+      this.width = UNIT_STATS.champion.size;
+      this.height = UNIT_STATS.champion.size;
+      // Fernkampf-Legendäre (Elf-Erzschütze) brauchen eine Feuerrate (sonst feuert
+      // updateArcher mit attackCooldown 0 jeden Frame).
+      this.attackCooldown = LEGENDARY[faction].attackCooldown ?? UNIT_STATS.archer.attackCooldown;
     } else {
       this.team = leader!.team;
       this.hp = UNIT_STATS.vassal.hp;
@@ -105,11 +147,24 @@ export class Unit extends Entity {
       this.height = s;
     }
 
+    // Fraktions-Identität: hp/speed/damage werden EINMAL mit dem fraktionseigenen
+    // Modifikator multipliziert (siehe FACTION_STATS). Gilt für JEDEN Typ – König,
+    // Vasall (alle Stufen), Archer, Champion –, damit König und Horde dieselbe
+    // Fraktion teilen (faction wird vom Anführer geerbt, siehe worldgen.spawnVassal).
+    // attackRange/Cooldowns bleiben bewusst unangetastet.
+    const fs = FACTION_STATS[faction];
+    // HP runden (Healthbar zeigt ganze Zahlen, hp/maxHp werden ganzzahlig verglichen).
+    this.hp = Math.round(this.hp * fs.hp);
+    this.maxHp = this.hp; // Start mit vollem, bereits skaliertem Leben
+    this.speed *= fs.speed;
+    this.factionDamageMod = fs.damage;
+
     this.prevX = x;
     this.prevY = y;
     this.footstepTimer = this.footstepMin + Math.random() * (this.footstepMax - this.footstepMin);
 
-    this.spriteKey = unitType === "king" ? `${faction}_king` : `${faction}_l${level}`;
+    // Champion nutzt das schwere Legion-Sheet (l3) für eine elitäre Optik.
+    this.spriteKey = unitType === "king" ? `${faction}_king` : unitType === "champion" ? `${faction}_l3` : `${faction}_l${level}`;
     const sheet = resolveUnitSheet(this.spriteKey);
     const texKey = sheet ? sheet.textureKey : this.spriteKey;
     this.sheetKey = sheet ? sheet.sheetKey : null;
@@ -129,10 +184,10 @@ export class Unit extends Entity {
     if (unitType === "archer") {
       this.archerOutline = scene.add.rectangle(this.x, this.y, this.width, this.height).setOrigin(0, 0).setStrokeStyle(2, 0xffd700).setDepth(DEPTH.unit);
     }
-  }
-
-  private get maxHP(): number {
-    return this.unitType === "king" ? UNIT_STATS.king.hp : 100;
+    if (unitType === "champion") {
+      // Goldener Aura-Ring kennzeichnet den Champion klar als legendäre Einheit.
+      this.championRing = scene.add.circle(this.centerX, this.centerY, this.width * 0.62, 0xffd700, 0).setStrokeStyle(3, 0xffd700, 0.9).setDepth(DEPTH.healthbar);
+    }
   }
 
   // Spielt eine Animation (idle/walk/attack/death), falls für das Sheet vorhanden.
@@ -191,17 +246,78 @@ export class Unit extends Entity {
 
   // Spielt den passenden Nahkampf-Sound je nach Einheitentyp/Level.
   private meleeSound(): { key: string; vol: number } {
-    if (this.unitType === "king") return { key: "melee_l3", vol: 1.3 };
+    if (this.unitType === "king" || this.unitType === "champion") return { key: "melee_l3", vol: 1.3 };
     if (this.level === 1) return { key: "melee_l1", vol: 0.7 };
     if (this.level === 2) return { key: "melee_l2", vol: 1.0 };
     return { key: "melee_l3", vol: 1.3 };
+  }
+
+  // Nahkampfschaden je nach Einheitentyp/Level (zentral aus UNIT_STATS, statt flat 20).
+  // König schlägt am härtesten, Vasallen skalieren mit ihrer Stufe (15/20/25).
+  // Der Fraktions-Modifikator wird hier (statt im Konstruktor) angewandt, weil der
+  // Schaden pro Level neu gelesen wird – so bleibt er auch nach einem Level-up gültig.
+  private meleeDamage(): number {
+    const base =
+      this.unitType === "king"
+        ? UNIT_STATS.king.damage
+        : this.unitType === "champion"
+          ? UNIT_STATS.champion.damage
+          : UNIT_STATS.vassal.damageByLevel[this.level] ?? 20;
+    return base * this.factionDamageMod;
+  }
+
+  // Schwierigkeits-Skalierung des AUSGETEILTEN Schadens: nur KI-Einheiten (Team
+  // ungleich Spielerkönig) bekommen scene.aiDamageMultiplier; der Spieler und
+  // seine Vasallen teilen unverändert aus. Ein einziger, klar benannter Hebel.
+  private scaledDamage(base: number, scene: GameScene): number {
+    const playerTeam = scene.playerKing ? scene.playerKing.team : null;
+    return this.team === playerTeam ? base : base * scene.aiDamageMultiplier;
+  }
+
+  // Tempo-Power-Up aufnehmen (Spieler- ODER KI-König). Idempotent gegen Stacking:
+  // der x1.5-Faktor wird nur beim ersten Aufnehmen angewandt; weitere Aufnahmen
+  // verlängern nur den Timer. tickSpeedBoost setzt den Faktor sauber zurück.
+  applySpeedBoost(duration: number): void {
+    if (this.speedBoostTimer <= 0) this.speed *= 1.5;
+    this.speedBoostTimer = Math.max(this.speedBoostTimer, duration);
+  }
+
+  // Schild-Power-Up aufnehmen (Spieler- ODER KI-König). Verlängert ein aktives
+  // Schild, statt es zu überschreiben – identisch zur bisherigen Spieler-Logik.
+  applyShieldPowerUp(duration: number): void {
+    if (this.isShieldActive) this.shieldTimer += duration;
+    else {
+      this.isShieldActive = true;
+      this.shieldTimer = duration;
+    }
+  }
+
+  // Zählt den Tempo-Boost herunter und entfernt den Faktor exakt einmal beim Ablauf.
+  private tickSpeedBoost(deltaTime: number): void {
+    if (this.speedBoostTimer <= 0) return;
+    this.speedBoostTimer -= deltaTime;
+    if (this.speedBoostTimer <= 0) {
+      this.speedBoostTimer = 0;
+      this.speed /= 1.5;
+    }
+  }
+
+  // Zählt ein aktives Schild herunter (Fähigkeit beim Spieler, Power-Up bei allen
+  // Königen). Zentral in updateKing, damit es auch für KI-Könige korrekt abläuft.
+  private tickShield(deltaTime: number): void {
+    if (!this.isShieldActive) return;
+    this.shieldTimer -= deltaTime;
+    if (this.shieldTimer <= 0) this.isShieldActive = false;
   }
 
   // Zentraler Treffer-Eingang: HP abziehen + Feedback (Aufleuchten, Rückstoß,
   // Schadenszahl). Quelle (srcX/srcY) bestimmt die Rückstoßrichtung.
   takeDamage(amount: number, srcX: number, srcY: number, scene: GameScene): void {
     if (this.hp <= 0) return;
-    this.hp -= amount;
+    // Hardcore: nur der SPIELER-König nimmt mehr Schaden (playerDamageTaken > 1).
+    // Für alle anderen bleibt der Multiplikator 1.0 -> kein Effekt.
+    const dmg = this === scene.playerKing ? amount * scene.playerDamageTaken : amount;
+    this.hp -= dmg;
     this.flashTimer = FEEDBACK.flashDuration;
 
     // Rückstoß weg von der Schadensquelle (Spielerkönig behält volle Kontrolle).
@@ -214,8 +330,8 @@ export class Unit extends Entity {
       this.knockbackVy += (dy / d) * FEEDBACK.knockback * factor;
     }
 
-    if (FEEDBACK.damageNumbers) scene.spawnDamageNumber(amount, this.centerX, this.y);
-    if (this === scene.playerKing) scene.onPlayerKingHit(amount);
+    if (FEEDBACK.damageNumbers) scene.spawnDamageNumber(dmg, this.centerX, this.y);
+    if (this === scene.playerKing) scene.onPlayerKingHit(dmg);
   }
 
   // Stellt die Grund-Färbung nach einem Treffer-Flash wieder her.
@@ -224,15 +340,19 @@ export class Unit extends Entity {
     else this.sprite.clearTint();
   }
 
-  // Wendet im Angriffsfenster 20 Schaden an, spielt Sound und zeigt den Slash-Effekt.
+  // Wendet im Angriffsfenster den typ-/levelabhängigen Nahkampfschaden an,
+  // spielt Sound und zeigt den Slash-Effekt.
   private executeAttack(deltaTime: number, scene: GameScene): void {
     if (!this.isAttacking) return;
     this.attackTimer -= deltaTime;
     if (this.attackTimer < 250 && !this.attackDamageDealt) {
+      const dmg = this.scaledDamage(this.meleeDamage(), scene);
       if (this.currentTarget && !this.currentTarget.dead) {
-        if (this.currentTarget.takeDamage) this.currentTarget.takeDamage(20, this.centerX, this.centerY, scene);
-        else this.currentTarget.hp -= 20;
+        if (this.currentTarget.takeDamage) this.currentTarget.takeDamage(dmg, this.centerX, this.centerY, scene);
+        else this.currentTarget.hp -= dmg;
       }
+      // Berserker (Ork-Champion): jeder Nahkampftreffer trifft umstehende Gegner mit (AoE + Knockback).
+      if (this.unitType === "champion" && LEGENDARY[this.faction].aoeRange) this.applyBerserkerAoE(dmg, scene);
       this.attackDamageDealt = true;
       const s = this.meleeSound();
       scene.audio.playSpatial(s.key, this.x, this.y, s.vol);
@@ -256,6 +376,54 @@ export class Unit extends Entity {
       this.attackDamageDealt = false;
       this.currentTarget = null;
     }
+  }
+
+  // Paladin-Aura (Mensch-Champion): heilt periodisch nahe lebende Verbündete (inkl. sich
+  // selbst) bis zu deren Maximum. Broad-Phase über das Grid -> kein O(n²) pro Frame.
+  private tickPaladinAura(deltaTime: number, scene: GameScene): void {
+    const cfg = LEGENDARY[this.faction];
+    if (!cfg.auraRange || !cfg.healPerPulse) return;
+    this.healPulseTimer -= deltaTime;
+    if (this.healPulseTimer > 0) return;
+    this.healPulseTimer = cfg.pulseInterval ?? 1000;
+
+    const r = cfg.auraRange;
+    const rSq = r * r;
+    const near = scene.grid.getEntitiesInBoundingBox(this.centerX - r, this.centerY - r, r * 2, r * 2);
+    let healedAny = false;
+    for (const e of near) {
+      if (!(e instanceof Unit) || e.dead || e.team !== this.team || e.hp >= e.maxHp) continue;
+      const dx = e.centerX - this.centerX;
+      const dy = e.centerY - this.centerY;
+      if (dx * dx + dy * dy > rSq) continue;
+      e.hp = Math.min(e.maxHp, e.hp + cfg.healPerPulse);
+      healedAny = true;
+    }
+    if (healedAny) scene.spawnVisualEffect(this.centerX, this.centerY, { r: 80, g: 255, b: 120 }, 14, r, 2, 1.2);
+  }
+
+  // Berserker-AoE (Ork-Champion): teilt anteiligen Splash-Schaden + Knockback an
+  // alle Gegner im Umkreis aus (der Haupttreffer auf currentTarget ist bereits erfolgt).
+  private applyBerserkerAoE(mainDmg: number, scene: GameScene): void {
+    const cfg = LEGENDARY[this.faction];
+    if (!cfg.aoeRange || !cfg.aoeDamageFactor) return;
+    const r = cfg.aoeRange;
+    const rSq = r * r;
+    const splash = mainDmg * cfg.aoeDamageFactor;
+    const near = scene.grid.getEntitiesInBoundingBox(this.centerX - r, this.centerY - r, r * 2, r * 2);
+    for (const e of near) {
+      if (!(e instanceof Unit) || e.dead || e.team === this.team || e === this.currentTarget) continue;
+      const dx = e.centerX - this.centerX;
+      const dy = e.centerY - this.centerY;
+      if (dx * dx + dy * dy > rSq) continue;
+      e.takeDamage(splash, this.centerX, this.centerY, scene);
+      // Zusätzlicher Wucht-Impuls (Könige werden schwerer gestoßen -> Faktor).
+      const d = Math.hypot(dx, dy) || 1;
+      const kb = (cfg.aoeKnockback ?? 0) * (e.unitType === "king" ? FEEDBACK.kingKnockbackFactor : 1);
+      e.knockbackVx += (dx / d) * kb;
+      e.knockbackVy += (dy / d) * kb;
+    }
+    scene.spawnVisualEffect(this.centerX, this.centerY, { r: 255, g: 90, b: 30 }, 16, r * 1.5, 3, 1.3);
   }
 
   private faceByDx(dx: number): void {
@@ -285,7 +453,7 @@ export class Unit extends Entity {
       const key = this.faction === "elf" ? "death_elf" : this.faction === "orc" ? "death_orc" : "death_human";
       let vol = 1.0;
       if (this.unitType === "vassal") vol = this.level === 1 ? 0.7 : this.level === 3 ? 1.3 : 1.0;
-      else if (this.unitType === "king") vol = 1.3;
+      else if (this.unitType === "king" || this.unitType === "champion") vol = 1.3;
       scene.audio.playSpatial(key, this.x, this.y, vol);
       this.deathSoundPlayed = true;
     }
@@ -320,9 +488,15 @@ export class Unit extends Entity {
       }
     }
 
-    if (this.unitType === "vassal") this.updateVassal(deltaTime, step, scene);
+    // Routing: Elf-Erzschütze (legendärer Fernkämpfer) läuft über die Archer-Logik,
+    // alle übrigen Champions + Vasallen über die Nahkampf-Logik.
+    if (this.unitType === "champion" && LEGENDARY[this.faction].ranged) this.updateArcher(deltaTime, step, scene);
+    else if (this.unitType === "vassal" || this.unitType === "champion") this.updateVassal(deltaTime, step, scene);
     else if (this.unitType === "archer") this.updateArcher(deltaTime, step, scene);
     else this.updateKing(deltaTime, step, scene);
+
+    // Paladin (Mensch-Champion): periodische Heil-Aura für nahe Verbündete.
+    if (this.unitType === "champion" && LEGENDARY[this.faction].auraRange) this.tickPaladinAura(deltaTime, scene);
 
     this.afterMove(deltaTime, scene);
   }
@@ -378,7 +552,8 @@ export class Unit extends Entity {
 
   private updateArcher(deltaTime: number, step: number, scene: GameScene): void {
     this.lastAttackTimer += deltaTime;
-    const range = UNIT_STATS.archer.attackRange;
+    // Elf-Erzschütze schießt weiter als ein normaler Bogenschütze (LEGENDARY-Override).
+    const range = this.unitType === "champion" ? LEGENDARY[this.faction].attackRange ?? UNIT_STATS.archer.attackRange : UNIT_STATS.archer.attackRange;
     const sz = scene.safeZoneCurrent;
     let target: { x: number; y: number; width: number; height: number; hp: number; dead?: boolean } | null = null;
     let best = Infinity;
@@ -404,7 +579,10 @@ export class Unit extends Entity {
 
     if (target) {
       if (this.lastAttackTimer >= this.attackCooldown) {
-        scene.spawnProjectile(this.centerX, this.centerY, target, 10, this.team);
+        // Pfeilschaden ebenfalls mit dem Fraktions-Modifikator (Orc-Pfeile +10%).
+        // Erzschütze nutzt seinen eigenen, höheren Pfeilschaden (LEGENDARY-Override).
+        const baseDmg = this.unitType === "champion" ? LEGENDARY[this.faction].rangedDamage ?? UNIT_STATS.archer.damage : UNIT_STATS.archer.damage;
+        scene.spawnProjectile(this.centerX, this.centerY, target, this.scaledDamage(baseDmg * this.factionDamageMod, scene), this.team);
         scene.audio.playSpatial("arrow_shot", this.x, this.y, 1.0);
         scene.notifyCombatEvent();
         this.lastAttackTimer = 0;
@@ -426,6 +604,10 @@ export class Unit extends Entity {
   }
 
   private updateKing(deltaTime: number, step: number, scene: GameScene): void {
+    // Tempo-Boost und Schild gelten für Spieler- UND KI-König und werden hier
+    // zentral getickt (sonst liefe ein KI-Schild aus dem Power-Up nie ab).
+    this.tickSpeedBoost(deltaTime);
+    this.tickShield(deltaTime);
     if (this === scene.playerKing) {
       this.updatePlayerKing(deltaTime, step, scene);
     } else {
@@ -474,10 +656,8 @@ export class Unit extends Entity {
       // Energie-Ring beim Aktivieren des Schilds.
       scene.spawnVisualEffect(this.centerX, this.centerY, { r: 0, g: 200, b: 255 }, 18, 420, 3, 1.6);
     }
-    if (this.isShieldActive) {
-      this.shieldTimer -= deltaTime;
-      if (this.shieldTimer <= 0) this.isShieldActive = false;
-    }
+    // Hinweis: Das Herunterzählen des aktiven Schilds passiert zentral in updateKing
+    // (tickShield), damit es auch für KI-Könige greift (Power-Up-Schild).
 
     // Angriff einleiten
     if (!this.isAttacking) {
@@ -494,74 +674,128 @@ export class Unit extends Entity {
     }
   }
 
+  // Smartere KI-König-Steuerung mit Persönlichkeits-Tiers.
+  // Entscheidungsreihenfolge pro Frame:
+  //   1. Rückzug bei wenig HP (mit Hysterese, bis HP sich erholt)
+  //   2. lohnenden Gegner-König / nächste Bedrohung angreifen
+  //   3. nahe Seele / Power-Up einsammeln (Horde wachsen lassen)
+  //   4. sonst umherwandern
+  // Auf jede Zielbewegung wird eine Abstoßung von Pfeilen + neutralen Türmen
+  // sowie der Zonenrand-Druck addiert, bevor sie ausgeführt wird.
   private updateAIKing(deltaTime: number, step: number, scene: GameScene): void {
-    const info = determineVassalTarget(this, scene);
-    if (info && info.type === "attack") {
-      const dx = info.x - this.x;
-      const dy = info.y - this.y;
+    // Skalierte Laufzeit-Persönlichkeit der Szene (Schwierigkeit) statt der globalen
+    // Konstante – retreat/regroup/soulGreed reagieren so auf den gewählten Difficulty.
+    const tier = scene.scaledPersonalities[this.aiPersonality];
+    const sz = scene.safeZoneCurrent;
+    // Fraktions-skaliertes Maximum nutzen, sonst läge ein Orc-König (330 HP) bei
+    // vollem Leben fälschlich unter 100% und würde zu früh in den Rückzug gehen.
+    const hpRatio = this.hp / this.maxHp;
+
+    // Rückzugs-Zustand mit Hysterese aktualisieren: flieht ab retreatHpFactor,
+    // kämpft erst ab regroupHpFactor wieder mit – verhindert Flackern am Rand.
+    if (this.isRetreating) {
+      if (hpRatio >= tier.regroupHpFactor) this.isRetreating = false;
+    } else if (hpRatio < tier.retreatHpFactor) {
+      this.isRetreating = true;
+    }
+
+    // Wiederverwendbarer Abstoss-Vektor (Pfeile + Türme); wird unten addiert.
+    const avoid = computeKingAvoidance(this, scene);
+    // Zonenrand-Druck: nach innen, bevor man hinausläuft.
+    const dxSafe = sz.centerX - this.centerX;
+    const dySafe = sz.centerY - this.centerY;
+    const distSafe = Math.hypot(dxSafe, dySafe);
+    if (distSafe > sz.radius - AI.zoneEdgePadding && distSafe > 0) {
+      const w = (distSafe - (sz.radius - AI.zoneEdgePadding)) / AI.zoneEdgePadding;
+      avoid.x += (dxSafe / distSafe) * w;
+      avoid.y += (dySafe / distSafe) * w;
+    }
+
+    // Bewegt den König in Richtung (gx,gy), kombiniert mit dem Abstoss-Vektor.
+    const moveToward = (gx: number, gy: number, desireWeight = 1): void => {
+      let dx = gx - this.centerX;
+      let dy = gy - this.centerY;
+      const d = Math.hypot(dx, dy);
+      if (d > 0) {
+        dx = (dx / d) * desireWeight;
+        dy = (dy / d) * desireWeight;
+      }
+      let vx = dx + avoid.x;
+      let vy = dy + avoid.y;
+      const m = Math.hypot(vx, vy);
+      if (m > 0) {
+        vx /= m;
+        vy /= m;
+        const mx = vx * step;
+        this.faceByDx(mx);
+        this.x += mx;
+        this.y += vy * step;
+      }
+    };
+
+    // 1. RÜCKZUG: weg vom nächsten Feind, Richtung Zonenzentrum / eigene Vasallen.
+    if (this.isRetreating) {
+      const threat = chooseAIKingTarget(this, scene, this.aiPersonality);
+      let fx = sz.centerX;
+      let fy = sz.centerY;
+      if (threat) {
+        // Fluchtpunkt: vom Feind weg, gespiegelt über die eigene Position.
+        fx = this.centerX + (this.centerX - threat.enemy.centerX);
+        fy = this.centerY + (this.centerY - threat.enemy.centerY);
+      }
+      moveToward(fx, fy, 1.4); // entschlossen fliehen, Abstoßung trotzdem beachten
+      return;
+    }
+
+    // 2. ANGRIFF: lohnendsten Gegner-König / nächste Bedrohung suchen.
+    const threat = chooseAIKingTarget(this, scene, this.aiPersonality);
+    if (threat) {
+      const e = threat.enemy;
+      const dx = e.centerX - this.centerX;
+      const dy = e.centerY - this.centerY;
       const d = Math.hypot(dx, dy);
       if (d <= 60) {
         if (!this.isAttacking) {
           this.isAttacking = true;
           this.attackTimer = 500;
           this.attackDamageDealt = false;
-          this.currentTarget = info.target as ProjectileTarget;
+          this.currentTarget = e as ProjectileTarget;
+          this.faceByDx(dx);
         }
       } else if (!this.isAttacking) {
-        const mx = (dx / d) * step;
-        this.faceByDx(mx);
-        this.x += mx;
-        this.y += (dy / d) * step;
+        moveToward(e.centerX, e.centerY);
       }
       return;
     }
 
-    // Idle/Ausweichen: Projektilen ausweichen + in der Safe-Zone bleiben, sonst umherwandern
-    const sz = scene.safeZoneCurrent;
-    const dodge: Vec2 = { x: 0, y: 0 };
-    for (const proj of scene.projectiles) {
-      if (proj.team !== this.team) {
-        const dx = this.centerX - proj.centerX;
-        const dy = this.centerY - proj.centerY;
-        const dist = Math.hypot(dx, dy);
-        if (dist < 150 && dist > 0) {
-          const w = (150 - dist) / 150;
-          dodge.x += (dx / dist) * w;
-          dodge.y += (dy / dist) * w;
-        }
+    // 3. SAMMELN: nahe grüne Seele / Power-Up ansteuern (Horde wächst).
+    // soulGreed entscheidet, ob das Tier sich überhaupt dafür von der Stelle bewegt.
+    if (!this.isAttacking && Math.random() < tier.soulGreed) {
+      const collectible = findKingCollectible(this, scene, this.aiPersonality);
+      if (collectible) {
+        moveToward(collectible.x, collectible.y);
+        return;
       }
-    }
-    const dxSafe = sz.centerX - this.centerX;
-    const dySafe = sz.centerY - this.centerY;
-    const distSafe = Math.hypot(dxSafe, dySafe);
-    if (distSafe > sz.radius - 100 && distSafe > 0) {
-      const w = (distSafe - (sz.radius - 100)) / 100;
-      dodge.x += (dxSafe / distSafe) * w;
-      dodge.y += (dySafe / distSafe) * w;
     }
 
-    const dodgeMag = Math.hypot(dodge.x, dodge.y);
-    let moveX = 0;
-    let moveY = 0;
-    if (dodgeMag > 0.1) {
-      moveX = (dodge.x / dodgeMag) * step;
-      moveY = (dodge.y / dodgeMag) * step;
+    // 4. WANDERN: Abstoßung dominiert, sonst zufälliges Ziel ansteuern.
+    if (Math.hypot(avoid.x, avoid.y) > 0.1) {
       this.idleTarget = null;
-    } else {
-      if (!this.idleTarget || Math.hypot(this.idleTarget.x - this.x, this.idleTarget.y - this.y) < 10) {
-        this.idleTarget = { x: Math.random() * CONFIG.worldWidth, y: Math.random() * CONFIG.worldHeight };
-      }
-      const dx = this.idleTarget.x - this.x;
-      const dy = this.idleTarget.y - this.y;
-      const d = Math.hypot(dx, dy);
-      if (d > 0) {
-        moveX = (dx / d) * step;
-        moveY = (dy / d) * step;
-      }
+      let vx = avoid.x;
+      let vy = avoid.y;
+      const m = Math.hypot(vx, vy);
+      vx /= m;
+      vy /= m;
+      const mx = vx * step;
+      this.faceByDx(mx);
+      this.x += mx;
+      this.y += vy * step;
+      return;
     }
-    this.faceByDx(moveX);
-    this.x += moveX;
-    this.y += moveY;
+    if (!this.idleTarget || Math.hypot(this.idleTarget.x - this.x, this.idleTarget.y - this.y) < 10) {
+      this.idleTarget = { x: Math.random() * CONFIG.worldWidth, y: Math.random() * CONFIG.worldHeight };
+    }
+    moveToward(this.idleTarget.x, this.idleTarget.y);
   }
 
   // Bobbing, Schrittsounds, Bewegungserkennung – am Ende jedes Updates.
@@ -606,7 +840,7 @@ export class Unit extends Entity {
     const barX = this.x - (barW - this.width) / 2;
     const barY = this.y - (this.unitType === "king" ? 8 : 5) - 2;
     this.barBg.setPosition(barX, barY).width = barW;
-    const ratio = Phaser.Math.Clamp(this.hp / this.maxHP, 0, 1);
+    const ratio = Phaser.Math.Clamp(this.hp / this.maxHp, 0, 1);
     this.barFill.setPosition(barX, barY);
     this.barFill.width = barW * ratio;
     this.barFill.setFillStyle(this.team === playerTeam ? 0x00ff00 : 0xff0000);
@@ -616,6 +850,7 @@ export class Unit extends Entity {
       if (this.isShieldActive) this.shieldRing.setPosition(this.centerX, this.centerY);
     }
     if (this.archerOutline) this.archerOutline.setPosition(this.x, this.y);
+    if (this.championRing) this.championRing.setPosition(this.centerX, this.centerY);
   }
 
   // Wird von der GameScene pro Frame gesetzt, um Verbündete (grün) von Gegnern (rot) zu unterscheiden.
@@ -626,6 +861,7 @@ export class Unit extends Entity {
     this.barFill.destroy();
     this.shieldRing?.destroy();
     this.archerOutline?.destroy();
+    this.championRing?.destroy();
 
     const s = this.sprite;
     if (this.sheetKey && s.scene.anims.exists(animKey(this.sheetKey, "death"))) {

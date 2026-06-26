@@ -35,8 +35,8 @@ export interface SheetDef {
   anims: Partial<Record<AnimName, AnimDef>>;
 }
 
-// Demo-Charakter sofort aktiv (zeigt Animationen, bis du eigene Sheets lieferst).
-export const USE_DEMO_SPRITES = true;
+// Demo-Charakter nur aktiv, falls für eine Einheit kein echtes Sheet existiert.
+export const USE_DEMO_SPRITES = false;
 
 // ---------------------------------------------------------------------------
 //  DEINE Sheets:  spriteKey -> SheetDef
@@ -45,20 +45,130 @@ export const USE_DEMO_SPRITES = true;
 //                       orc_king,  orc_l1,  orc_l2,  orc_l3
 //  (Bogenschützen nutzen denselben Key wie Vasallen der Stufe 1.)
 // ---------------------------------------------------------------------------
+//  Generiert von  tools/build-lpc-sprites.cjs  aus den LPC-Layern
+//  (CC-BY-SA 3.0 / GPL 3.0 / OGA-BY 3.0 – siehe CREDITS-LPC.md).
+//  Einheit blickt zur Kamera (Down-Reihe). l1 = Bogenschütze (Shoot-Attacke).
 export const REAL_SHEETS: Record<string, SheetDef> = {
-  // Beispiel – einkommentieren und an dein Sheet anpassen:
-  //
-  // human_king: {
-  //   path: "sprites/anim/human_king.png",
-  //   frameWidth: 64,
-  //   frameHeight: 64,
-  //   anims: {
-  //     idle:   { start: 0,  end: 3,  frameRate: 6,  repeat: -1 },
-  //     walk:   { start: 4,  end: 9,  frameRate: 10, repeat: -1 },
-  //     attack: { start: 10, end: 13, frameRate: 14, repeat: 0 },
-  //     death:  { start: 14, end: 17, frameRate: 10, repeat: 0 },
-  //   },
-  // },
+  human_king: {
+    path: "sprites/anim/human_king.png",
+    frameWidth: 64, frameHeight: 64,
+    anims: {
+      idle:   { start: 0, end: 1, frameRate: 3, repeat: -1 },
+      walk:   { start: 2, end: 10, frameRate: 12, repeat: -1 },
+      attack: { start: 11, end: 16, frameRate: 14, repeat: 0 },
+      death:  { start: 17, end: 22, frameRate: 9, repeat: 0 },
+    },
+  },
+  human_l1: {
+    path: "sprites/anim/human_l1.png",
+    frameWidth: 64, frameHeight: 64,
+    anims: {
+      idle:   { start: 0, end: 1, frameRate: 3, repeat: -1 },
+      walk:   { start: 2, end: 10, frameRate: 12, repeat: -1 },
+      attack: { start: 11, end: 23, frameRate: 16, repeat: 0 },
+      death:  { start: 24, end: 29, frameRate: 9, repeat: 0 },
+    },
+  },
+  human_l2: {
+    path: "sprites/anim/human_l2.png",
+    frameWidth: 64, frameHeight: 64,
+    anims: {
+      idle:   { start: 0, end: 1, frameRate: 3, repeat: -1 },
+      walk:   { start: 2, end: 10, frameRate: 12, repeat: -1 },
+      attack: { start: 11, end: 16, frameRate: 14, repeat: 0 },
+      death:  { start: 17, end: 22, frameRate: 9, repeat: 0 },
+    },
+  },
+  human_l3: {
+    path: "sprites/anim/human_l3.png",
+    frameWidth: 64, frameHeight: 64,
+    anims: {
+      idle:   { start: 0, end: 1, frameRate: 3, repeat: -1 },
+      walk:   { start: 2, end: 10, frameRate: 12, repeat: -1 },
+      attack: { start: 11, end: 16, frameRate: 14, repeat: 0 },
+      death:  { start: 17, end: 22, frameRate: 9, repeat: 0 },
+    },
+  },
+  elf_king: {
+    path: "sprites/anim/elf_king.png",
+    frameWidth: 64, frameHeight: 64,
+    anims: {
+      idle:   { start: 0, end: 1, frameRate: 3, repeat: -1 },
+      walk:   { start: 2, end: 10, frameRate: 12, repeat: -1 },
+      attack: { start: 11, end: 16, frameRate: 14, repeat: 0 },
+      death:  { start: 17, end: 22, frameRate: 9, repeat: 0 },
+    },
+  },
+  elf_l1: {
+    path: "sprites/anim/elf_l1.png",
+    frameWidth: 64, frameHeight: 64,
+    anims: {
+      idle:   { start: 0, end: 1, frameRate: 3, repeat: -1 },
+      walk:   { start: 2, end: 10, frameRate: 12, repeat: -1 },
+      attack: { start: 11, end: 23, frameRate: 16, repeat: 0 },
+      death:  { start: 24, end: 29, frameRate: 9, repeat: 0 },
+    },
+  },
+  elf_l2: {
+    path: "sprites/anim/elf_l2.png",
+    frameWidth: 64, frameHeight: 64,
+    anims: {
+      idle:   { start: 0, end: 1, frameRate: 3, repeat: -1 },
+      walk:   { start: 2, end: 10, frameRate: 12, repeat: -1 },
+      attack: { start: 11, end: 16, frameRate: 14, repeat: 0 },
+      death:  { start: 17, end: 22, frameRate: 9, repeat: 0 },
+    },
+  },
+  elf_l3: {
+    path: "sprites/anim/elf_l3.png",
+    frameWidth: 64, frameHeight: 64,
+    anims: {
+      idle:   { start: 0, end: 1, frameRate: 3, repeat: -1 },
+      walk:   { start: 2, end: 10, frameRate: 12, repeat: -1 },
+      attack: { start: 11, end: 16, frameRate: 14, repeat: 0 },
+      death:  { start: 17, end: 22, frameRate: 9, repeat: 0 },
+    },
+  },
+  orc_king: {
+    path: "sprites/anim/orc_king.png",
+    frameWidth: 64, frameHeight: 64,
+    anims: {
+      idle:   { start: 0, end: 1, frameRate: 3, repeat: -1 },
+      walk:   { start: 2, end: 10, frameRate: 12, repeat: -1 },
+      attack: { start: 11, end: 16, frameRate: 14, repeat: 0 },
+      death:  { start: 17, end: 22, frameRate: 9, repeat: 0 },
+    },
+  },
+  orc_l1: {
+    path: "sprites/anim/orc_l1.png",
+    frameWidth: 64, frameHeight: 64,
+    anims: {
+      idle:   { start: 0, end: 1, frameRate: 3, repeat: -1 },
+      walk:   { start: 2, end: 10, frameRate: 12, repeat: -1 },
+      attack: { start: 11, end: 23, frameRate: 16, repeat: 0 },
+      death:  { start: 24, end: 29, frameRate: 9, repeat: 0 },
+    },
+  },
+  orc_l2: {
+    path: "sprites/anim/orc_l2.png",
+    frameWidth: 64, frameHeight: 64,
+    anims: {
+      idle:   { start: 0, end: 1, frameRate: 3, repeat: -1 },
+      walk:   { start: 2, end: 10, frameRate: 12, repeat: -1 },
+      attack: { start: 11, end: 16, frameRate: 14, repeat: 0 },
+      death:  { start: 17, end: 22, frameRate: 9, repeat: 0 },
+    },
+  },
+  orc_l3: {
+    path: "sprites/anim/orc_l3.png",
+    frameWidth: 64, frameHeight: 64,
+    anims: {
+      idle:   { start: 0, end: 1, frameRate: 3, repeat: -1 },
+      walk:   { start: 2, end: 10, frameRate: 12, repeat: -1 },
+      attack: { start: 11, end: 16, frameRate: 14, repeat: 0 },
+      death:  { start: 17, end: 22, frameRate: 9, repeat: 0 },
+    },
+  },
 };
 
 // ---------------------------------------------------------------------------

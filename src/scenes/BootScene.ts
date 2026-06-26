@@ -1,6 +1,6 @@
 import Phaser from "phaser";
-import { FACTIONS } from "../config/gameConfig";
 import { preloadSheets, setupAnimations } from "../systems/animations";
+import { bus } from "../ui/bus";
 
 // Lädt alle Assets (Sprites, Sounds, Menühintergründe) und erzeugt prozedurale
 // Texturen (Gras-Boden, Partikel), damit keine externen URLs nötig sind.
@@ -10,20 +10,14 @@ export class BootScene extends Phaser.Scene {
   }
 
   preload(): void {
-    this.buildLoadingBar();
+    // Ladefortschritt ans DOM-Overlay melden (treibt den Balken im Lade-Screen).
+    this.load.on("progress", (p: number) => bus.emit("loadProgress", p));
+    this.load.once("complete", () => bus.emit("loadProgress", 1));
 
     const A = "assets/";
 
-    // Fraktions-Sprites (Mensch/Elf/Ork je König + 3 Stufen)
-    const factionDirs: Record<string, string> = { human: "Mensch", elf: "Elf", orc: "Orc" };
-    for (const f of FACTIONS) {
-      const dir = `${A}sprites/Units/${factionDirs[f]}/`;
-      this.load.image(`${f}_king`, `${dir}King.png`);
-      // Achtung: Original-Dateinamen haben uneinheitliche Gross/Kleinschreibung
-      this.load.image(`${f}_l1`, `${dir}${f === "human" ? "Level 1" : "level 1"}.png`);
-      this.load.image(`${f}_l2`, `${dir}level 2.png`);
-      this.load.image(`${f}_l3`, `${dir}level 3.png`);
-    }
+    // Fraktions-Einheiten (Mensch/Elf/Ork je König + 3 Stufen) kommen jetzt als
+    // animierte LPC-Sprite-Sheets über preloadSheets() / REAL_SHEETS (s. unten).
 
     // Gebäude
     this.load.image("barn", `${A}sprites/Buildings/Barn.png`);
@@ -40,11 +34,8 @@ export class BootScene extends Phaser.Scene {
     this.load.image("slash", `${A}sprites/ATTACKS/slash.png`);
     this.load.image("forest", `${A}sprites/Trees/angepasst/Forest dark.PNG`);
 
-    // Menü-Hintergründe
-    this.load.image("bg_title", `${A}images/TitleScreen.png`);
-    this.load.image("bg_menu", `${A}images/MainMenu.png`);
-    this.load.image("bg_options", `${A}images/options.png`);
-    this.load.image("bg_selection", `${A}images/selectionmenu.png`);
+    // Menü-Hintergründe werden vom DOM-UI direkt als CSS-Bilder geladen
+    // (siehe src/ui) – Phaser muss sie nicht mehr in den Texturspeicher ziehen.
 
     // Sounds
     this.load.audio("melee_l1", `${A}audiosfx/Attack/Melee/Mellee metalic 1.mp3`);
@@ -67,30 +58,10 @@ export class BootScene extends Phaser.Scene {
     this.makeGrassTexture();
     this.makeDotTexture();
     this.makeVignetteTexture();
+    this.makeGoldSoulTexture();
     setupAnimations(this); // Demo-Charakter erzeugen + Animationen registrieren
-    this.scene.start("Title");
-  }
-
-  private buildLoadingBar(): void {
-    const { width, height } = this.scale;
-    const barW = Math.min(420, width * 0.6);
-    const x = width / 2 - barW / 2;
-    const y = height / 2;
-    const box = this.add.graphics();
-    const bar = this.add.graphics();
-    const label = this.add
-      .text(width / 2, y - 30, "Horde.IO wird geladen …", { fontFamily: "Cinzel, serif", fontSize: "22px", color: "#ffffff" })
-      .setOrigin(0.5);
-
-    box.fillStyle(0x000000, 0.6).fillRect(x - 4, y - 4, barW + 8, 28);
-    this.load.on("progress", (p: number) => {
-      bar.clear().fillStyle(0xc9a227, 1).fillRect(x, y, barW * p, 20);
-    });
-    this.load.once("complete", () => {
-      bar.destroy();
-      box.destroy();
-      label.destroy();
-    });
+    // Assets + Animationen fertig -> das DOM-UI zeigt jetzt den Titelbildschirm.
+    bus.emit("bootReady", undefined);
   }
 
   // Prozedurale, kachelbare Gras-Textur (ersetzt die externe opengameart-URL des Originals).
@@ -108,6 +79,25 @@ export class BootScene extends Phaser.Scene {
       const y = (Math.random() * size) | 0;
       ctx.fillRect(x, y, 2, 2);
     }
+    tex.refresh();
+  }
+
+  // Gold-Orb (legendäre Seele): leuchtender Goldverlauf mit hellem Kern.
+  // Prozedural erzeugt, da es dafür (anders als grün/blau/lila) kein PNG-Asset gibt.
+  private makeGoldSoulTexture(): void {
+    const S = 48;
+    const tex = this.textures.createCanvas("soul_gold", S, S);
+    if (!tex) return;
+    const ctx = tex.getContext();
+    const g = ctx.createRadialGradient(S / 2, S / 2, 1, S / 2, S / 2, S / 2);
+    g.addColorStop(0, "#fff7cc");
+    g.addColorStop(0.35, "#ffd700");
+    g.addColorStop(0.72, "#e6a400");
+    g.addColorStop(1, "rgba(230,164,0,0)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(S / 2, S / 2, S / 2, 0, Math.PI * 2);
+    ctx.fill();
     tex.refresh();
   }
 

@@ -15,5 +15,10 @@ export default defineConfig({
   build: {
     target: "es2020",
     outDir: "dist",
+    // Gebündelte Assets nach dist/static statt dist/assets ausgeben. Sonst kollidiert
+    // das Emit-Verzeichnis mit der aus public/ kopierten "assets"-Quelle (Windows: die
+    // public/assets-Junction degeneriert beim Checkout zu einer Datei -> mkdir EEXIST).
+    // Betrifft nur Bundler-Emit; die /assets/...-Public-Pfade bleiben unberührt.
+    assetsDir: "static",
   },
 });

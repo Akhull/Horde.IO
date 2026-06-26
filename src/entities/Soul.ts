@@ -3,13 +3,15 @@ import { Entity } from "./Entity";
 import { DEPTH } from "../config/gameConfig";
 import type { SoulType } from "../types";
 
-// Sammelbare Seele: grün = neuer Vasall, blau = Level-up auf 2, lila = Level-up auf 3.
+// Sammelbarer Orb: grün = neuer Vasall, blau = Level-up auf 2, lila = Level-up auf 3,
+// gold = legendär (König beschwört einen Champion). Gold ist optisch größer (Rarität).
 export class Soul extends Entity {
   soulType: SoulType;
   private sprite: Phaser.GameObjects.Image;
 
   constructor(scene: Phaser.Scene, x: number, y: number, soulType: SoulType) {
-    super(x, y, 20, 20);
+    const size = soulType === "gold" ? 30 : 20;
+    super(x, y, size, size);
     this.soulType = soulType;
     this.sprite = scene.add
       .image(this.centerX, this.centerY, `soul_${soulType}`)
