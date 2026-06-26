@@ -1,4 +1,4 @@
-import type { Faction } from "../types";
+import type { Faction, SoulType } from "../types";
 
 // ===========================================================================
 //  Sprite- & Animationssystem – Konfiguration
@@ -194,4 +194,14 @@ export const FACTION_TINT: Record<Faction, number> = {
   human: 0xf0dcb0,
   elf: 0x9fe0a0,
   orc: 0xe09878,
+};
+
+// Orb-Einfärbung (Tint) pro Seelen-Rarität. Eine einzige WEISSE Orb-Textur
+// (BootScene "orb") wird zur Laufzeit per setTint in diese Farben getönt –
+// kein eigenes PNG pro Farbe nötig. Neue Rarität = eine Zeile (+ SoulType-Typ).
+export const ORB_TINT: Record<SoulType, number> = {
+  green: 0x4ade80, // Vasall (häufig)
+  blue: 0x3b82f6, // Level-up auf 2
+  purple: 0xa855f7, // Level-up auf 3
+  gold: 0xffd700, // legendär (Champion)
 };

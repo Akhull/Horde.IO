@@ -1,0 +1,444 @@
+{
+  "note": "Auto-generiert von tools/build-asset-catalog.mjs – nicht von Hand editieren.",
+  "webBase": "assets/kenney",
+  "totals": {
+    "packCount": 13,
+    "imageCount": 3762,
+    "frameCount": 873
+  },
+  "packs": [
+    {
+      "name": "emotes-pack",
+      "imageCount": 513,
+      "frameCount": 480,
+      "categories": {
+        "PNG/Pixel/Style 1": 30,
+        "PNG/Pixel/Style 2": 30,
+        "PNG/Pixel/Style 3": 30,
+        "PNG/Pixel/Style 4": 30,
+        "PNG/Pixel/Style 5": 30,
+        "PNG/Pixel/Style 6": 30,
+        "PNG/Pixel/Style 7": 30,
+        "PNG/Pixel/Style 8": 30,
+        "PNG/Vector/Style 1": 30,
+        "PNG/Vector/Style 2": 30,
+        "PNG/Vector/Style 3": 30,
+        "PNG/Vector/Style 4": 30,
+        "PNG/Vector/Style 5": 30,
+        "PNG/Vector/Style 6": 30,
+        "PNG/Vector/Style 7": 30,
+        "PNG/Vector/Style 8": 30,
+        ".": 1,
+        "Spritesheets": 16,
+        "Tilesheets": 16
+      },
+      "atlases": [
+        {
+          "file": "assets/kenney/emotes-pack/Spritesheets/pixel_style1.xml",
+          "frameCount": 30
+        },
+        {
+          "file": "assets/kenney/emotes-pack/Spritesheets/pixel_style2.xml",
+          "frameCount": 30
+        },
+        {
+          "file": "assets/kenney/emotes-pack/Spritesheets/pixel_style3.xml",
+          "frameCount": 30
+        },
+        {
+          "file": "assets/kenney/emotes-pack/Spritesheets/pixel_style4.xml",
+          "frameCount": 30
+        },
+        {
+          "file": "assets/kenney/emotes-pack/Spritesheets/pixel_style5.xml",
+          "frameCount": 30
+        },
+        {
+          "file": "assets/kenney/emotes-pack/Spritesheets/pixel_style6.xml",
+          "frameCount": 30
+        },
+        {
+          "file": "assets/kenney/emotes-pack/Spritesheets/pixel_style7.xml",
+          "frameCount": 30
+        },
+        {
+          "file": "assets/kenney/emotes-pack/Spritesheets/pixel_style8.xml",
+          "frameCount": 30
+        },
+        {
+          "file": "assets/kenney/emotes-pack/Spritesheets/vector_style1.xml",
+          "frameCount": 30
+        },
+        {
+          "file": "assets/kenney/emotes-pack/Spritesheets/vector_style2.xml",
+          "frameCount": 30
+        },
+        {
+          "file": "assets/kenney/emotes-pack/Spritesheets/vector_style3.xml",
+          "frameCount": 30
+        },
+        {
+          "file": "assets/kenney/emotes-pack/Spritesheets/vector_style4.xml",
+          "frameCount": 30
+        },
+        {
+          "file": "assets/kenney/emotes-pack/Spritesheets/vector_style5.xml",
+          "frameCount": 30
+        },
+        {
+          "file": "assets/kenney/emotes-pack/Spritesheets/vector_style6.xml",
+          "frameCount": 30
+        },
+        {
+          "file": "assets/kenney/emotes-pack/Spritesheets/vector_style7.xml",
+          "frameCount": 30
+        },
+        {
+          "file": "assets/kenney/emotes-pack/Spritesheets/vector_style8.xml",
+          "frameCount": 30
+        }
+      ],
+      "license": "assets/kenney/emotes-pack/License.txt",
+      "tintBases": []
+    },
+    {
+      "name": "medieval-rts",
+      "imageCount": 259,
+      "frameCount": 252,
+      "categories": {
+        "PNG/Default size/Environment": 21,
+        "PNG/Default size/Structure": 23,
+        "PNG/Default size/Tile": 58,
+        "PNG/Default size/Unit": 24,
+        "PNG/Retina/Environment": 21,
+        "PNG/Retina/Structure": 23,
+        "PNG/Retina/Tile": 58,
+        "PNG/Retina/Unit": 24,
+        ".": 3,
+        "Spritesheet": 2,
+        "Tilesheet": 2
+      },
+      "atlases": [
+        {
+          "file": "assets/kenney/medieval-rts/Spritesheet/medievalRTS_spritesheet.xml",
+          "frameCount": 126
+        },
+        {
+          "file": "assets/kenney/medieval-rts/Spritesheet/medievalRTS_spritesheet@2.xml",
+          "frameCount": 126
+        }
+      ],
+      "license": "assets/kenney/medieval-rts/License.txt",
+      "tintBases": []
+    },
+    {
+      "name": "minimap-pack",
+      "imageCount": 164,
+      "frameCount": 0,
+      "categories": {
+        ".": 2,
+        "Tilemap/Style A": 2,
+        "Tilemap/Style B": 2,
+        "Tilemap/Style C": 2,
+        "Tilemap/Style D": 2,
+        "Tilemap/Style E": 2,
+        "Tilemap/Style F": 2,
+        "Tiles/Style A": 25,
+        "Tiles/Style B": 25,
+        "Tiles/Style C": 25,
+        "Tiles/Style D": 25,
+        "Tiles/Style E": 25,
+        "Tiles/Style F": 25
+      },
+      "atlases": [],
+      "license": "assets/kenney/minimap-pack/License.txt",
+      "tintBases": []
+    },
+    {
+      "name": "particle-pack",
+      "imageCount": 193,
+      "frameCount": 0,
+      "categories": {
+        "PNG (Black background)": 80,
+        "PNG (Black background)/Rotated": 16,
+        "PNG (Transparent)": 80,
+        "PNG (Transparent)/Rotated": 16,
+        ".": 1
+      },
+      "atlases": [],
+      "license": "assets/kenney/particle-pack/License.txt",
+      "tintBases": [
+        "assets/kenney/particle-pack/PNG (Black background)/circle_01.png",
+        "assets/kenney/particle-pack/PNG (Black background)/circle_02.png",
+        "assets/kenney/particle-pack/PNG (Black background)/circle_03.png",
+        "assets/kenney/particle-pack/PNG (Black background)/circle_04.png",
+        "assets/kenney/particle-pack/PNG (Black background)/circle_05.png",
+        "assets/kenney/particle-pack/PNG (Black background)/flare_01.png",
+        "assets/kenney/particle-pack/PNG (Black background)/light_01.png",
+        "assets/kenney/particle-pack/PNG (Black background)/light_02.png",
+        "assets/kenney/particle-pack/PNG (Black background)/light_03.png",
+        "assets/kenney/particle-pack/PNG (Black background)/magic_01.png",
+        "assets/kenney/particle-pack/PNG (Black background)/magic_02.png",
+        "assets/kenney/particle-pack/PNG (Black background)/magic_03.png",
+        "assets/kenney/particle-pack/PNG (Black background)/magic_04.png",
+        "assets/kenney/particle-pack/PNG (Black background)/magic_05.png",
+        "assets/kenney/particle-pack/PNG (Black background)/muzzle_01.png",
+        "assets/kenney/particle-pack/PNG (Black background)/muzzle_02.png",
+        "assets/kenney/particle-pack/PNG (Black background)/muzzle_03.png",
+        "assets/kenney/particle-pack/PNG (Black background)/muzzle_04.png",
+        "assets/kenney/particle-pack/PNG (Black background)/muzzle_05.png",
+        "assets/kenney/particle-pack/PNG (Black background)/Rotated/muzzle_01_rotated.png",
+        "assets/kenney/particle-pack/PNG (Black background)/Rotated/muzzle_02_rotated.png",
+        "assets/kenney/particle-pack/PNG (Black background)/Rotated/muzzle_03_rotated.png",
+        "assets/kenney/particle-pack/PNG (Black background)/Rotated/muzzle_04_rotated.png",
+        "assets/kenney/particle-pack/PNG (Black background)/Rotated/muzzle_05_rotated.png",
+        "assets/kenney/particle-pack/PNG (Black background)/Rotated/spark_05_rotated.png",
+        "assets/kenney/particle-pack/PNG (Black background)/Rotated/spark_06_rotated.png",
+        "assets/kenney/particle-pack/PNG (Black background)/spark_01.png",
+        "assets/kenney/particle-pack/PNG (Black background)/spark_02.png",
+        "assets/kenney/particle-pack/PNG (Black background)/spark_03.png",
+        "assets/kenney/particle-pack/PNG (Black background)/spark_04.png",
+        "assets/kenney/particle-pack/PNG (Black background)/spark_05.png",
+        "assets/kenney/particle-pack/PNG (Black background)/spark_06.png",
+        "assets/kenney/particle-pack/PNG (Black background)/spark_07.png",
+        "assets/kenney/particle-pack/PNG (Black background)/star_01.png",
+        "assets/kenney/particle-pack/PNG (Black background)/star_02.png",
+        "assets/kenney/particle-pack/PNG (Black background)/star_03.png",
+        "assets/kenney/particle-pack/PNG (Black background)/star_04.png",
+        "assets/kenney/particle-pack/PNG (Black background)/star_05.png",
+        "assets/kenney/particle-pack/PNG (Black background)/star_06.png",
+        "assets/kenney/particle-pack/PNG (Black background)/star_07.png",
+        "assets/kenney/particle-pack/PNG (Black background)/star_08.png",
+        "assets/kenney/particle-pack/PNG (Black background)/star_09.png",
+        "assets/kenney/particle-pack/PNG (Black background)/window_01.png",
+        "assets/kenney/particle-pack/PNG (Black background)/window_02.png",
+        "assets/kenney/particle-pack/PNG (Black background)/window_03.png",
+        "assets/kenney/particle-pack/PNG (Black background)/window_04.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/circle_01.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/circle_02.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/circle_03.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/circle_04.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/circle_05.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/flare_01.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/light_01.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/light_02.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/light_03.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/magic_01.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/magic_02.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/magic_03.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/magic_04.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/magic_05.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/muzzle_01.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/muzzle_02.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/muzzle_03.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/muzzle_04.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/muzzle_05.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/Rotated/muzzle_01_rotated.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/Rotated/muzzle_02_rotated.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/Rotated/muzzle_03_rotated.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/Rotated/muzzle_04_rotated.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/Rotated/muzzle_05_rotated.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/Rotated/spark_05_rotated.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/Rotated/spark_06_rotated.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/spark_01.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/spark_02.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/spark_03.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/spark_04.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/spark_05.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/spark_06.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/spark_07.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/star_01.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/star_02.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/star_03.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/star_04.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/star_05.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/star_06.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/star_07.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/star_08.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/star_09.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/window_01.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/window_02.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/window_03.png",
+        "assets/kenney/particle-pack/PNG (Transparent)/window_04.png"
+      ]
+    },
+    {
+      "name": "roguelike-characters",
+      "imageCount": 4,
+      "frameCount": 0,
+      "categories": {
+        ".": 2,
+        "Spritesheet": 2
+      },
+      "atlases": [],
+      "license": "assets/kenney/roguelike-characters/License.txt",
+      "tintBases": []
+    },
+    {
+      "name": "roguelike-rpg-pack",
+      "imageCount": 5,
+      "frameCount": 0,
+      "categories": {
+        ".": 3,
+        "Spritesheet": 2
+      },
+      "atlases": [],
+      "license": "assets/kenney/roguelike-rpg-pack/License.txt",
+      "tintBases": []
+    },
+    {
+      "name": "tiny-battle",
+      "imageCount": 202,
+      "frameCount": 0,
+      "categories": {
+        ".": 2,
+        "Tilemap": 2,
+        "Tiles": 198
+      },
+      "atlases": [],
+      "license": "assets/kenney/tiny-battle/License.txt",
+      "tintBases": []
+    },
+    {
+      "name": "tiny-dungeon",
+      "imageCount": 136,
+      "frameCount": 0,
+      "categories": {
+        ".": 2,
+        "Tilemap": 2,
+        "Tiles": 132
+      },
+      "atlases": [],
+      "license": "assets/kenney/tiny-dungeon/License.txt",
+      "tintBases": []
+    },
+    {
+      "name": "tiny-town",
+      "imageCount": 136,
+      "frameCount": 0,
+      "categories": {
+        ".": 2,
+        "Tilemap": 2,
+        "Tiles": 132
+      },
+      "atlases": [],
+      "license": "assets/kenney/tiny-town/License.txt",
+      "tintBases": []
+    },
+    {
+      "name": "top-down-shooter",
+      "imageCount": 587,
+      "frameCount": 54,
+      "categories": {
+        "PNG/Hitman 1": 6,
+        "PNG/Man Blue": 6,
+        "PNG/Man Brown": 6,
+        "PNG/Man Old": 6,
+        "PNG/Robot 1": 6,
+        "PNG/Soldier 1": 6,
+        "PNG/Survivor 1": 6,
+        "PNG/Tiles": 524,
+        "PNG": 3,
+        "PNG/Woman Green": 6,
+        "PNG/Zombie 1": 6,
+        ".": 2,
+        "Spritesheet": 2,
+        "Tilesheet": 2
+      },
+      "atlases": [
+        {
+          "file": "assets/kenney/top-down-shooter/Spritesheet/spritesheet_characters.xml",
+          "frameCount": 54
+        }
+      ],
+      "license": "assets/kenney/top-down-shooter/License.txt",
+      "tintBases": []
+    },
+    {
+      "name": "tower-defense-top-down",
+      "imageCount": 603,
+      "frameCount": 0,
+      "categories": {
+        "PNG/Default size": 299,
+        "PNG/Retina": 299,
+        ".": 3,
+        "Tilesheet": 2
+      },
+      "atlases": [],
+      "license": "assets/kenney/tower-defense-top-down/License.txt",
+      "tintBases": []
+    },
+    {
+      "name": "ui-pack",
+      "imageCount": 870,
+      "frameCount": 0,
+      "categories": {
+        "PNG/Blue/Default": 82,
+        "PNG/Blue/Double": 82,
+        "PNG/Extra/Default": 24,
+        "PNG/Extra/Double": 24,
+        "PNG/Green/Default": 82,
+        "PNG/Green/Double": 82,
+        "PNG/Grey/Default": 82,
+        "PNG/Grey/Double": 82,
+        "PNG/Red/Default": 82,
+        "PNG/Red/Double": 82,
+        "PNG/Yellow/Default": 82,
+        "PNG/Yellow/Double": 82,
+        ".": 2
+      },
+      "atlases": [],
+      "license": "assets/kenney/ui-pack/License.txt",
+      "tintBases": [
+        "assets/kenney/ui-pack/PNG/Blue/Default/star_outline_depth.png",
+        "assets/kenney/ui-pack/PNG/Blue/Default/star_outline.png",
+        "assets/kenney/ui-pack/PNG/Blue/Default/star.png",
+        "assets/kenney/ui-pack/PNG/Blue/Double/star_outline_depth.png",
+        "assets/kenney/ui-pack/PNG/Blue/Double/star_outline.png",
+        "assets/kenney/ui-pack/PNG/Blue/Double/star.png",
+        "assets/kenney/ui-pack/PNG/Green/Default/star_outline_depth.png",
+        "assets/kenney/ui-pack/PNG/Green/Default/star_outline.png",
+        "assets/kenney/ui-pack/PNG/Green/Default/star.png",
+        "assets/kenney/ui-pack/PNG/Green/Double/star_outline_depth.png",
+        "assets/kenney/ui-pack/PNG/Green/Double/star_outline.png",
+        "assets/kenney/ui-pack/PNG/Green/Double/star.png",
+        "assets/kenney/ui-pack/PNG/Grey/Default/star_outline_depth.png",
+        "assets/kenney/ui-pack/PNG/Grey/Default/star_outline.png",
+        "assets/kenney/ui-pack/PNG/Grey/Default/star.png",
+        "assets/kenney/ui-pack/PNG/Grey/Double/star_outline_depth.png",
+        "assets/kenney/ui-pack/PNG/Grey/Double/star_outline.png",
+        "assets/kenney/ui-pack/PNG/Grey/Double/star.png",
+        "assets/kenney/ui-pack/PNG/Red/Default/star_outline_depth.png",
+        "assets/kenney/ui-pack/PNG/Red/Default/star_outline.png",
+        "assets/kenney/ui-pack/PNG/Red/Default/star.png",
+        "assets/kenney/ui-pack/PNG/Red/Double/star_outline_depth.png",
+        "assets/kenney/ui-pack/PNG/Red/Double/star_outline.png",
+        "assets/kenney/ui-pack/PNG/Red/Double/star.png",
+        "assets/kenney/ui-pack/PNG/Yellow/Default/star_outline_depth.png",
+        "assets/kenney/ui-pack/PNG/Yellow/Default/star_outline.png",
+        "assets/kenney/ui-pack/PNG/Yellow/Default/star.png",
+        "assets/kenney/ui-pack/PNG/Yellow/Double/star_outline_depth.png",
+        "assets/kenney/ui-pack/PNG/Yellow/Double/star_outline.png",
+        "assets/kenney/ui-pack/PNG/Yellow/Double/star.png"
+      ]
+    },
+    {
+      "name": "ui-pack-rpg-expansion",
+      "imageCount": 90,
+      "frameCount": 87,
+      "categories": {
+        "PNG": 87,
+        ".": 2,
+        "Spritesheet": 1
+      },
+      "atlases": [
+        {
+          "file": "assets/kenney/ui-pack-rpg-expansion/Spritesheet/uipack_rpg_sheet.xml",
+          "frameCount": 87
+        }
+      ],
+      "license": "assets/kenney/ui-pack-rpg-expansion/license.txt",
+      "tintBases": []
+    }
+  ]
+}

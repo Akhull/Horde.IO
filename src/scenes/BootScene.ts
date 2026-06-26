@@ -24,10 +24,9 @@ export class BootScene extends Phaser.Scene {
     this.load.image("house", `${A}sprites/Buildings/House.png`);
     this.load.image("tower", `${A}sprites/Buildings/Tower.png`);
 
-    // Seelen (Collectables)
-    this.load.image("soul_green", `${A}sprites/Collectables/Green.png`);
-    this.load.image("soul_blue", `${A}sprites/Collectables/Blue.png`);
-    this.load.image("soul_purple", `${A}sprites/Collectables/Purple.png`);
+    // Seelen/Orbs: eine einzige weiße Orb-Textur ("orb"), die pro Rarität via
+    // setTint(ORB_TINT[...]) eingefärbt wird – wird in create() prozedural erzeugt
+    // (s. makeOrbTexture). Keine farbspezifischen PNGs mehr nötig.
 
     // Angriffe / Deko
     this.load.image("arrow", `${A}sprites/ATTACKS/Arrow.png`);
@@ -58,7 +57,7 @@ export class BootScene extends Phaser.Scene {
     this.makeGrassTexture();
     this.makeDotTexture();
     this.makeVignetteTexture();
-    this.makeGoldSoulTexture();
+    this.makeOrbTexture();
     setupAnimations(this); // Demo-Charakter erzeugen + Animationen registrieren
     // Assets + Animationen fertig -> das DOM-UI zeigt jetzt den Titelbildschirm.
     bus.emit("bootReady", undefined);
@@ -82,18 +81,19 @@ export class BootScene extends Phaser.Scene {
     tex.refresh();
   }
 
-  // Gold-Orb (legendäre Seele): leuchtender Goldverlauf mit hellem Kern.
-  // Prozedural erzeugt, da es dafür (anders als grün/blau/lila) kein PNG-Asset gibt.
-  private makeGoldSoulTexture(): void {
+  // Eine einzige WEISSE Orb-Textur (heller Kern -> weicher Glührand -> transparent).
+  // Pro Seele wird sie über setTint(ORB_TINT[type]) eingefärbt – ein Asset, beliebig
+  // viele Raritätsfarben. Reines Weiss, damit der Tint-Multiply jede Farbe sauber zeigt.
+  private makeOrbTexture(): void {
     const S = 48;
-    const tex = this.textures.createCanvas("soul_gold", S, S);
+    const tex = this.textures.createCanvas("orb", S, S);
     if (!tex) return;
     const ctx = tex.getContext();
     const g = ctx.createRadialGradient(S / 2, S / 2, 1, S / 2, S / 2, S / 2);
-    g.addColorStop(0, "#fff7cc");
-    g.addColorStop(0.35, "#ffd700");
-    g.addColorStop(0.72, "#e6a400");
-    g.addColorStop(1, "rgba(230,164,0,0)");
+    g.addColorStop(0, "#ffffff");
+    g.addColorStop(0.45, "#ffffff");
+    g.addColorStop(0.78, "rgba(255,255,255,0.55)");
+    g.addColorStop(1, "rgba(255,255,255,0)");
     ctx.fillStyle = g;
     ctx.beginPath();
     ctx.arc(S / 2, S / 2, S / 2, 0, Math.PI * 2);

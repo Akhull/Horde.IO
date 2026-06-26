@@ -1,6 +1,7 @@
 import Phaser from "phaser";
 import { Entity } from "./Entity";
 import { DEPTH } from "../config/gameConfig";
+import { ORB_TINT } from "../config/spriteConfig";
 import type { SoulType } from "../types";
 
 // Sammelbarer Orb: grün = neuer Vasall, blau = Level-up auf 2, lila = Level-up auf 3,
@@ -14,8 +15,9 @@ export class Soul extends Entity {
     super(x, y, size, size);
     this.soulType = soulType;
     this.sprite = scene.add
-      .image(this.centerX, this.centerY, `soul_${soulType}`)
+      .image(this.centerX, this.centerY, "orb")
       .setDisplaySize(this.width, this.height)
+      .setTint(ORB_TINT[soulType])
       .setDepth(DEPTH.soul);
     // Sanftes Pulsieren als visueller Reiz
     scene.tweens.add({
