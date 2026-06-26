@@ -10,7 +10,7 @@ import { Soul } from "../entities/Soul";
 import { Obstacle } from "../entities/Obstacle";
 import { Forest } from "../entities/Forest";
 import { PowerUp } from "../entities/PowerUp";
-import { Projectile, type ProjectileTarget } from "../entities/Projectile";
+import { Projectile, type ProjectileTarget, type ProjectileAttacker } from "../entities/Projectile";
 import { SpatialGrid } from "../systems/SpatialGrid";
 import { SafeZone } from "../systems/SafeZone";
 import { SoundManager } from "../systems/SoundManager";
@@ -259,8 +259,8 @@ export class GameScene extends Phaser.Scene {
     bus.emit("kingKilled", { faction, kingsLeft });
   }
 
-  spawnProjectile(x: number, y: number, target: ProjectileTarget, damage: number, team: number): void {
-    this.projectiles.push(new Projectile(this, x, y, target, damage, team));
+  spawnProjectile(x: number, y: number, target: ProjectileTarget, damage: number, team: number, attacker?: ProjectileAttacker): void {
+    this.projectiles.push(new Projectile(this, x, y, target, damage, team, attacker));
   }
 
   spawnSlash(x: number, y: number, rotation: number, unitWidth: number): void {

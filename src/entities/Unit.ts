@@ -328,11 +328,19 @@ export class Unit extends Entity {
 
   // Heilt den Angreifer um lifestealFactor des ausgeteilten Schadens, geklemmt auf
   // das fraktions-skalierte maxHp (kein Überheilen). No-Op, wenn kein Lifesteal aktiv
-  // ist oder die Einheit bereits tot/vollgeheilt ist. Wird im Moment des AUSTEILENS
-  // gerufen (Nahkampf-executeAttack + Pfeil-Abschuss in updateArcher).
+  // ist oder die Einheit bereits tot/vollgeheilt ist. Wird im Moment des bestätigten
+  // AUSTEILENS gerufen (Nahkampf-Haupttreffer + Berserker-Splash + Pfeil-Einschlag).
   private applyLifestealHeal(dealtDmg: number): void {
     if (this.lifestealTimer <= 0 || this.hp <= 0 || dealtDmg <= 0) return;
     this.hp = Math.min(this.maxHp, this.hp + dealtDmg * this.lifestealFactor);
+  }
+
+  // Öffentlicher Lifesteal-Einlass für den Pfeil: der Projektil ruft dies erst beim
+  // bestätigten Einschlag auf ein lebendes Ziel, NICHT schon beim Abschuss. So heilt
+  // der Schütze nur für tatsächlich gelandeten Schaden (kein Heilen auf verfehlte
+  // Pfeile, wenn das Ziel vorher stirbt oder ausweicht) – analog zum Nahkampf.
+  creditLifestealOnHit(dealtDmg: number): void {
+    this.applyLifestealHeal(dealtDmg);
   }
 
   // Eingehender-Schaden-Faktor durch die Rüstung (1 = kein Schutz, < 1 = Reduktion).
@@ -513,6 +521,9 @@ export class Unit extends Entity {
       const dy = e.centerY - this.centerY;
       if (dx * dx + dy * dy > rSq) continue;
       e.takeDamage(splash, this.centerX, this.centerY, scene);
+      // Lifesteal greift symmetrisch zum Haupttreffer: der Berserker teilt hier echten
+      // Splash-Schaden an ein lebendes Ziel aus, also heilt er sich auch pro Splash-Treffer.
+      this.applyLifestealHeal(splash);
       // Zusätzlicher Wucht-Impuls (Könige werden schwerer gestoßen -> Faktor).
       const d = Math.hypot(dx, dy) || 1;
       const kb = (cfg.aoeKnockback ?? 0) * (e.unitType === "king" ? FEEDBACK.kingKnockbackFactor : 1);
@@ -680,11 +691,10 @@ export class Unit extends Entity {
         const baseDmg = this.unitType === "champion" ? LEGENDARY[this.faction].rangedDamage ?? UNIT_STATS.archer.damage : UNIT_STATS.archer.damage;
         // Schadens-Boost wirkt auch auf Pfeilschaden (OBEN AUF den Fraktions-Modifikator).
         const arrowDmg = this.scaledDamage(baseDmg * this.factionDamageMod * this.damageBoostMult, scene);
-        scene.spawnProjectile(this.centerX, this.centerY, target, arrowDmg, this.team);
-        // Lifesteal: der Schütze heilt sich um einen Anteil des ausgeteilten Pfeilschadens.
-        // Der Pfeil trägt seinen Schaden ohne Abfall bis zum Einschlag, der Abschuss ist
-        // also der äquivalente Moment des Austeilens (geklemmt auf maxHp in applyLifestealHeal).
-        this.applyLifestealHeal(arrowDmg);
+        // Lifesteal wird NICHT hier beim Abschuss gutgeschrieben, sondern erst beim
+        // bestätigten Einschlag (Projectile -> creditLifestealOnHit). Sonst würde der
+        // Schütze auch für Pfeile heilen, die ihr Ziel nie treffen (Ziel stirbt/weicht aus).
+        scene.spawnProjectile(this.centerX, this.centerY, target, arrowDmg, this.team, this);
         scene.audio.playSpatial("arrow_shot", this.x, this.y, 1.0);
         scene.notifyCombatEvent();
         this.lastAttackTimer = 0;

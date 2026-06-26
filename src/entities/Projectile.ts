@@ -16,11 +16,18 @@ export interface ProjectileTarget {
   takeDamage?(amount: number, srcX: number, srcY: number, scene: GameScene): void;
 }
 
+// Optionaler Abschütze, dem beim bestätigten Einschlag Lifesteal gutgeschrieben wird.
+// Schmale Schnittstelle statt Unit-Import, um die Zirkular-Abhängigkeit zu vermeiden.
+export interface ProjectileAttacker {
+  creditLifestealOnHit(dealtDmg: number): void;
+}
+
 // Ballistischer Pfeil mit Flughöhe (z), Schwerkraft und Einschlag.
 // Faithful-Port von public/js/entities/Projectile.js.
 export class Projectile extends Entity {
   private target: ProjectileTarget;
   private damage: number;
+  private attacker?: ProjectileAttacker;
   team: number;
   expired = false;
 
@@ -34,10 +41,11 @@ export class Projectile extends Entity {
 
   private sprite: Phaser.GameObjects.Image;
 
-  constructor(scene: Phaser.Scene, x: number, y: number, target: ProjectileTarget, damage: number, team: number) {
+  constructor(scene: Phaser.Scene, x: number, y: number, target: ProjectileTarget, damage: number, team: number, attacker?: ProjectileAttacker) {
     super(x, y, 35, 7);
     this.target = target;
     this.damage = damage;
+    this.attacker = attacker;
     this.team = team;
 
     const originX = x + this.width / 2;
@@ -90,6 +98,9 @@ export class Projectile extends Entity {
         if (!this.target.dead) {
           if (this.target.takeDamage) this.target.takeDamage(this.damage, projCenterX, projCenterY, scene);
           else this.target.hp -= this.damage;
+          // Lifesteal erst beim bestätigten Treffer auf ein lebendes Ziel gutschreiben
+          // (kein Heilen auf verfehlte Pfeile) – symmetrisch zum Nahkampf-Haupttreffer.
+          this.attacker?.creditLifestealOnHit(this.damage);
         }
         this.expired = true;
         if (!this.impactSpawned) {
