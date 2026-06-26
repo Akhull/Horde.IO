@@ -232,6 +232,12 @@ M7  Steam-Release-Vorbereitung
 
 ## 9. Fortschritts-Log (mp/main, neueste zuerst)
 
+- **2026-06-27 — Iso-Spike v4 ✅ (Detail + Relief).** Fragment-Shader macht das Terrain plastisch
+  statt verwaschen: **Hillshading** (Normalen aus der Heightmap → Licht/Schatten an Hängen, Berge
+  + Spitzen klar lesbar), prozedurales **Detail-Grain** (Oberflächentextur), **animiertes Wasser**
+  (Schimmer/Funkeln, Tiefen-Gradient). **Flüsse** graben jetzt monoton bergab bis Meer/Kartenrand
+  (keine Pfützen-Sackgassen). **Zoom-zum-Cursor** (statt zum oberen Rand). ~120 FPS. *Nächster
+  Polish-Level: echte gekachelte Biome-Texturen (Gras/Fels/Sand) statt Grain.*
 - **2026-06-26 — Iso-Spike v3 ✅ (nahtloses Terrain + Engpässe).** Gelände ist jetzt EIN
   **Gouraud-Mesh** (PixiJS-v8 `Mesh`/`Geometry`/`GlProgram`, `aColor`-Vertexfarbe im Shader
   interpoliert) — Höhe pro Eckpunkt → geneigte Hänge statt flacher Kacheln, **keine sichtbaren
