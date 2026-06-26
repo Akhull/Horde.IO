@@ -61,9 +61,16 @@ export const UNIT_STATS = {
 // zur +50% Offensive des Damage-Boosts. Stapelt multiplikativ mit dem Schild
 // (Schild halbiert NUR Zonenschaden): am Zonenrand 0.5 × 0.6 = 0.3 (kein Doppel-
 // Abzug desselben Effekts, sondern zwei bewusst kombinierbare Schutzschichten).
+// lifestealFactor ist OFFENSIVE SUSTAIN (gleiche 6-s-Dauer): der Angreifer heilt
+// sich um diesen Anteil des AUSGETEILTEN Schadens (Nahkampf + Pfeil), geklemmt auf
+// sein fraktions-skaliertes maxHp (kein Überheilen). 0.35 = bewusst schwächer als
+// die +50% des Damage-Boosts: er belohnt nur aktives Zuschlagen (nutzlos beim
+// Wandern/Fliehen) und kann allein keine Schlacht kippen, hält den König aber im
+// Gewühl länger am Leben – ein drittes, distinktes Offensiv-Profil neben dmg/armor.
 export const POWERUP = {
   damageMultiplier: 1.5, // Nahkampf- UND Pfeilschaden während des Boosts
   armorMultiplier: 0.6, // eingehender Schaden während des Armor-Boosts (−40%)
+  lifestealFactor: 0.35, // geheilter Anteil des ausgeteilten Schadens (Lifesteal)
 } as const;
 
 // Legendäre Spezialeinheiten pro Fraktion (aus Gold-Orbs beschworen).

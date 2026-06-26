@@ -151,6 +151,10 @@ export function handlePowerUps(scene: GameScene): void {
       // Rüstungs-Boost: stahl-blaugrauer Funkenausbruch passend zur Orb-Farbe.
       taker.applyArmorBoost(p.duration);
       scene.spawnVisualEffect(p.centerX, p.centerY, { r: 154, g: 167, b: 180 }, 15, 400, 3, 1.2);
+    } else if (p.effectType === "lifesteal") {
+      // Lifesteal-Boost: blutroter Funkenausbruch passend zur Orb-Farbe.
+      taker.applyLifesteal(p.duration);
+      scene.spawnVisualEffect(p.centerX, p.centerY, { r: 176, g: 0, b: 32 }, 15, 400, 3, 1.2);
     } else {
       taker.applyShieldPowerUp(p.duration);
       scene.spawnVisualEffect(p.centerX, p.centerY, { r: 0, g: 191, b: 255 }, 15, 400, 3, 1.2);

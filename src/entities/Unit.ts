@@ -55,6 +55,12 @@ export class Unit extends Entity {
   // Reduktion) in takeDamage und beim Zonenschaden; Aufsammeln verlängert nur die Dauer.
   armorTimer = 0;
   private armorMult = 1;
+  // Lifesteal-Power-Up (offensive Sustain): gleiche Zeitlogik wie die übrigen Boosts.
+  // Solange lifestealTimer > 0 ist, heilt sich der Träger um lifestealFactor des
+  // AUSGETEILTEN Schadens (Nahkampf + Pfeil); Aufsammeln verlängert nur die Dauer.
+  // 0 als Inaktiv-Wert: tickLifesteal setzt den Faktor beim Ablauf sauber zurück.
+  lifestealTimer = 0;
+  private lifestealFactor = 0;
   dashReadyFlashTimer = 0;
   shieldReadyFlashTimer = 0;
   idleTarget: Vec2 | null = null;
@@ -312,6 +318,23 @@ export class Unit extends Entity {
     this.armorTimer = Math.max(this.armorTimer, duration);
   }
 
+  // Lifesteal-Power-Up aufnehmen (Spieler- ODER KI-König). Idempotent gegen Stacking
+  // wie die übrigen Boosts: der Faktor wird nur beim ersten Aufnehmen gesetzt, weitere
+  // Aufnahmen verlängern nur den Timer. tickLifesteal setzt ihn beim Ablauf auf 0 zurück.
+  applyLifesteal(duration: number): void {
+    if (this.lifestealTimer <= 0) this.lifestealFactor = POWERUP.lifestealFactor;
+    this.lifestealTimer = Math.max(this.lifestealTimer, duration);
+  }
+
+  // Heilt den Angreifer um lifestealFactor des ausgeteilten Schadens, geklemmt auf
+  // das fraktions-skalierte maxHp (kein Überheilen). No-Op, wenn kein Lifesteal aktiv
+  // ist oder die Einheit bereits tot/vollgeheilt ist. Wird im Moment des AUSTEILENS
+  // gerufen (Nahkampf-executeAttack + Pfeil-Abschuss in updateArcher).
+  private applyLifestealHeal(dealtDmg: number): void {
+    if (this.lifestealTimer <= 0 || this.hp <= 0 || dealtDmg <= 0) return;
+    this.hp = Math.min(this.maxHp, this.hp + dealtDmg * this.lifestealFactor);
+  }
+
   // Eingehender-Schaden-Faktor durch die Rüstung (1 = kein Schutz, < 1 = Reduktion).
   // Öffentlich, damit applySafeZoneDamage den Zonenschaden ebenfalls reduzieren kann –
   // dort multiplikativ mit der Schild-Halbierung kombiniert (zwei Schutzschichten).
@@ -357,6 +380,16 @@ export class Unit extends Entity {
     if (this.armorTimer <= 0) {
       this.armorTimer = 0;
       this.armorMult = 1;
+    }
+  }
+
+  // Zählt den Lifesteal-Boost herunter und setzt den Faktor beim Ablauf auf 0 zurück.
+  private tickLifesteal(deltaTime: number): void {
+    if (this.lifestealTimer <= 0) return;
+    this.lifestealTimer -= deltaTime;
+    if (this.lifestealTimer <= 0) {
+      this.lifestealTimer = 0;
+      this.lifestealFactor = 0;
     }
   }
 
@@ -410,6 +443,9 @@ export class Unit extends Entity {
       if (this.currentTarget && !this.currentTarget.dead) {
         if (this.currentTarget.takeDamage) this.currentTarget.takeDamage(dmg, this.centerX, this.centerY, scene);
         else this.currentTarget.hp -= dmg;
+        // Lifesteal: Angreifer heilt sich um einen Anteil des ausgeteilten Nahkampfschadens
+        // (nur bei einem echten Treffer auf ein lebendes Ziel), geklemmt auf maxHp.
+        this.applyLifestealHeal(dmg);
       }
       // Berserker (Ork-Champion): jeder Nahkampftreffer trifft umstehende Gegner mit (AoE + Knockback).
       if (this.unitType === "champion" && LEGENDARY[this.faction].aoeRange) this.applyBerserkerAoE(dmg, scene);
@@ -643,7 +679,12 @@ export class Unit extends Entity {
         // Erzschütze nutzt seinen eigenen, höheren Pfeilschaden (LEGENDARY-Override).
         const baseDmg = this.unitType === "champion" ? LEGENDARY[this.faction].rangedDamage ?? UNIT_STATS.archer.damage : UNIT_STATS.archer.damage;
         // Schadens-Boost wirkt auch auf Pfeilschaden (OBEN AUF den Fraktions-Modifikator).
-        scene.spawnProjectile(this.centerX, this.centerY, target, this.scaledDamage(baseDmg * this.factionDamageMod * this.damageBoostMult, scene), this.team);
+        const arrowDmg = this.scaledDamage(baseDmg * this.factionDamageMod * this.damageBoostMult, scene);
+        scene.spawnProjectile(this.centerX, this.centerY, target, arrowDmg, this.team);
+        // Lifesteal: der Schütze heilt sich um einen Anteil des ausgeteilten Pfeilschadens.
+        // Der Pfeil trägt seinen Schaden ohne Abfall bis zum Einschlag, der Abschuss ist
+        // also der äquivalente Moment des Austeilens (geklemmt auf maxHp in applyLifestealHeal).
+        this.applyLifestealHeal(arrowDmg);
         scene.audio.playSpatial("arrow_shot", this.x, this.y, 1.0);
         scene.notifyCombatEvent();
         this.lastAttackTimer = 0;
@@ -670,6 +711,7 @@ export class Unit extends Entity {
     this.tickSpeedBoost(deltaTime);
     this.tickDamageBoost(deltaTime);
     this.tickArmorBoost(deltaTime);
+    this.tickLifesteal(deltaTime);
     this.tickShield(deltaTime);
     if (this === scene.playerKing) {
       this.updatePlayerKing(deltaTime, step, scene);

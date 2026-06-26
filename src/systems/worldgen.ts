@@ -87,9 +87,10 @@ export function generatePowerUps(scene: GameScene): void {
   for (let i = 0; i < 25; i++) {
     const x = Math.random() * CONFIG.worldWidth;
     const y = Math.random() * CONFIG.worldHeight;
-    // Vier gleich wahrscheinliche Power-Up-Typen: Tempo, Schild, Schaden, Rüstung.
+    // Fünf gleich wahrscheinliche Power-Up-Typen: Tempo, Schild, Schaden, Rüstung, Lifesteal.
     const r = Math.random();
-    const type: PowerUpType = r < 0.25 ? "speed" : r < 0.5 ? "shield" : r < 0.75 ? "damage" : "armor";
+    const type: PowerUpType =
+      r < 0.2 ? "speed" : r < 0.4 ? "shield" : r < 0.6 ? "damage" : r < 0.8 ? "armor" : "lifesteal";
     scene.powerUps.push(new PowerUp(scene, x, y, type));
   }
 }

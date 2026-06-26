@@ -7,7 +7,7 @@ export type UnitType = "king" | "vassal" | "archer" | "champion";
 export type SoulType = "green" | "blue" | "purple" | "gold";
 export type BuildingType = "barn" | "house" | "tower";
 export type ObstacleType = "forest" | "water";
-export type PowerUpType = "speed" | "shield" | "damage" | "armor";
+export type PowerUpType = "speed" | "shield" | "damage" | "armor" | "lifesteal";
 
 // Achsen-orientierte Bounding-Box. x/y ist – wie im Originalcode – die LINKE OBERE Ecke.
 export interface Box {

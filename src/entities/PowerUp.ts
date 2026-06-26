@@ -15,7 +15,7 @@ export class PowerUp extends Entity {
     this.effectType = effectType;
     this.duration = duration;
     // speed = gold, shield = himmelblau, damage = rot-orange (aggressiv),
-    // armor = stahl-blaugrau (defensiv/robust).
+    // armor = stahl-blaugrau (defensiv/robust), lifesteal = blutrot (Vampir-Sustain).
     const color =
       effectType === "speed"
         ? 0xffd700
@@ -23,7 +23,9 @@ export class PowerUp extends Entity {
           ? 0x00bfff
           : effectType === "damage"
             ? 0xff5722
-            : 0x9aa7b4;
+            : effectType === "armor"
+              ? 0x9aa7b4
+              : 0xb00020;
     this.sprite = scene.add
       .circle(this.centerX, this.centerY, 14, color, 0.9)
       .setStrokeStyle(3, 0xffffff)
