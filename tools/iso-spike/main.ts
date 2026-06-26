@@ -64,36 +64,51 @@ function baseHeight(i: number, j: number): number {
   const h = n * 0.46 + ridge * ridge * 0.46 + island * 0.42 - 0.12;
   return Math.max(0, Math.min(1, h));
 }
-function buildHeight(): void {
+function buildHeight(terrace: boolean): void {
   for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) H[i * N + j] = baseHeight(i, j);
-  // Flüsse: an Höhen starten, MONOTON bergab graben, bis Meer ODER Kartenrand erreicht ist.
-  for (let r = 0; r < 12; r++) {
-    let bi = 0, bj = 0, bh = 0;
-    for (let k = 0; k < 80; k++) {
-      const i = 10 + Math.floor(Math.random() * (N - 20)), j = 10 + Math.floor(Math.random() * (N - 20));
-      if (H[i * N + j] > bh) { bh = H[i * N + j]; bi = i; bj = j; }
-    }
-    if (bh < 0.55) continue;
-    let ci = bi, cj = bj, carve = H[bi * N + bj];
-    for (let step = 0; step < N * 3; step++) {
-      carve = Math.max(0.08, carve - 0.0045); // erzwingt stetiges Gefälle -> erreicht Wasser garantiert
-      for (let di = -1; di <= 1; di++) for (let dj = -1; dj <= 1; dj++) {
-        const ii = ci + di, jj = cj + dj;
-        if (ii < 0 || jj < 0 || ii >= N || jj >= N) continue;
-        const d = di === 0 && dj === 0 ? 0 : 0.03;
-        H[ii * N + jj] = Math.min(H[ii * N + jj], carve + d);
+  erode(120000); // hydraulische Erosion: Wassertropfen graben dendritische Täler bergab ->
+  // natürliche Fluss-/Drainage-Netze direkt aus der Heightmap (kein Carving-Hack, keine Pfützen).
+  for (let k = 0; k < N * N; k++) H[k] = Math.max(0, Math.min(1, H[k]));
+  if (terrace) for (let k = 0; k < N * N; k++) H[k] = Math.floor(H[k] * 13) / 13; // Voxel-Stufen
+}
+// Droplet-basierte hydraulische Erosion (Sebastian-Lague-Muster): jeder Tropfen folgt dem
+// Gefälle, trägt Sediment, erodiert bergab und lagert in Senken ab -> dendritische Täler/Flüsse.
+function erode(drops: number): void {
+  const inertia = 0.04, capF = 3.6, minSlope = 0.01, erodeR = 0.34, depositR = 0.28, evap = 0.018, grav = 5, life = 36;
+  for (let d = 0; d < drops; d++) {
+    let x = 1 + Math.random() * (N - 3), y = 1 + Math.random() * (N - 3);
+    let dx = 0, dy = 0, spd = 1, water = 1, sed = 0;
+    for (let l = 0; l < life; l++) {
+      const i = Math.floor(x), j = Math.floor(y), u = x - i, v = y - j;
+      if (i < 0 || j < 0 || i >= N - 1 || j >= N - 1) break;
+      const nw = H[i * N + j], ne = H[(i + 1) * N + j], sw = H[i * N + (j + 1)], se = H[(i + 1) * N + (j + 1)];
+      const gx = (ne - nw) * (1 - v) + (se - sw) * v;
+      const gy = (sw - nw) * (1 - u) + (se - ne) * u;
+      const hh = nw * (1 - u) * (1 - v) + ne * u * (1 - v) + sw * (1 - u) * v + se * u * v;
+      dx = dx * inertia - gx * (1 - inertia);
+      dy = dy * inertia - gy * (1 - inertia);
+      const ml = Math.hypot(dx, dy);
+      if (ml < 1e-6) break;
+      dx /= ml; dy /= ml;
+      const nx = x + dx, ny = y + dy;
+      const ii = Math.floor(nx), jj = Math.floor(ny);
+      if (ii < 0 || jj < 0 || ii >= N - 1 || jj >= N - 1) break;
+      const nu = nx - ii, nv = ny - jj;
+      const h2v = H[ii * N + jj] * (1 - nu) * (1 - nv) + H[(ii + 1) * N + jj] * nu * (1 - nv) + H[ii * N + (jj + 1)] * (1 - nu) * nv + H[(ii + 1) * N + (jj + 1)] * nu * nv;
+      const dh = h2v - hh;
+      const cap = Math.max(-dh, minSlope) * spd * water * capF;
+      if (sed > cap || dh > 0) {
+        const dep = dh > 0 ? Math.min(dh, sed) : (sed - cap) * depositR;
+        sed -= dep;
+        H[i * N + j] += dep * (1 - u) * (1 - v); H[(i + 1) * N + j] += dep * u * (1 - v); H[i * N + (j + 1)] += dep * (1 - u) * v; H[(i + 1) * N + (j + 1)] += dep * u * v;
+      } else {
+        const ero = Math.min((cap - sed) * erodeR, -dh);
+        H[i * N + j] -= ero * (1 - u) * (1 - v); H[(i + 1) * N + j] -= ero * u * (1 - v); H[i * N + (j + 1)] -= ero * (1 - u) * v; H[(i + 1) * N + (j + 1)] -= ero * u * v;
+        sed += ero;
       }
-      if (ci <= 1 || cj <= 1 || ci >= N - 2 || cj >= N - 2) break;           // Kartenrand erreicht
-      if (carve <= WATER - 0.06 && baseHeight(ci, cj) < WATER) break;        // ins offene Meer gemündet
-      // bergab weiter (tiefster Nachbar; bei Gleichstand Richtung nächster Rand)
-      let ni = ci, nj = cj, nh = 1e9;
-      for (let di = -1; di <= 1; di++) for (let dj = -1; dj <= 1; dj++) {
-        const ii = ci + di, jj = cj + dj;
-        if (ii < 0 || jj < 0 || ii >= N || jj >= N || (di === 0 && dj === 0)) continue;
-        const bias = (Math.min(ii, jj, N - 1 - ii, N - 1 - jj) / N) * 0.04; // leichter Drang zum Rand
-        if (H[ii * N + jj] + bias < nh) { nh = H[ii * N + jj] + bias; ni = ii; nj = jj; }
-      }
-      ci = ni; cj = nj;
+      spd = Math.sqrt(Math.max(0, spd * spd - dh * grav));
+      water *= (1 - evap);
+      x = nx; y = ny;
     }
   }
 }
@@ -150,58 +165,77 @@ function buildTerrainMesh(): Mesh {
     fragment: `
       precision mediump float;
       varying vec3 vColor; varying vec3 vNormal; varying vec2 vWorld; varying float vHeight;
-      uniform float uTime; uniform vec3 uLight; uniform float uPixel;
+      uniform float uTime; uniform vec3 uLight; uniform float uStyle; // 0 real | 1 pixel | 2 voxel | 3 cel
       float h2(vec2 p){ p=fract(p*vec2(123.34,456.21)); p+=dot(p,p+45.32); return fract(p.x*p.y); }
       float vn(vec2 p){ vec2 i=floor(p),f=fract(p); float a=h2(i),b=h2(i+vec2(1.,0.)),c=h2(i+vec2(0.,1.)),d=h2(i+vec2(1.,1.)); vec2 u=f*f*(3.-2.*f); return mix(mix(a,b,u.x),mix(c,d,u.x),u.y); }
+      vec3 biome(float hh){
+        if (hh < 0.415) return vec3(0.85,0.78,0.50);  // Sand
+        if (hh < 0.50)  return vec3(0.45,0.72,0.31);  // Gras hell
+        if (hh < 0.62)  return vec3(0.31,0.60,0.25);  // Gras
+        if (hh < 0.70)  return vec3(0.22,0.47,0.20);  // Gras dunkel
+        if (hh < 0.78)  return vec3(0.49,0.42,0.29);  // Erde
+        if (hh < 0.88)  return vec3(0.55,0.52,0.49);  // Fels
+        if (hh < 0.95)  return vec3(0.72,0.72,0.72);  // heller Fels
+        return vec3(0.96,0.97,1.0);                   // Schnee
+      }
       void main() {
-        if (vHeight < 0.382) {
-          if (uPixel > 0.5) {
-            float d2 = vHeight < 0.33 ? 0.0 : 1.0;
-            vec3 cp = mix(vec3(0.10,0.22,0.46), vec3(0.20,0.42,0.66), d2);
-            cp += vec3(0.18)*step(0.82, h2(floor(vWorld*1.5) + vec2(floor(uTime*3.0))));
-            gl_FragColor = vec4(cp,1.0); return;
-          }
-          // animiertes Wasser
-          float w = sin(vWorld.x*0.7 + uTime*1.6)*0.5 + sin(vWorld.y*0.55 - uTime*1.2)*0.5;
-          vec3 deep = vec3(0.07,0.20,0.42), shallow = vec3(0.18,0.46,0.72);
-          float dd = clamp((0.382 - vHeight)*5.0, 0.0, 1.0);
-          vec3 col = mix(shallow, deep, dd) + 0.06*w;
-          float spark = vn(vWorld*4.0 + uTime*0.4);
-          col += vec3(0.4)*pow(max(0.0, spark-0.6), 2.0); // Funkeln
-          gl_FragColor = vec4(col, 1.0); return;
-        }
         vec3 nB = normalize(vNormal);
         float diff = clamp(dot(nB, normalize(uLight)), 0.0, 1.0);
-        if (uPixel > 0.5) {
-          float shade = 0.62 + 0.38*floor(diff*3.0)/3.0;     // 3 Toon-Lichtstufen
-          float sp = h2(floor(vWorld*2.0));                  // blockige Gras-Sprenkel
-          float speck = sp > 0.66 ? 1.12 : (sp < 0.33 ? 0.9 : 1.0);
-          vec3 cp = floor(vColor*shade*speck*7.0 + 0.5)/7.0; // begrenzte Palette -> Pixel-Banding
-          gl_FragColor = vec4(cp, 1.0); return;
+        // ---- WASSER ----
+        if (vHeight < 0.382) {
+          if (uStyle > 0.5) {
+            float d2 = vHeight < 0.33 ? 0.0 : 1.0;
+            vec3 cp = mix(vec3(0.18,0.40,0.66), vec3(0.10,0.22,0.48), d2);
+            cp += vec3(0.16)*step(0.82, h2(floor(vWorld*1.4) + vec2(floor(uTime*3.0))));
+            gl_FragColor = vec4(cp,1.0); return;
+          }
+          float w = sin(vWorld.x*0.7 + uTime*1.6)*0.5 + sin(vWorld.y*0.55 - uTime*1.2)*0.5;
+          vec3 col = mix(vec3(0.18,0.46,0.72), vec3(0.07,0.20,0.42), clamp((0.382-vHeight)*5.0,0.0,1.0)) + 0.06*w;
+          col += vec3(0.4)*pow(max(0.0, vn(vWorld*4.0 + uTime*0.4)-0.6), 2.0);
+          gl_FragColor = vec4(col, 1.0); return;
         }
-        float shade = 0.42 + 0.78*diff;                    // Hillshading -> Relief
-        float n = vn(vWorld*1.6)*0.55 + vn(vWorld*6.0)*0.3; // Detail-Grain
-        float grain = 0.8 + 0.42*n;
-        gl_FragColor = vec4(vColor*shade*grain, 1.0);
+        // ---- LAND ----
+        if (uStyle < 0.5) { // realistisch
+          float shade = 0.42 + 0.78*diff;
+          float grain = 0.8 + 0.42*(vn(vWorld*1.6)*0.55 + vn(vWorld*6.0)*0.3);
+          gl_FragColor = vec4(vColor*shade*grain, 1.0); return;
+        }
+        vec3 b = biome(vHeight);
+        if (uStyle < 1.5) { // pixel: saubere Biome + Dithering + Toon
+          float shade = 0.66 + 0.34*floor(diff*3.0+0.5)/3.0;
+          float dth = h2(floor(vWorld*1.0));
+          b *= dth > 0.62 ? 1.08 : (dth < 0.30 ? 0.90 : 1.0);
+          gl_FragColor = vec4(b*shade, 1.0); return;
+        }
+        if (uStyle < 2.5) { // voxel: Block-Look (Tops hell, Waende dunkel) + harte Quantisierung
+          float shade = (0.5 + 0.5*clamp(nB.z,0.0,1.0)) * (0.82 + 0.22*step(0.5, diff));
+          gl_FragColor = vec4(floor(b*shade*5.0+0.5)/5.0, 1.0); return;
+        }
+        // cel: illustriert -> 3 Toon-Baender, sattere Farben
+        float shade = diff > 0.55 ? 1.0 : (diff > 0.25 ? 0.82 : 0.64);
+        gl_FragColor = vec4(pow(b, vec3(0.85)) * shade, 1.0); return;
       }`,
   });
   terrainShader = new Shader({
     glProgram,
-    resources: { terr: { uTime: { value: 0, type: "f32" }, uLight: { value: new Float32Array([-0.5, -0.62, 0.6]), type: "vec3<f32>" }, uPixel: { value: 0, type: "f32" } } },
+    resources: { terr: { uTime: { value: 0, type: "f32" }, uLight: { value: new Float32Array([-0.5, -0.62, 0.6]), type: "vec3<f32>" }, uStyle: { value: 0, type: "f32" } } },
   });
   return new Mesh({ geometry, shader: terrainShader });
 }
 
 async function main(): Promise<void> {
   const params = new URLSearchParams(location.search);
-  const style = params.get("style") ?? "real"; // "real" = geshadetes Mesh | "pixel" = Pixel-Art-Look
+  const style = params.get("style") ?? "real"; // real | pixel | voxel | cel
   const zoom = parseFloat(params.get("zoom") ?? "0.4");
-  const pixel = style === "pixel";
+  const styleMap: Record<string, number> = { real: 0, pixel: 1, voxel: 2, cel: 3 };
+  const styleId = styleMap[style] ?? 0;
+  const lowRes = style === "pixel" || style === "voxel"; // niedrige Aufloesung -> Pixel-Look
+  const terrace = style === "voxel";                     // Hoehen in Stufen -> Voxel/Block-Terrassen
   const hud = document.getElementById("hud")!;
   hud.textContent = "Lade…";
   const app = new Application();
-  // Pixel-Look: in NIEDRIGER Aufloesung rendern, dann per CSS nearest hochskalieren -> knackige Pixel.
-  if (pixel) {
+  // Pixel/Voxel-Look: in NIEDRIGER Aufloesung rendern, dann per CSS nearest hochskalieren.
+  if (lowRes) {
     await app.init({ width: window.innerWidth, height: window.innerHeight, background: 0x0a1422, antialias: false, resolution: 0.25, autoDensity: false });
     app.canvas.style.width = "100vw";
     app.canvas.style.height = "100vh";
@@ -223,10 +257,10 @@ async function main(): Promise<void> {
   };
   const tex: Record<string, Texture> = {};
   for (const [k, url] of Object.entries(M)) tex[k] = await Assets.load(url);
-  if (pixel) for (const tt of Object.values(tex)) tt.source.scaleMode = "nearest";
+  if (lowRes) for (const tt of Object.values(tex)) tt.source.scaleMode = "nearest";
 
   hud.textContent = "Baue Welt…";
-  buildHeight();
+  buildHeight(terrace);
   const world = new Container();
   app.stage.addChild(world);
   world.scale.set(zoom);
@@ -234,7 +268,7 @@ async function main(): Promise<void> {
   world.x = app.screen.width / 2 - cc.x * zoom;
   world.y = app.screen.height / 2 - (cc.y - elevLift(sampleH(MAP / 2, MAP / 2))) * zoom;
   world.addChild(buildTerrainMesh());
-  terrainShader.resources.terr.uniforms.uPixel = pixel ? 1 : 0;
+  terrainShader.resources.terr.uniforms.uStyle = styleId;
 
   const bandParent = new Container();
   bandParent.sortableChildren = true;
