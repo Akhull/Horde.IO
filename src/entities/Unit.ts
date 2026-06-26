@@ -1,14 +1,20 @@
 import Phaser from "phaser";
 import { Entity } from "./Entity";
-import { CONFIG, UNIT_STATS, DEPTH, FEEDBACK, AI, FACTION_STATS, LEGENDARY, POWERUP, HITBOX_SCALE, KING_PROGRESSION } from "../config/gameConfig";
+import { CONFIG, UNIT_STATS, DEPTH, FEEDBACK, AI, FACTION_STATS, LEGENDARY, POWERUP, HITBOX_SCALE, KING_PROGRESSION, SWAMP } from "../config/gameConfig";
 import type { AIPersonality } from "../config/gameConfig";
 import { AURA_TINT } from "../config/spriteConfig";
+import { Swamp } from "./Swamp";
 import type { Faction, UnitType } from "../types";
+import type { GridEntity } from "../types";
 import type { Vec2 } from "../systems/AI";
 import { determineVassalTarget, chooseAIKingTarget, findKingCollectible, computeKingAvoidance } from "../systems/AI";
 import { applyKingXp, kingDamageMult, kingDisplaySize } from "../systems/kingProgression";
 import type { ProjectileTarget } from "./Projectile";
 import type { GameScene } from "../scenes/GameScene";
+
+// Wiederverwendeter Scratch-Puffer für den allokationsfreien Sumpf-Lookup pro Einheit
+// (terrainSpeedFactor läuft sequenziell innerhalb von update(), teilt ihn sich daher).
+const terrainScratch: GridEntity[] = [];
 
 // Eine Einheit: König (Spieler/KI), Vasall (Nahkampf) oder Bogenschütze.
 // Faithful-Port von public/js/entities/Unit.js – inkl. KI, Angriff, Dash, Schild.
@@ -724,13 +730,32 @@ export class Unit extends Entity {
     if (Math.abs(dx) > 0.1) this.facingDirection = dx > 0 ? 1 : -1;
   }
 
+  // Read-time Tempo-Faktor durchs Terrain (Sumpf halbiert) – mutiert keinen Basiswert,
+  // analog zu moveSpeedFactor, und gilt für Spieler UND KI. Steht das Einheiten-Zentrum
+  // in einer Sumpf-Fläche, gilt SWAMP.slowFactor, sonst 1. Allokationsfreier Grid-Lookup
+  // (kleine Box um das Zentrum, Punkt-in-Rechteck-Test) über den geteilten Scratch-Puffer.
+  private terrainSpeedFactor(scene: GameScene): number {
+    if (scene.swamps.length === 0) return 1;
+    const cx = this.centerX;
+    const cy = this.centerY;
+    for (const e of scene.grid.getEntitiesInBoundingBoxInto(cx, cy, 0, 0, terrainScratch)) {
+      // Punkt-in-Rechteck: Sumpf hat x/y links-oben (Entity-Konvention) + width/height.
+      if (e instanceof Swamp && cx >= e.x && cx <= e.x + e.width && cy >= e.y && cy <= e.y + e.height) {
+        return SWAMP.slowFactor;
+      }
+    }
+    return 1;
+  }
+
   update(deltaTime: number, scene: GameScene): void {
     this.prevX = this.x;
     this.prevY = this.y;
     this.isMoving = false;
     // moveSpeedFactor zieht den Steady-Tempo-Bonus read-time ein (1 inaktiv, 1.1 aktiv) –
-    // einziger Bewegungs-Schritt-Pfad, gilt für Spieler- UND KI-König.
-    const step = (this.speed * this.moveSpeedFactor * deltaTime) / 16;
+    // einziger Bewegungs-Schritt-Pfad, gilt für Spieler- UND KI-König. terrainSpeedFactor
+    // multipliziert read-time das Terrain ein (Sumpf halbiert), ohne einen Basiswert zu
+    // mutieren – greift damit für Spieler UND KI gleichermaßen.
+    const step = (this.speed * this.moveSpeedFactor * this.terrainSpeedFactor(scene) * deltaTime) / 16;
 
     // Treffer-Flash & Rückstoß – immer, vor allen Bewegungs-Verzweigungen.
     if (this.flashTimer > 0) this.flashTimer -= deltaTime;

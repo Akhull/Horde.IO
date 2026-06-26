@@ -1,8 +1,9 @@
-import { CONFIG } from "../config/gameConfig";
+import { CONFIG, SWAMP } from "../config/gameConfig";
 import { Unit } from "../entities/Unit";
 import { Building } from "../entities/Building";
 import { Obstacle } from "../entities/Obstacle";
 import { Forest } from "../entities/Forest";
+import { Swamp } from "../entities/Swamp";
 import { PowerUp } from "../entities/PowerUp";
 import type { BuildingType, PowerUpType } from "../types";
 import type { GameScene } from "../scenes/GameScene";
@@ -39,6 +40,20 @@ export function generateObstacles(scene: GameScene): void {
     const obs = Math.random() < 0.7 ? new Forest(scene, x, y, w, h) : new Obstacle(scene, x, y, w, h);
     scene.obstacles.push(obs);
     scene.grid.addEntity(obs);
+  }
+}
+
+// SWAMP.count begehbare Sumpf-Flächen. Stil identisch zu generateObstacles, aber im
+// Grid für den allokationsfreien Tempo-Lookup pro Einheit (Unit.terrainSpeedFactor).
+export function generateSwamps(scene: GameScene): void {
+  for (let i = 0; i < SWAMP.count; i++) {
+    const w = SWAMP.minSize + Math.random() * (SWAMP.maxSize - SWAMP.minSize);
+    const h = SWAMP.minSize + Math.random() * (SWAMP.maxSize - SWAMP.minSize);
+    const x = Math.random() * (CONFIG.worldWidth - w);
+    const y = Math.random() * (CONFIG.worldHeight - h);
+    const swamp = new Swamp(scene, x, y, w, h);
+    scene.swamps.push(swamp);
+    scene.grid.addEntity(swamp);
   }
 }
 

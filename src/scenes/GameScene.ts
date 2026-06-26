@@ -16,13 +16,14 @@ import { Building } from "../entities/Building";
 import { Soul } from "../entities/Soul";
 import { Obstacle } from "../entities/Obstacle";
 import { Forest } from "../entities/Forest";
+import { Swamp } from "../entities/Swamp";
 import { PowerUp } from "../entities/PowerUp";
 import { Projectile, type ProjectileTarget, type ProjectileAttacker } from "../entities/Projectile";
 import { SpatialGrid } from "../systems/SpatialGrid";
 import { SafeZone } from "../systems/SafeZone";
 import { SoundManager } from "../systems/SoundManager";
 import { recalcFormationOffset } from "../systems/AI";
-import { generateObstacles, generateBuildingClusters, generatePowerUps, spawnVassal } from "../systems/worldgen";
+import { generateObstacles, generateSwamps, generateBuildingClusters, generatePowerUps, spawnVassal } from "../systems/worldgen";
 import { generateDecor } from "../systems/decor";
 import {
   resolveUnitUnitCollisions,
@@ -65,6 +66,8 @@ export class GameScene extends Phaser.Scene {
   buildings: Building[] = [];
   souls: Soul[] = [];
   obstacles: (Obstacle | Forest)[] = [];
+  // Begehbares Verlangsamungs-Terrain (im Grid für den Tempo-Lookup pro Einheit).
+  swamps: Swamp[] = [];
   powerUps: PowerUp[] = [];
   projectiles: Projectile[] = [];
   playerKing: Unit | null = null;
@@ -145,6 +148,7 @@ export class GameScene extends Phaser.Scene {
     this.buildings = [];
     this.souls = [];
     this.obstacles = [];
+    this.swamps = [];
     this.powerUps = [];
     this.projectiles = [];
     this.playerKing = null;
@@ -276,6 +280,9 @@ export class GameScene extends Phaser.Scene {
     }
 
     generateObstacles(this);
+    // Sumpf-Terrain direkt nach den Hindernissen: gleiche Welt-Phase, aber begehbar.
+    // Deko weicht nur scene.obstacles aus – Sumpf-Überlappung ist kosmetisch egal.
+    generateSwamps(this);
     // Dekorative Welt-Ausstattung NACH den Hindernissen (weicht ihnen aus), VOR den
     // Gebäuden in der Erzeugungsreihenfolge – die Tiefen-Ebenen (DEPTH.decor < building)
     // sorgen ohnehin dafür, dass Gebäude/Einheiten über den Props liegen.

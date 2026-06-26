@@ -263,6 +263,13 @@ function drawMinimap(canvas: HTMLCanvasElement, game: NonNullable<typeof gameRef
   ctx.fillStyle = "#1c3a1c";
   ctx.fillRect(0, 0, size, size);
 
+  // Sumpf-Terrain ZUERST (begehbar) – gedämpftes Olivgrün, klar von Wald/Wasser
+  // unterscheidbar. Vor den Hindernissen, damit undurchdringliche Flächen oben liegen.
+  for (const s of game.swamps) {
+    ctx.fillStyle = "#5a663a";
+    ctx.fillRect(toX(s.x), toY(s.y), Math.max(1, s.width * scale), Math.max(1, s.height * scale));
+  }
+
   for (const o of game.obstacles) {
     ctx.fillStyle = o.type === "water" ? "#3366ff" : "#0a4f0a";
     ctx.fillRect(toX(o.x), toY(o.y), Math.max(1, o.width * scale), Math.max(1, o.height * scale));

@@ -49,6 +49,8 @@ export class BootScene extends Phaser.Scene {
     this.load.image("grass", `${T}/medievalTile_57.png`);
     this.load.image("water", `${T}/medievalTile_27.png`);
     this.load.image("forest", `${T}/medievalTile_46.png`);
+    // Sumpf-Kachel: begehbares Verlangsamungs-Terrain (über SWAMP.tint olivgrün getönt).
+    this.load.image("swamp", `${T}/medievalTile_14.png`);
 
     // Boden-Variations-Kacheln (nahtlos, 100% deckend) für die Decor-Flecken in
     // systems/decor.ts – brechen die monotone Gras-Fläche auf (Erde/Pflaster/Sand/

@@ -6,7 +6,7 @@ export type UnitType = "king" | "vassal" | "archer" | "champion";
 // gold = legendärer Orb -> nur der König sammelt ihn ein und beschwört einen Champion.
 export type SoulType = "green" | "blue" | "purple" | "gold";
 export type BuildingType = "barn" | "house" | "tower" | "barracks";
-export type ObstacleType = "forest" | "water";
+export type ObstacleType = "forest" | "water" | "swamp";
 export type PowerUpType = "speed" | "shield" | "damage" | "armor" | "lifesteal" | "regen" | "steady";
 
 // Achsen-orientierte Bounding-Box. x/y ist – wie im Originalcode – die LINKE OBERE Ecke.

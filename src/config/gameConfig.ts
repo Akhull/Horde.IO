@@ -410,10 +410,23 @@ export const SAFE_ZONE_VIS = {
   ringColor: 0xff3030, // heller roter Zonen-Ring (Kante)
 } as const;
 
+// Sumpf: erstes nicht-binäres Terrain. Begehbar, aber halbiert das Tempo →
+// taktische Entscheidung (Abkürzung durch den Morast vs. schneller Umweg) statt
+// einer harten Wand wie Wald/Wasser. Symmetrisch für Spieler UND KI = fair.
+export const SWAMP = {
+  count: 8, // Anzahl der Sumpf-Flächen (zwischen Wald/Wasser, aber begehbar)
+  minSize: 280, // px Mindest-Kantenlänge
+  maxSize: 620, // px maximale Kantenlänge
+  slowFactor: 0.5, // Tempo im Sumpf (0.5 = halbe Geschwindigkeit)
+  tint: 0x9aa86a, // olivgrün-brauner Multiply-Tint → Boden liest sich als Bog/Morast (nicht Wüsten-Dirt)
+  tileScale: 0.6, // Kachelwiederholung des 128px-Tiles
+} as const;
+
 // Tiefen-Ebenen für die Phaser-Darstellung (z-Sortierung)
 export const DEPTH = {
   ground: -100,
   groundPatch: -90, // Boden-Variations-Flecken: über dem Gras, unter Hindernissen
+  swamp: -85, // begehbares Sumpf-Terrain: über groundPatch, unter Hindernissen/Deko/Einheiten
   obstacle: -50,
   decor: -10, // Deko-Props: über Boden/Hindernissen, UNTER Gebäuden/Einheiten
   building: 0,
