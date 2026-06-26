@@ -1,7 +1,7 @@
 import { Unit } from "../entities/Unit";
 import { Soul } from "../entities/Soul";
 import { spawnVassal, spawnChampion } from "./worldgen";
-import { FEEDBACK, LEGENDARY } from "../config/gameConfig";
+import { FEEDBACK, LEGENDARY, KING_PROGRESSION } from "../config/gameConfig";
 import type { SoulType } from "../types";
 import type { GameScene } from "../scenes/GameScene";
 
@@ -190,6 +190,8 @@ export function handleSouls(scene: GameScene): void {
     const soul = scene.souls[i];
     let collected = false;
     let collector: Unit;
+    // König, dem die König-XP dieser Seele zufällt (null bis zum Einsammeln gesetzt).
+    let collectorKing: Unit | null = null;
 
     // Kandidaten nur aus den Grid-Zellen um den Einsammel-Radius (Broad-Phase).
     const near = scene.grid.getEntitiesInBoundingBox(
@@ -210,6 +212,9 @@ export function handleSouls(scene: GameScene): void {
       const ddy = unit.centerY - soul.centerY;
       if (ddx * ddx + ddy * ddy >= SOUL_COLLECT_RANGE_SQ) continue;
       collector = unit;
+      // Der König des Sammlers: ein König ist sein eigener Anführer (king.leader === king),
+      // Vasallen/Archer/Champion verweisen über .leader auf ihren König.
+      collectorKing = collector.unitType === "king" ? collector : collector.leader;
       if (soul.soulType === "green") {
         const v = spawnVassal(scene, unit.leader);
         scene.units.push(v);
@@ -256,6 +261,11 @@ export function handleSouls(scene: GameScene): void {
       scene.grid.removeEntity(soul);
       soul.destroyView();
       scene.souls.splice(i, 1);
+
+      // König-Progression: der König levelt off JEDER Seele, die sein Team erntet – nicht
+      // nur Gold. So wächst der Anführer parallel zur dicht wachsenden Horde mit. XP nach
+      // Seltenheit (seltenere Seele = mehr XP). Gilt symmetrisch für Spieler- UND KI-König.
+      if (collectorKing) collectorKing.gainKingXp(KING_PROGRESSION.xpPerSoul[soul.soulType], scene);
     }
   }
 }

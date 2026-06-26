@@ -1,5 +1,5 @@
 import Phaser from "phaser";
-import { CONFIG } from "../config/gameConfig";
+import { CONFIG, KING_PROGRESSION } from "../config/gameConfig";
 import { bus, gameRef } from "./bus";
 import { setJoystick, setActionButton } from "./controller";
 import { el } from "./dom";
@@ -13,6 +13,8 @@ const MINIMAP_SIZE = 200;
 interface HudRefs {
   root: HTMLDivElement;
   kings: HTMLElement;
+  kingLevel: HTMLElement;
+  xpFill: HTMLElement;
   dashFill: HTMLElement;
   dashLabel: HTMLElement;
   shieldFill: HTMLElement;
@@ -50,6 +52,15 @@ export function buildHud(parent: HTMLElement): void {
   const kings = el("div", { class: "hud-kings" }, [
     el("span", { class: "crown", html: "♛" }),
     el("span", { id: "hud-kings-n", textContent: "—" }),
+  ]);
+
+  // König-Progression: kompakte Stufen-Anzeige + dünner Gold-XP-Balken (Look wie die
+  // Fähigkeits-Balken: dunkle Spur + Gold-Fill). Surft direkt unter der Königs-Reihe mit.
+  const kingLevel = el("span", { class: "king-lvl-n", textContent: "Stufe 1" });
+  const xpFill = el("div", { class: "xp-fill" });
+  const kingProg = el("div", { class: "hud-kingprog" }, [
+    kingLevel,
+    el("div", { class: "xp-track" }, [xpFill]),
   ]);
 
   const dashFill = el("div", { class: "ability-fill dash" });
@@ -104,7 +115,7 @@ export function buildHud(parent: HTMLElement): void {
     rankfile,
   ]);
 
-  const status = el("div", { class: "hud-panel hud-status" }, [kings, dash, shield, vassals]);
+  const status = el("div", { class: "hud-panel hud-status" }, [kings, kingProg, dash, shield, vassals]);
 
   const timer = el("div", { class: "hud-panel hud-timer", textContent: "00:00" });
   const pauseBtn = el("button", { class: "hud-pause hud-panel", title: "Pause (ESC / P)", html: "&#10074;&#10074;" });
@@ -127,7 +138,7 @@ export function buildHud(parent: HTMLElement): void {
   const root = el("div", { id: "hud" }, [status, topCenter, minimap, killfeed, hp, fps, buildTouchControls()]);
   parent.append(root);
 
-  refs = { root, kings: kings.lastElementChild as HTMLElement, dashFill, dashLabel, shieldFill, shieldLabel, v1, v2, archers, champBadge, champN, eliteBadge, eliteN, timer, hpFill, hpText, fps, killfeed, canvas };
+  refs = { root, kings: kings.lastElementChild as HTMLElement, kingLevel, xpFill, dashFill, dashLabel, shieldFill, shieldLabel, v1, v2, archers, champBadge, champN, eliteBadge, eliteN, timer, hpFill, hpText, fps, killfeed, canvas };
 
   // Kill-Feed an das Königstod-Event koppeln.
   bus.on("kingKilled", ({ faction, kingsLeft }) => pushKill(faction, kingsLeft));
@@ -166,6 +177,19 @@ function tick(): void {
   // Könige übrig
   const kingsAlive = game.units.reduce((n, u) => (u.unitType === "king" ? n + 1 : n), 0);
   r.kings.textContent = `${kingsAlive} Könige übrig`;
+
+  // König-Progression: Stufe + XP-Fortschritt zur nächsten Stufe. Schwellen aus DERSELBEN
+  // Config wie die Entity (xpToNext über die aktuelle Stufe indiziert). Auf Maxstufe "MAX"
+  // mit vollem Balken; sonst der Anteil kingXp / xpToNext[kingLevel].
+  r.kingLevel.textContent = `Stufe ${king.kingLevel}`;
+  if (king.kingLevel >= KING_PROGRESSION.maxLevel) {
+    r.kingLevel.textContent = `Stufe ${king.kingLevel} · MAX`;
+    r.xpFill.style.width = "100%";
+  } else {
+    const need = KING_PROGRESSION.xpToNext[king.kingLevel];
+    const xpPct = Phaser.Math.Clamp(king.kingXp / need, 0, 1);
+    r.xpFill.style.width = `${xpPct * 100}%`;
+  }
 
   // Sprint-Cooldown
   const dashRatio = Phaser.Math.Clamp(king.dashTimer / CONFIG.dashCooldown, 0, 1);

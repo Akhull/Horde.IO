@@ -1,6 +1,6 @@
 import Phaser from "phaser";
 import { Entity } from "./Entity";
-import { CONFIG, UNIT_STATS, DEPTH, FEEDBACK, AI, FACTION_STATS, LEGENDARY, POWERUP, HITBOX_SCALE } from "../config/gameConfig";
+import { CONFIG, UNIT_STATS, DEPTH, FEEDBACK, AI, FACTION_STATS, LEGENDARY, POWERUP, HITBOX_SCALE, KING_PROGRESSION } from "../config/gameConfig";
 import type { AIPersonality } from "../config/gameConfig";
 import { AURA_TINT } from "../config/spriteConfig";
 import type { Faction, UnitType } from "../types";
@@ -32,6 +32,11 @@ export class Unit extends Entity {
   leader!: Unit;
 
   // König
+  // König-Progression (nur für unitType === "king" relevant; auf anderen Typen bleiben die
+  // Defaults bedeutungslos liegen). kingLevel steuert read-time die Buffs (Schaden/Größe),
+  // kingXp akkumuliert die aus Seelen gewonnene Erfahrung bis zur nächsten Schwelle.
+  kingLevel = 1;
+  kingXp = 0;
   dashTimer = 0;
   lastDirection: Vec2 = { x: 0, y: 0 };
   shieldCooldownTimer = 0;
@@ -324,6 +329,60 @@ export class Unit extends Entity {
     }
   }
 
+  // König-XP aus einer eingesammelten Seele gutschreiben (Spieler- UND KI-König – die
+  // Symmetrie ist Absicht, gegated wird hier NUR auf den Typ, nicht auf das Team). Solange
+  // genug XP für die nächste Stufe da ist UND der Deckel nicht erreicht ist, wird die
+  // Schwelle abgezogen und gelevelt. So levelt der König off JEDER Seele, die sein Team
+  // erntet – nicht nur Gold –, parallel zum dichten Horde-Wachstum.
+  gainKingXp(amount: number, scene: GameScene): void {
+    if (this.unitType !== "king" || this.kingLevel >= KING_PROGRESSION.maxLevel) return;
+    this.kingXp += amount;
+    // xpToNext ist über die AKTUELLE Stufe indiziert (s. Config); Schwelle verbrauchen,
+    // solange sie erreicht ist und der Deckel noch nicht steht.
+    while (this.kingLevel < KING_PROGRESSION.maxLevel && this.kingXp >= KING_PROGRESSION.xpToNext[this.kingLevel]) {
+      this.kingXp -= KING_PROGRESSION.xpToNext[this.kingLevel];
+      this.levelUpKing(scene);
+    }
+  }
+
+  // Eine König-Stufe aufsteigen: maxHp anheben + denselben Betrag SOFORT heilen (Belohnung
+  // mitten im Kampf), Anzeigegröße wachsen lassen (gedeckelt) und ein goldenes Level-up-Juice
+  // feuern. Größe wird – wie in setLevel – aus dem BASIS-Wert neu berechnet (kein Float-Drift
+  // durchs Kompoundieren) und Hitbox/barRef konsistent zum Konstruktor nachgezogen.
+  private levelUpKing(scene: GameScene): void {
+    this.kingLevel++;
+
+    // HP: Maximum anheben und denselben Betrag dazuheilen, auf das neue Maximum geklemmt.
+    const hpBonus = Math.round(KING_PROGRESSION.hpBonusPerLevel);
+    this.maxHp += hpBonus;
+    this.hp = Math.min(this.maxHp, this.hp + hpBonus);
+
+    // Größe NEU aus dem Basis-König-Wert berechnen (nicht kompoundieren), Wachstum auf
+    // maxSizeMult (+30%) deckeln, damit der König lesbar bleibt und das Feld nicht erdrückt.
+    const growth = Math.min(KING_PROGRESSION.maxSizeMult, 1 + (this.kingLevel - 1) * KING_PROGRESSION.sizeMultPerLevel);
+    this.displaySize = UNIT_STATS.king.size * growth;
+    // Hitbox + optische Bar-Bezugsbreite aus der neuen Anzeigegröße ableiten (wie Konstruktor/setLevel).
+    this.width = this.displaySize * HITBOX_SCALE;
+    this.height = this.displaySize * HITBOX_SCALE;
+    this.barRef = this.displaySize * 0.26; // König-Anteil wie im Konstruktor
+    this.sprite.setDisplaySize(this.displaySize, this.displaySize);
+
+    // Goldener Level-up-Pop am Sprite (spiegelt den setLevel-Pop, etwas kräftiger ~1.4x).
+    this.sprite.scene.tweens.add({
+      targets: this.sprite,
+      scaleX: this.sprite.scaleX * 1.4,
+      scaleY: this.sprite.scaleY * 1.4,
+      duration: 180,
+      yoyo: true,
+    });
+    // Goldener Partikel-Burst als sichtbare Belohnung am König.
+    scene.spawnVisualEffect(this.centerX, this.centerY, { r: 255, g: 215, b: 0 }, 22, 480, 4, 1.6);
+    // Schwebetext NUR für das Spieler-Team (sonst floutet das Feld bei 10 KI-Königen voll).
+    if (this.team === scene.playerKing?.team) {
+      scene.spawnFloatingText(`König Stufe ${this.kingLevel}!`, this.centerX, this.y, { r: 255, g: 215, b: 0 }, 1700, 22);
+    }
+  }
+
   // Spielt den passenden Nahkampf-Sound je nach Einheitentyp/Level.
   private meleeSound(): { key: string; vol: number } {
     if (this.unitType === "king" || this.unitType === "champion") return { key: "melee_l3", vol: 1.3 };
@@ -343,8 +402,12 @@ export class Unit extends Entity {
         : this.unitType === "champion"
           ? UNIT_STATS.champion.damage
           : UNIT_STATS.vassal.damageByLevel[this.level] ?? 20;
+    // König-Progression: NUR der König bekommt seinen Stufen-Schadensmultiplikator (Vasallen/
+    // Champion unverändert). Read-time wie die Power-Up-Mults, OBEN AUF Fraktions-Mod und
+    // Schadens-Boost: effektiver Mult = 1 + (kingLevel-1)*damageMultPerLevel.
+    const kingMult = this.unitType === "king" ? 1 + (this.kingLevel - 1) * KING_PROGRESSION.damageMultPerLevel : 1;
     // Schadens-Boost (Power-Up) wirkt OBEN AUF den Fraktions-Modifikator.
-    return base * this.factionDamageMod * this.damageBoostMult;
+    return base * this.factionDamageMod * this.damageBoostMult * kingMult;
   }
 
   // Schwierigkeits-Skalierung des AUSGETEILTEN Schadens: nur KI-Einheiten (Team

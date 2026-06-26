@@ -1,6 +1,8 @@
 // Zentrale Spielkonstanten – 1:1 aus dem alten public/js/core/config.js übernommen,
 // erweitert um Einheiten-Werte, die im Original über die Unit-Klasse verstreut waren.
 
+import type { SoulType } from "../types";
+
 export const CONFIG = {
   worldWidth: 9000,
   worldHeight: 9000,
@@ -59,6 +61,30 @@ export const UNIT_STATS = {
   // bleibt aber unter dem König (der als Anführer klar dominieren soll). Zäh und schlagkräftig,
   // läuft mit Vasallen-Tempo in der Formation mit. MECHANIK steht in LEGENDARY (Aura/Reichweite/AoE).
   champion: { hp: 200, speed: 1.35 * 0.95 * 1.88, size: 90, damage: 35 },
+} as const;
+
+// König-Progression: der KÖNIG selbst levelt aus eingesammelten Seelen. Die Horde wächst
+// ohnehin dicht – jetzt wächst MIT ihr auch der Anführer als Belohnung für JEDE eingesammelte
+// Seele (nicht nur Gold). Bewusst maßvoll, gedeckelt und SYMMETRISCH für Spieler- UND KI-König,
+// damit niemand davonsnowballt: ein Vorsprung bei Seelen gibt einen spürbaren, aber begrenzten
+// Königs-Vorteil (mehr HP, härtere Schläge, leicht größere Figur), keinen Dauer-Steamroll.
+export const KING_PROGRESSION = {
+  maxLevel: 6, // Stufen-Deckel: ab hier sammelt der König zwar weiter Seelen für die Horde, levelt aber nicht mehr
+  // König-XP pro Seele nach Seltenheit: eine seltenere Seele gibt mehr Königs-XP (sie ist
+  // schwerer zu farmen). Die Horde-Effekte der Seele (neuer Vasall/Level-up/Champion) bleiben
+  // davon unberührt – das hier ist NUR der Königs-XP-Beitrag obendrauf.
+  xpPerSoul: { green: 1, blue: 2, purple: 3, gold: 5 } as Record<SoulType, number>,
+  // Schwellenkurve, INDIZIERT ÜBER DIE AKTUELLE STUFE: xpToNext[kingLevel] ist die XP-Menge,
+  // die vom aktuellen Level aus bis zum nächsten gebraucht wird. Index 0 ist ungenutzt
+  // (es gibt keine Stufe 0); der König startet auf Stufe 1, braucht also xpToNext[1]=6 für L2,
+  // dann xpToNext[2]=10 WEITERE für L3, usw. Sanft steigend (6,10,16,24,34 = +4,+6,+8,+10),
+  // damit frühe Stufen flott kommen und sich die späteren Stufen verdient anfühlen.
+  xpToNext: [0, 6, 10, 16, 24, 34] as const,
+  // Pro gewonnener Stufe KUMULATIV angewandte Buffs (read off kingLevel, kein State-Leak):
+  hpBonusPerLevel: 28, // +28 maxHp je Stufe; beim Level-up wird derselbe Betrag SOFORT geheilt (Belohnung mitten im Kampf)
+  damageMultPerLevel: 0.08, // +8% Nahkampfschaden je Stufe; effektiver Mult = 1 + (kingLevel-1)*0.08 (additiv-multiplikativ)
+  sizeMultPerLevel: 0.05, // +5% Anzeigegröße je Stufe ...
+  maxSizeMult: 1.3, // ... GEDECKELT auf +30% Gesamtwachstum gegenüber UNIT_STATS.king.size (Lesbarkeit: der König darf das Feld nicht erdrücken)
 } as const;
 
 // Hitbox-Skalierung: die ANZEIGEGRÖSSE (UNIT_STATS.size) ist bewusst entkoppelt von der

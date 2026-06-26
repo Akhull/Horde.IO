@@ -373,6 +373,35 @@ input[type="range"]::-moz-range-thumb {
 .hud-kings { font-family: var(--font-display); font-weight: 700; font-size: 18px; color: var(--gold-bright); display: flex; align-items: center; gap: 8px; }
 .hud-kings .crown { font-size: 16px; }
 
+/* König-Progression: kompakte Stufen-Zeile + dünner Gold-XP-Balken. Bewusst subtil
+   gehalten (dünne Spur, dezenter Gold-Fill), Look angelehnt an die Fähigkeits-Balken. */
+.hud-kingprog { display: flex; align-items: center; gap: 8px; margin-top: -2px; }
+.king-lvl-n {
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: var(--gold-bright);
+  white-space: nowrap;
+}
+.xp-track {
+  position: relative;
+  flex: 1;
+  height: 6px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  overflow: hidden;
+}
+.xp-fill {
+  position: absolute;
+  inset: 0;
+  width: 0%;
+  border-radius: 4px 0 0 4px;
+  background: linear-gradient(90deg, var(--gold-deep), var(--gold), var(--gold-bright));
+  transition: width 0.2s ease;
+}
+
 .ability { display: flex; flex-direction: column; gap: 4px; }
 .ability-bar {
   position: relative;
