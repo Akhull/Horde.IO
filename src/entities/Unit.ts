@@ -67,11 +67,14 @@ export class Unit extends Entity {
   // Anders als der Lifesteal heilt er IMMER (auch beim Fliehen/Wandern), nicht nur
   // beim Zuschlagen; es gibt keinen Faktor zurückzusetzen – der Timer steuert alles.
   regenTimer = 0;
-  // Steady-Power-Up (Anti-CC/defensiv): gleiche Zeitlogik wie die übrigen Boosts.
-  // Solange steadyTimer > 0 ist, wird der EINGEHENDE Rückstoß-Impuls in takeDamage
-  // mit POWERUP.knockbackResistFactor (< 1) multipliziert (der Träger steht fest).
-  // Es gibt – wie beim Regen – keinen Faktor zurückzusetzen: der Timer steuert alles,
-  // der Resist-Faktor wird konstant aus der Config gelesen, solange der Timer läuft.
+  // Steady-Power-Up (Anti-CC + Momentum): gleiche Zeitlogik wie die übrigen Boosts.
+  // Solange steadyTimer > 0 ist, hat steady ZWEI Effekte: (1) der EINGEHENDE Rückstoß-
+  // Impuls in takeDamage wird mit POWERUP.knockbackResistFactor (< 1) multipliziert
+  // (greift nur bei Einheiten, die Rückstoß nehmen – also NICHT beim Spieler-König);
+  // (2) ein Bewegungs-Bonus POWERUP.steadyMoveFactor (> 1) über moveSpeedFactor, der AUCH
+  // beim Spieler greift – so ist steady für JEDEN Träger ein echter Vorteil, nie ein
+  // verschwendeter Slot. Es gibt – wie beim Regen – keinen Faktor zurückzusetzen: der
+  // Timer steuert alles, beide Faktoren werden konstant aus der Config gelesen.
   steadyTimer = 0;
   dashReadyFlashTimer = 0;
   shieldReadyFlashTimer = 0;
@@ -347,9 +350,10 @@ export class Unit extends Entity {
   }
 
   // Steady-Power-Up aufnehmen (Spieler- ODER KI-König). Idempotent gegen Stacking wie
-  // die übrigen Boosts: es gibt keinen Faktor zu setzen (der Resist-Wert ist konstant aus
-  // POWERUP.knockbackResistFactor), weitere Aufnahmen verlängern nur den Timer. tickSteady
-  // zählt den Timer herunter; knockbackResistFactor liest den Faktor, solange er läuft.
+  // die übrigen Boosts: es gibt keinen Faktor zu setzen (Resist- und Tempo-Bonus sind
+  // konstant aus POWERUP), weitere Aufnahmen verlängern nur den Timer. tickSteady zählt
+  // den Timer herunter; knockbackResistFactor und moveSpeedFactor lesen ihre Faktoren,
+  // solange er läuft. Der Tempo-Bonus macht steady auch für den Spieler-König nützlich.
   applySteady(duration: number): void {
     this.steadyTimer = Math.max(this.steadyTimer, duration);
   }
@@ -385,6 +389,16 @@ export class Unit extends Entity {
   // zusätzlich (z. B. 0.25 König × 0.2 Steady = 0.05 -> nahezu standfest).
   get knockbackResistFactor(): number {
     return this.steadyTimer > 0 ? POWERUP.knockbackResistFactor : 1;
+  }
+
+  // Bewegungs-Multiplikator durch das Steady-Power-Up (1 = normal, > 1 = schneller).
+  // Read-time im Bewegungs-Schritt gelesen (wie damageBoostMult im Schadenspfad) statt
+  // this.speed zu mutieren – so verändert er keinen Basiswert und stapelt sauber
+  // MULTIPLIKATIV mit dem Speed-Orb (das this.speed ×1.5 setzt): 1.5 × 1.1. Anders als
+  // der Resist-Anteil greift dieser Bonus AUCH beim Spieler-König (der keinen Rückstoß
+  // nimmt) und macht steady damit für jeden Träger zu einer echten Aufwertung.
+  get moveSpeedFactor(): number {
+    return this.steadyTimer > 0 ? POWERUP.steadyMoveFactor : 1;
   }
 
   // Schild-Power-Up aufnehmen (Spieler- ODER KI-König). Verlängert ein aktives
@@ -602,7 +616,9 @@ export class Unit extends Entity {
     this.prevX = this.x;
     this.prevY = this.y;
     this.isMoving = false;
-    const step = (this.speed * deltaTime) / 16;
+    // moveSpeedFactor zieht den Steady-Tempo-Bonus read-time ein (1 inaktiv, 1.1 aktiv) –
+    // einziger Bewegungs-Schritt-Pfad, gilt für Spieler- UND KI-König.
+    const step = (this.speed * this.moveSpeedFactor * deltaTime) / 16;
 
     // Treffer-Flash & Rückstoß – immer, vor allen Bewegungs-Verzweigungen.
     if (this.flashTimer > 0) this.flashTimer -= deltaTime;

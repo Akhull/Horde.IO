@@ -82,6 +82,12 @@ export const POWERUP = {
   lifestealFactor: 0.35, // geheilter Anteil des ausgeteilten Schadens (Lifesteal)
   regenPerSecond: 10, // passiv regenerierte HP pro Sekunde während des Regen-Boosts
   knockbackResistFactor: 0.2, // verbleibender Anteil des Rückstoß-Impulses während "steady" (0.2 = 20% bleiben, −80% Knockback)
+  // Steady-Tempo-Bonus: damit "steady" auch für den SPIELER-König einen spürbaren Nutzen
+  // hat (der Spieler nimmt per Design keinen Rückstoß, der Resist-Anteil greift bei ihm
+  // also nicht), gibt steady ZUSÄTZLICH einen kleinen Bewegungs-Boost (+10%) – "standfest"
+  // = momentumstark unterwegs. Gilt für Spieler UND KI; getrennt vom Speed-Orb (×1.5),
+  // multipliziert sich sauber mit ihm (1.5 × 1.1) und wird read-time gelesen (kein State-Leak).
+  steadyMoveFactor: 1.1, // Bewegungs-Multiplikator während "steady" (+10%)
 } as const;
 
 // Legendäre Spezialeinheiten pro Fraktion (aus Gold-Orbs beschworen).
