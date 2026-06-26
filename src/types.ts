@@ -5,7 +5,7 @@ export type UnitType = "king" | "vassal" | "archer" | "champion";
 // Orb-Raritäten (Fortnite-Stil): grün < blau < lila < gold.
 // gold = legendärer Orb -> nur der König sammelt ihn ein und beschwört einen Champion.
 export type SoulType = "green" | "blue" | "purple" | "gold";
-export type BuildingType = "barn" | "house" | "tower";
+export type BuildingType = "barn" | "house" | "tower" | "barracks";
 export type ObstacleType = "forest" | "water";
 export type PowerUpType = "speed" | "shield" | "damage" | "armor" | "lifesteal" | "regen" | "steady";
 

@@ -230,6 +230,18 @@ export const TOWER = {
   team: -1, // gehört keinem König -> feindlich zu allen
 } as const;
 
+// Kaserne (Typ "barracks"): zerstörbares Gebäude, das SOLANGE ES LEBT periodisch eine
+// grüne Rekruten-Seele in seiner Nähe ausstößt – ein umkämpftes Karten-Objektiv, das die
+// Horden über die Karte zieht (die Horde ist dicht, der König levelt aus Seelen -> ein
+// stetiger Seelen-Brunnen ist ein starker Magnet). Bewusst träge getaktet: ein Magnet,
+// kein Selbstläufer. Beim Zerstören droppt es wie die anderen Gebäude eine Seele.
+export const BARRACKS = {
+  hp: 140, // etwas zäher als Standardgebäude (100), es ist ein lohnendes Ziel
+  spawnInterval: 9000, // ms zwischen zwei Rekruten-Seelen (bewusst träge -> ein Magnet, kein Selbstläufer)
+  soulType: "green" as const, // emittiert grüne Seelen (Standard-Vasall / König-XP-Beitrag)
+  spawnRadius: 90, // Seele erscheint in diesem Radius um die Kaserne (nicht exakt im Sprite)
+} as const;
+
 // KI-König-Verhalten: Persönlichkeits-Tiers + globale Tuning-Werte.
 // Jeder der 10 KI-Könige bekommt im Konstruktor zufällig ein Tier zugewiesen.
 // Die Tiers modulieren NUR das Königs-Verhalten (Vasallen bleiben unverändert),

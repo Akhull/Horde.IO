@@ -268,8 +268,17 @@ function drawMinimap(canvas: HTMLCanvasElement, game: NonNullable<typeof gameRef
     ctx.fillRect(toX(o.x), toY(o.y), Math.max(1, o.width * scale), Math.max(1, o.height * scale));
   }
 
-  ctx.fillStyle = "#888888";
-  for (const b of game.buildings) ctx.fillRect(toX(b.x) - 1, toY(b.y) - 1, 3, 3);
+  // Gebäude grau – außer der Kaserne (Rekruten-Brunnen-Objektiv): warmes Gold und
+  // etwas größer, damit der Spieler das umkämpfte Ziel auf der Karte sofort findet.
+  for (const b of game.buildings) {
+    if (b.buildingType === "barracks") {
+      ctx.fillStyle = "#e0a020";
+      ctx.fillRect(toX(b.x) - 2, toY(b.y) - 2, 4, 4);
+    } else {
+      ctx.fillStyle = "#888888";
+      ctx.fillRect(toX(b.x) - 1, toY(b.y) - 1, 3, 3);
+    }
+  }
 
   const player = game.playerKing;
   const playerTeam = player?.team;

@@ -72,7 +72,9 @@ export function generateBuildingClusters(scene: GameScene): void {
       }
       if (valid) {
         const r = Math.random();
-        const type: BuildingType = r < 0.5 ? "barn" : r < 0.8 ? "house" : "tower";
+        // "barracks" ist bewusst SELTEN (~8%): es ist der starke Rekruten-Brunnen-Objektiv,
+        // ein Dauer-Magnet für die Horden – häufig wäre er ein Selbstläufer statt Streitpunkt.
+        const type: BuildingType = r < 0.45 ? "barn" : r < 0.72 ? "house" : r < 0.92 ? "tower" : "barracks";
         const b = new Building(scene, x, y, type);
         cluster.push(b);
         scene.buildings.push(b);

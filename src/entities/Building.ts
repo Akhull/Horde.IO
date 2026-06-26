@@ -1,6 +1,6 @@
 import Phaser from "phaser";
 import { Entity } from "./Entity";
-import { DEPTH, TOWER } from "../config/gameConfig";
+import { DEPTH, TOWER, BARRACKS } from "../config/gameConfig";
 import type { BuildingType } from "../types";
 import type { GameScene } from "../scenes/GameScene";
 
@@ -9,8 +9,13 @@ import type { GameScene } from "../scenes/GameScene";
 export class Building extends Entity {
   buildingType: BuildingType;
   hp = 100;
+  // Maximal-HP des Gebäudes (typabhängig) – speist die Healthbar-Breite in sync().
+  // Bewusst gespeichert statt fest 100, damit die Kaserne (BARRACKS.hp) korrekt skaliert.
+  maxHp = 100;
   // Turm-Feuertakt (ms hochzählend); für Nicht-Türme ungenutzt.
   fireTimer = 0;
+  // Kaserne-Rekruten-Takt (ms hochzählend); nur von "barracks" genutzt (s. systems/combat).
+  spawnTimer = 0;
   private flashFrames = 0;
   private sprite: Phaser.GameObjects.Image;
   private barBg: Phaser.GameObjects.Rectangle;
@@ -19,8 +24,16 @@ export class Building extends Entity {
   constructor(scene: Phaser.Scene, x: number, y: number, buildingType: BuildingType) {
     super(x, y, 60, 60);
     this.buildingType = buildingType;
+    // HP/maxHp typabhängig: Kaserne ist zäher (lohnendes Objektiv), Rest behält 100.
+    if (buildingType === "barracks") {
+      this.hp = BARRACKS.hp;
+      this.maxHp = BARRACKS.hp;
+    }
     // Türme zeitlich versetzt starten, damit nicht alle gleichzeitig feuern.
     if (buildingType === "tower") this.fireTimer = Math.random() * TOWER.fireInterval;
+    // Kasernen zeitlich versetzt starten, damit nicht alle gleichzeitig emittieren
+    // (gleicher Trick wie beim Turm-fireTimer).
+    if (buildingType === "barracks") this.spawnTimer = Math.random() * BARRACKS.spawnInterval;
 
     this.sprite = scene.add
       .image(this.centerX, this.centerY, buildingType)
@@ -51,7 +64,7 @@ export class Building extends Entity {
       this.flashFrames--;
       if (this.flashFrames === 0) this.sprite.clearTint();
     }
-    this.barFill.width = this.width * Phaser.Math.Clamp(this.hp / 100, 0, 1);
+    this.barFill.width = this.width * Phaser.Math.Clamp(this.hp / this.maxHp, 0, 1);
   }
 
   destroyView(): void {

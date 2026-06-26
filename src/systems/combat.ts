@@ -1,5 +1,6 @@
 import { Unit } from "../entities/Unit";
-import { TOWER } from "../config/gameConfig";
+import { Soul } from "../entities/Soul";
+import { TOWER, BARRACKS } from "../config/gameConfig";
 import { pickTowerTarget } from "./towerTargeting";
 import type { GameScene } from "../scenes/GameScene";
 
@@ -26,5 +27,32 @@ export function updateTowers(scene: GameScene, deltaTime: number): void {
       // Kein Ziel: nicht jeden Frame neu scannen, aber reaktionsschnell bleiben.
       b.fireTimer = TOWER.fireInterval - 250;
     }
+  }
+}
+
+// Lässt lebende Kasernen periodisch eine grüne Rekruten-Seele in ihrer Nähe ausstoßen.
+// Diese Seele fließt durch den bestehenden applySoulMagnetism/handleSouls-Pfad – die Horde
+// wird zur Kaserne gezogen, das Gebäude wird so zum umkämpften Karten-Objektiv (Magnet).
+// Allokationsfrei, solange nicht emittiert wird (kein Per-Frame-Müll).
+export function updateBarracks(scene: GameScene, deltaTime: number): void {
+  for (const b of scene.buildings) {
+    if (b.buildingType !== "barracks" || b.hp <= 0) continue;
+    b.spawnTimer += deltaTime;
+    if (b.spawnTimer < BARRACKS.spawnInterval) continue;
+    b.spawnTimer = 0;
+
+    // Zufälliger Punkt im Spawn-Radius um das Kaserne-Zentrum (Winkel+Radius wie in worldgen),
+    // damit die Seele nicht exakt im Sprite, sondern davor/daneben erscheint.
+    const angle = Math.random() * Math.PI * 2;
+    const radius = Math.random() * BARRACKS.spawnRadius;
+    const sx = b.centerX + Math.cos(angle) * radius;
+    const sy = b.centerY + Math.sin(angle) * radius;
+
+    const soul = new Soul(scene, sx, sy, BARRACKS.soulType);
+    scene.souls.push(soul);
+    scene.grid.addEntity(soul);
+
+    // Dezente grüne Emissions-Juice an der Kaserne, damit der Ausstoß lesbar ist.
+    scene.spawnVisualEffect(b.centerX, b.centerY, { r: 46, g: 204, b: 113 }, 8, 320, 2, 1);
   }
 }

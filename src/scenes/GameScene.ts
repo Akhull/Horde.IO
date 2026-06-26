@@ -38,7 +38,7 @@ import {
   removeDeadUnits,
   applySoulMagnetism,
 } from "../systems/gameplay";
-import { updateTowers } from "../systems/combat";
+import { updateTowers, updateBarracks } from "../systems/combat";
 import { bus, gameRef } from "../ui/bus";
 
 interface Particle {
@@ -450,6 +450,7 @@ export class GameScene extends Phaser.Scene {
 
     for (const u of this.units) u.update(dt, this);
     updateTowers(this, dt);
+    updateBarracks(this, dt);
 
     for (let i = this.projectiles.length - 1; i >= 0; i--) {
       this.projectiles[i].update(dt, this);

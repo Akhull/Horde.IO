@@ -40,6 +40,9 @@ export class BootScene extends Phaser.Scene {
     this.load.image("barn", `${S}/medievalStructure_19.png`);
     this.load.image("house", `${S}/medievalStructure_17.png`);
     this.load.image("tower", `${S}/medievalStructure_12.png`);
+    // Kaserne (Rekruten-Brunnen-Objektiv): befestigtes Torhaus, klar von Scheune/Haus/Turm
+    // unterscheidbar. Wie die anderen Gebäude OHNE Tint laden (Kenney-Art ist fertig koloriert).
+    this.load.image("barracks", `${S}/medievalStructure_02.png`);
 
     // Boden-/Terrain-Kacheln (als TileSprite genutzt). "grass" behält seinen Key,
     // damit der GameScene-Boden + die Tag/Nacht-Tönung unangetastet bleiben.
