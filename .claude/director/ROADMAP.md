@@ -42,8 +42,13 @@ MUST pull from `medieval-rts` and keep this language; new pickups reuse the `orb
       4-way speed/shield/damage/armor. Shipped 4f10237.
 
 ### P2 — valuable, may need a small split
-- [ ] **New building type** — e.g. Barracks (periodically spawns a neutral unit) or Cathedral (small heal aura).
-      Adds map-objective variety beyond "wall of HP that drops a soul".
+- [x] **New building type: Barracks (Kaserne)** — zerstörbares Gebäude, das SOLANGE ES LEBT alle 9 s eine
+      grüne Rekruten-Seele in seiner Nähe ausstößt → umkämpftes Karten-Objektiv, das die dichte/levelnde
+      Horde aktiv über die Karte zieht (Magnet, kein Selbstläufer). BARRACKS (gameConfig): hp 140,
+      spawnInterval 9000, soulType green, spawnRadius 90. updateBarracks (combat.ts, neben updateTowers),
+      ~8% worldgen-Rate, Minimap-Gold-Punkte, Sprite medievalStructure_02 (befestigtes Torhaus). Balance-
+      Review: gesund (green=1 König-XP, L6-Camping=13.5 min unpraktikabel, Safe-Zone brennt äußere Fontänen
+      weg). Shipped 7d7d867.
 - [ ] **New obstacle: slow terrain** (swamp) — passable but halves speed; first non-binary terrain.
 - [x] **King progression** — der König levelt aus JEDER eingesammelten Seele (nicht nur Gold), max L6.
       `KING_PROGRESSION` (gameConfig): xpPerSoul green/blue/purple/gold 1/2/3/5, Kurve xpToNext [_,6,10,16,24,34]
@@ -67,6 +72,31 @@ MUST pull from `medieval-rts` and keep this language; new pickups reuse the `orb
 
 ## Changelog (append-only, newest first)
 <!-- Director appends: `- YYYY-MM-DD — feat: <slice> — verified <how> — <commit>` -->
+- 2026-06-26 — feat: KASERNE (Barracks) — neuer Gebäudetyp als Rekruten-Fontäne/Karten-Objektiv. Die Horde ist
+  jetzt dicht und der König levelt aus Seelen → es fehlte ein Grund, sich aktiv zu bewegen. Die Kaserne stößt
+  solange sie lebt alle 9 s (BARRACKS.spawnInterval) eine grüne Rekruten-Seele in spawnRadius 90 aus (fließt
+  durch den bestehenden Magnet/handleSouls-Pfad → freier Vasall + König-XP für den Halter); beim Zerstören
+  droppt sie wie die anderen Gebäude (purple via handleBuildings-Default). BARRACKS: hp 140 (zäher als 100,
+  lohnendes Ziel), green, spawnRadius 90. Building bekam ein maxHp-Feld (Healthbar teilt jetzt durch maxHp
+  statt fest 100 → korrekt für alle Typen) + spawnTimer mit zufälligem Startoffset (wie Turm-fireTimer, kein
+  Gleichtakt). systems/combat.updateBarracks (neben updateTowers, allokationsfrei ohne Emission), in
+  GameScene.update eingehängt. worldgen ~8% (r>=0.92). Minimap: Gold-Punkte (#e0a020, 4px) → Objektiv auf
+  einen Blick. Sprite medievalStructure_02 (befestigtes Torhaus, asset-librarian gewählt, ohne Tint). —
+  verified typecheck + 58 vitest + lint(0) + build grün; LIVE Playwright+__horde: Textur lädt, worldgen
+  spawnt 45/521 Kasernen (~8.6%), Emission feuert (souls 11→26 in ~2 s über die Population), Minimap-Gold-
+  Punkte sichtbar, 4-Gebäude-Vergleichs-Shot bestätigt die Kaserne klar distinkt von barn/house/tower,
+  143–165 FPS, 0 Konsolenfehler. Balance-Review: alle Werte gesund (green=1 König-XP, reines L6-Camping
+  ~13.5 min unpraktikabel, Safe-Zone kollabiert die Fontänen-Zahl mit der Zeit), keine Änderung — 7d7d867.
+- 2026-06-26 — test: König-Progression-Mathematik in ein Phaser-freies Modul extrahiert + 17 Tests (41→58).
+  Die Logik lag als inline-Schleife/-Ausdrücke in der Phaser-gekoppelten Unit-Klasse und war nicht isoliert
+  testbar. Reine Kurven-Math nach systems/kingProgression.ts (gleiches Muster wie cameraFeel.ts):
+  kingDamageMult, kingSizeMult, kingDisplaySize, applyKingXp (deterministischer XP→Stufe-Kern). Unit
+  verhaltensERHALTEND umverdrahtet (gainKingXp ruft applyKingXp + feuert Level-up-Juice pro Stufe;
+  levelUpKing nutzt kingDisplaySize; meleeDamage nutzt kingDamageMult — gleiche Formeln, nur isoliert). Tests
+  decken XP-Schwellen, Mehrfach-Level-ups, MAX-Cap (kein Out-of-Bounds), per-Level-Boni, Monotonie/Cap-
+  Invariante, Config-Sanity; referenzieren KING_PROGRESSION → prüfen Invarianten, überleben Balance-Tweaks.
+  Befund: Size-Cap (1.3) bindet bei maxLevel=6 noch nicht (Wachstum nur 1.25) → Headroom für spätere
+  maxLevel-Anhebung. — verified typecheck + 58 vitest + lint(0) + build grün — 8fe97b8.
 - 2026-06-26 — feat: KÖNIG-PROGRESSION (das mechanische Gegenstück zur dichten Horde). Der König wuchs nie
   selbst, obwohl er Seelen für die Armee sammelte. Jetzt levelt der KÖNIG aus JEDER Seele, die sein Team
   erntet (nicht nur Gold), max L6: KING_PROGRESSION (gameConfig) xpPerSoul green/blue/purple/gold 1/2/3/5,
