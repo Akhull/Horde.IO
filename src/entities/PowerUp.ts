@@ -14,8 +14,16 @@ export class PowerUp extends Entity {
     super(x, y, 28, 28);
     this.effectType = effectType;
     this.duration = duration;
-    // speed = gold, shield = himmelblau, damage = rot-orange (aggressive Optik).
-    const color = effectType === "speed" ? 0xffd700 : effectType === "shield" ? 0x00bfff : 0xff5722;
+    // speed = gold, shield = himmelblau, damage = rot-orange (aggressiv),
+    // armor = stahl-blaugrau (defensiv/robust).
+    const color =
+      effectType === "speed"
+        ? 0xffd700
+        : effectType === "shield"
+          ? 0x00bfff
+          : effectType === "damage"
+            ? 0xff5722
+            : 0x9aa7b4;
     this.sprite = scene.add
       .circle(this.centerX, this.centerY, 14, color, 0.9)
       .setStrokeStyle(3, 0xffffff)

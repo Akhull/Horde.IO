@@ -55,8 +55,15 @@ export const UNIT_STATS = {
 // ein gleich starker, gleich langer OFFENSIV-Boost als Gegenstück zum Tempo.
 // damageMultiplier wirkt OBEN AUF den Fraktions-Schadensmodifikator (meleeDamage)
 // und auf den Pfeilschaden – kurzzeitig deutlich härtere Schläge.
+// armorMultiplier ist das DEFENSIVE Gegenstück (gleiche 6-s-Dauer): er skaliert
+// EINGEHENDEN Schaden in takeDamage (Kampf) und in applySafeZoneDamage (Zonenrand).
+// 0.6 = −40% Schaden – spürbar, aber kein Unsterblichkeits-Knopf, und symmetrisch
+// zur +50% Offensive des Damage-Boosts. Stapelt multiplikativ mit dem Schild
+// (Schild halbiert NUR Zonenschaden): am Zonenrand 0.5 × 0.6 = 0.3 (kein Doppel-
+// Abzug desselben Effekts, sondern zwei bewusst kombinierbare Schutzschichten).
 export const POWERUP = {
   damageMultiplier: 1.5, // Nahkampf- UND Pfeilschaden während des Boosts
+  armorMultiplier: 0.6, // eingehender Schaden während des Armor-Boosts (−40%)
 } as const;
 
 // Legendäre Spezialeinheiten pro Fraktion (aus Gold-Orbs beschworen).

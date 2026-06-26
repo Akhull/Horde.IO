@@ -50,6 +50,11 @@ export class Unit extends Entity {
   // berechnet, ein laufender Faktor genügt also (kein Stacking-Leak möglich).
   damageBoostTimer = 0;
   private damageBoostMult = 1;
+  // Rüstungs-Power-Up (defensives Gegenstück zum Schadens-Boost): gleiche Zeitlogik.
+  // Solange armorTimer > 0 ist, skaliert armorMult den EINGEHENDEN Schaden (< 1 =
+  // Reduktion) in takeDamage und beim Zonenschaden; Aufsammeln verlängert nur die Dauer.
+  armorTimer = 0;
+  private armorMult = 1;
   dashReadyFlashTimer = 0;
   shieldReadyFlashTimer = 0;
   idleTarget: Vec2 | null = null;
@@ -300,6 +305,20 @@ export class Unit extends Entity {
     this.damageBoostTimer = Math.max(this.damageBoostTimer, duration);
   }
 
+  // Rüstungs-Power-Up aufnehmen (Spieler- ODER KI-König). Idempotent gegen Stacking
+  // wie die übrigen Boosts; tickArmorBoost setzt den Faktor beim Ablauf auf 1 zurück.
+  applyArmorBoost(duration: number): void {
+    if (this.armorTimer <= 0) this.armorMult = POWERUP.armorMultiplier;
+    this.armorTimer = Math.max(this.armorTimer, duration);
+  }
+
+  // Eingehender-Schaden-Faktor durch die Rüstung (1 = kein Schutz, < 1 = Reduktion).
+  // Öffentlich, damit applySafeZoneDamage den Zonenschaden ebenfalls reduzieren kann –
+  // dort multiplikativ mit der Schild-Halbierung kombiniert (zwei Schutzschichten).
+  get armorDamageFactor(): number {
+    return this.armorMult;
+  }
+
   // Schild-Power-Up aufnehmen (Spieler- ODER KI-König). Verlängert ein aktives
   // Schild, statt es zu überschreiben – identisch zur bisherigen Spieler-Logik.
   applyShieldPowerUp(duration: number): void {
@@ -331,6 +350,16 @@ export class Unit extends Entity {
     }
   }
 
+  // Zählt den Rüstungs-Boost herunter und setzt den Faktor beim Ablauf auf 1 zurück.
+  private tickArmorBoost(deltaTime: number): void {
+    if (this.armorTimer <= 0) return;
+    this.armorTimer -= deltaTime;
+    if (this.armorTimer <= 0) {
+      this.armorTimer = 0;
+      this.armorMult = 1;
+    }
+  }
+
   // Zählt ein aktives Schild herunter (Fähigkeit beim Spieler, Power-Up bei allen
   // Königen). Zentral in updateKing, damit es auch für KI-Könige korrekt abläuft.
   private tickShield(deltaTime: number): void {
@@ -345,7 +374,9 @@ export class Unit extends Entity {
     if (this.hp <= 0) return;
     // Hardcore: nur der SPIELER-König nimmt mehr Schaden (playerDamageTaken > 1).
     // Für alle anderen bleibt der Multiplikator 1.0 -> kein Effekt.
-    const dmg = this === scene.playerKing ? amount * scene.playerDamageTaken : amount;
+    // armorMult (Rüstungs-Power-Up, < 1) reduziert den eingehenden Schaden zuletzt –
+    // die angezeigte Schadenszahl und onPlayerKingHit sehen denselben reduzierten Wert.
+    const dmg = (this === scene.playerKing ? amount * scene.playerDamageTaken : amount) * this.armorMult;
     this.hp -= dmg;
     this.flashTimer = FEEDBACK.flashDuration;
 
@@ -638,6 +669,7 @@ export class Unit extends Entity {
     // zentral getickt (sonst liefe ein KI-Schild aus dem Power-Up nie ab).
     this.tickSpeedBoost(deltaTime);
     this.tickDamageBoost(deltaTime);
+    this.tickArmorBoost(deltaTime);
     this.tickShield(deltaTime);
     if (this === scene.playerKing) {
       this.updatePlayerKing(deltaTime, step, scene);

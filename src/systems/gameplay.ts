@@ -113,6 +113,9 @@ export function applySafeZoneDamage(scene: GameScene, deltaTime: number): void {
     if (dx * dx + dy * dy > rSq) {
       let dmg = 0.05 * deltaTime;
       if (u.isShieldActive) dmg *= 0.5;
+      // Rüstungs-Power-Up reduziert auch den Zonenschaden; kombiniert sich
+      // multiplikativ mit der Schild-Halbierung (0.5 × armorDamageFactor).
+      dmg *= u.armorDamageFactor;
       u.hp -= dmg;
     }
     if (u.hp <= 0) anyDead = true;
@@ -144,6 +147,10 @@ export function handlePowerUps(scene: GameScene): void {
       // Schadens-Boost: rot-oranger Funkenausbruch passend zur Orb-Farbe.
       taker.applyDamageBoost(p.duration);
       scene.spawnVisualEffect(p.centerX, p.centerY, { r: 255, g: 87, b: 34 }, 15, 400, 3, 1.2);
+    } else if (p.effectType === "armor") {
+      // Rüstungs-Boost: stahl-blaugrauer Funkenausbruch passend zur Orb-Farbe.
+      taker.applyArmorBoost(p.duration);
+      scene.spawnVisualEffect(p.centerX, p.centerY, { r: 154, g: 167, b: 180 }, 15, 400, 3, 1.2);
     } else {
       taker.applyShieldPowerUp(p.duration);
       scene.spawnVisualEffect(p.centerX, p.centerY, { r: 0, g: 191, b: 255 }, 15, 400, 3, 1.2);
