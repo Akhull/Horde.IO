@@ -1,5 +1,6 @@
 import Phaser from "phaser";
 import { FACTIONS } from "../config/gameConfig";
+import { preloadSheets, setupAnimations } from "../systems/animations";
 
 // Lädt alle Assets (Sprites, Sounds, Menühintergründe) und erzeugt prozedurale
 // Texturen (Gras-Boden, Partikel), damit keine externen URLs nötig sind.
@@ -57,11 +58,15 @@ export class BootScene extends Phaser.Scene {
     this.load.audio("ui_click", `${A}audiosfx/Building Colapse/Building Cilapse 1.mp3`);
     this.load.audio("war_ambience", `${A}audiosfx/Medieval Fight Ambient Dynamic Sound/MedievalFightAmbientLoop.mp3`);
     this.load.audio("music", `${A}music/Theme Music.mp3`);
+
+    // Eigene animierte Sprite-Sheets (falls in spriteConfig hinterlegt)
+    preloadSheets(this);
   }
 
   create(): void {
     this.makeGrassTexture();
     this.makeDotTexture();
+    setupAnimations(this); // Demo-Charakter erzeugen + Animationen registrieren
     this.scene.start("Title");
   }
 

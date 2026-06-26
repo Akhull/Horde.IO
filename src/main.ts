@@ -36,3 +36,6 @@ const game = new Phaser.Game(config);
 // Standard-Lautstärken (werden in den Optionen verändert).
 game.registry.set("musicVolume", 0.5);
 game.registry.set("sfxVolume", 0.5);
+
+// Für Debugging/Tests von aussen erreichbar.
+(globalThis as unknown as { __horde?: Phaser.Game }).__horde = game;

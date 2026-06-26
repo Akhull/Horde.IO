@@ -4,6 +4,8 @@ import { CONFIG, UNIT_STATS, DEPTH } from "../config/gameConfig";
 import type { Faction, UnitType } from "../types";
 import type { Vec2 } from "../systems/AI";
 import { determineVassalTarget } from "../systems/AI";
+import { resolveUnitSheet, animKey } from "../systems/animations";
+import { FACTION_TINT, type AnimName } from "../config/spriteConfig";
 import type { GameScene } from "../scenes/GameScene";
 
 // Eine Einheit: König (Spieler/KI), Vasall (Nahkampf) oder Bogenschütze.
@@ -52,7 +54,12 @@ export class Unit extends Entity {
   private readonly footstepMax = 450;
 
   // Darstellung
-  private sprite: Phaser.GameObjects.Image;
+  private sprite: Phaser.GameObjects.Sprite;
+  private spriteKey: string;
+  private sheetKey: string | null = null;
+  private isDemoSheet = false;
+  private currentAnim: string | null = null;
+  private wasAttacking = false;
   private barBg: Phaser.GameObjects.Rectangle;
   private barFill: Phaser.GameObjects.Rectangle;
   private shieldRing?: Phaser.GameObjects.Arc;
@@ -95,9 +102,15 @@ export class Unit extends Entity {
     this.prevY = y;
     this.footstepTimer = this.footstepMin + Math.random() * (this.footstepMax - this.footstepMin);
 
-    const spriteKey = unitType === "king" ? `${faction}_king` : `${faction}_l${level}`;
-    this.sprite = scene.add.image(this.centerX, this.centerY, spriteKey).setDepth(DEPTH.unit);
+    this.spriteKey = unitType === "king" ? `${faction}_king` : `${faction}_l${level}`;
+    const sheet = resolveUnitSheet(this.spriteKey);
+    const texKey = sheet ? sheet.textureKey : this.spriteKey;
+    this.sheetKey = sheet ? sheet.sheetKey : null;
+    this.isDemoSheet = sheet?.isDemo ?? false;
+    this.sprite = scene.add.sprite(this.centerX, this.centerY, texKey).setDepth(DEPTH.unit);
     this.sprite.setDisplaySize(this.width, this.height);
+    if (this.isDemoSheet) this.sprite.setTint(FACTION_TINT[faction]);
+    this.playAnim("idle");
 
     const barH = unitType === "king" ? 8 : 5;
     this.barBg = scene.add.rectangle(this.x, this.y, this.width, barH, 0x000000).setOrigin(0, 0.5).setDepth(DEPTH.healthbar);
@@ -115,13 +128,58 @@ export class Unit extends Entity {
     return this.unitType === "king" ? UNIT_STATS.king.hp : 100;
   }
 
-  // Vasall auf eine höhere Stufe heben: Grösse und Sprite aktualisieren.
+  // Spielt eine Animation (idle/walk/attack/death), falls für das Sheet vorhanden.
+  private playAnim(name: AnimName, restart = false): void {
+    if (!this.sheetKey) return;
+    const key = animKey(this.sheetKey, name);
+    if (!this.sprite.scene.anims.exists(key)) return;
+    if (this.currentAnim === key && !restart) return;
+    this.currentAnim = key;
+    this.sprite.play(key, true);
+  }
+
+  // Wählt die Animation passend zum Zustand: Angriff > Laufen > Idle.
+  private updateAnimationState(): void {
+    if (!this.sheetKey) return;
+    if (this.isAttacking) {
+      this.playAnim("attack", !this.wasAttacking); // bei neuem Angriff neu starten
+    } else if (this.isMoving) {
+      this.playAnim("walk");
+    } else {
+      this.playAnim("idle");
+    }
+    this.wasAttacking = this.isAttacking;
+  }
+
+  // Vasall auf eine höhere Stufe heben: Grösse/Sprite/Animation aktualisieren + Aufleucht-Pop.
   setLevel(n: number): void {
     this.level = n;
     const s = UNIT_STATS.vassal.sizeByLevel[n] ?? 40;
     this.width = s;
     this.height = s;
-    this.sprite.setTexture(`${this.faction}_l${n}`).setDisplaySize(s, s);
+
+    this.spriteKey = `${this.faction}_l${n}`;
+    const sheet = resolveUnitSheet(this.spriteKey);
+    const texKey = sheet ? sheet.textureKey : this.spriteKey;
+    this.sheetKey = sheet ? sheet.sheetKey : null;
+    this.isDemoSheet = sheet?.isDemo ?? false;
+
+    this.sprite.setTexture(texKey);
+    this.sprite.setDisplaySize(s, s);
+    if (this.isDemoSheet) this.sprite.setTint(FACTION_TINT[this.faction]);
+    else this.sprite.clearTint();
+
+    this.currentAnim = null;
+    this.playAnim(this.isMoving ? "walk" : "idle");
+
+    // Level-up: kurzer Skalierungs-Pop
+    this.sprite.scene.tweens.add({
+      targets: this.sprite,
+      scaleX: this.sprite.scaleX * 1.3,
+      scaleY: this.sprite.scaleY * 1.3,
+      duration: 150,
+      yoyo: true,
+    });
   }
 
   // Spielt den passenden Nahkampf-Sound je nach Einheitentyp/Level.
@@ -475,6 +533,7 @@ export class Unit extends Entity {
       this.bobbingPhase = 0;
     }
 
+    this.updateAnimationState();
     if (!this.dead) scene.grid.updateEntity(this);
   }
 
@@ -503,10 +562,18 @@ export class Unit extends Entity {
   scenePlayerTeam: number | null = null;
 
   destroyView(): void {
-    this.sprite.destroy();
     this.barBg.destroy();
     this.barFill.destroy();
     this.shieldRing?.destroy();
     this.archerOutline?.destroy();
+
+    const s = this.sprite;
+    if (this.sheetKey && s.scene.anims.exists(animKey(this.sheetKey, "death"))) {
+      // Tod-Animation abspielen und dann sanft ausblenden
+      s.play(animKey(this.sheetKey, "death"), true);
+      s.scene.tweens.add({ targets: s, alpha: 0, duration: 600, delay: 150, onComplete: () => s.destroy() });
+    } else {
+      s.destroy();
+    }
   }
 }

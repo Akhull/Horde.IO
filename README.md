@@ -39,6 +39,14 @@ npm run preview  # gebauten Stand lokal ansehen
 **Steuerung:** `WASD`/Pfeiltasten = Bewegung · `Leertaste` = Dash · `Q` = Schild.
 Auf Touchgeräten erscheinen automatisch ein virtueller Joystick und Aktionsbuttons.
 
+## 🎞️ Eigene Sprites & Animationen
+
+Es gibt ein **Sprite-Sheet-Animationssystem** mit vier Animationen pro Einheit
+(idle, walk, attack, death). Standardmäßig läuft ein prozedural erzeugter
+Demo-Charakter, damit Animationen sofort sichtbar sind. Eigene Grafiken steckst
+du über `src/config/spriteConfig.ts` ein — die vollständige Anleitung steht in
+**[SPRITES.md](./SPRITES.md)**.
+
 ## 🕹️ Das Original starten
 
 ```bash
