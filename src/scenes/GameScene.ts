@@ -263,18 +263,21 @@ export class GameScene extends Phaser.Scene {
     this.projectiles.push(new Projectile(this, x, y, target, damage, team, attacker));
   }
 
-  spawnSlash(x: number, y: number, rotation: number, unitWidth: number): void {
+  // figureWidth ist die optische Figurbreite (Unit.barRef), nicht die Hitbox. Die Sichel
+  // startet kompakt (~0.9× Figurbreite) und wischt auf ~1.8× auf – bewusst kleiner als
+  // zuvor (war 1.0×→2.4×), damit sie zur neuen, größeren Unit-Optik passt statt sie zu überdecken.
+  spawnSlash(x: number, y: number, rotation: number, figureWidth: number): void {
     const img = this.add
       .image(x, y, "slash")
       .setRotation(rotation)
       .setDepth(DEPTH.slash)
       .setAlpha(0.5);
-    img.setDisplaySize(unitWidth * 2, unitWidth * 2);
+    img.setDisplaySize(figureWidth * 1.8, figureWidth * 1.8);
     img.setScale(img.scaleX * 0.5, img.scaleY * 0.5);
     this.tweens.add({
       targets: img,
-      scaleX: img.scaleX * 2.4,
-      scaleY: img.scaleY * 2.4,
+      scaleX: img.scaleX * 2,
+      scaleY: img.scaleY * 2,
       alpha: 0,
       duration: 450,
       onComplete: () => img.destroy(),

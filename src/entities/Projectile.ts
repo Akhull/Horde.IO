@@ -42,7 +42,9 @@ export class Projectile extends Entity {
   private sprite: Phaser.GameObjects.Image;
 
   constructor(scene: Phaser.Scene, x: number, y: number, target: ProjectileTarget, damage: number, team: number, attacker?: ProjectileAttacker) {
-    super(x, y, 35, 7);
+    // Pfeil bewusst kompakter als zuvor (war 35×7): die größeren Unit-Sprites lassen einen
+    // langen Pfeil überdimensioniert wirken, 26×6 passt deutlich besser ins neue Größenbild.
+    super(x, y, 26, 6);
     this.target = target;
     this.damage = damage;
     this.attacker = attacker;

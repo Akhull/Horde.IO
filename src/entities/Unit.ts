@@ -1,6 +1,6 @@
 import Phaser from "phaser";
 import { Entity } from "./Entity";
-import { CONFIG, UNIT_STATS, DEPTH, FEEDBACK, AI, FACTION_STATS, LEGENDARY, POWERUP } from "../config/gameConfig";
+import { CONFIG, UNIT_STATS, DEPTH, FEEDBACK, AI, FACTION_STATS, LEGENDARY, POWERUP, HITBOX_SCALE } from "../config/gameConfig";
 import type { AIPersonality } from "../config/gameConfig";
 import type { Faction, UnitType } from "../types";
 import type { Vec2 } from "../systems/AI";
@@ -117,6 +117,13 @@ export class Unit extends Entity {
   private readonly footstepMin = 300;
   private readonly footstepMax = 450;
 
+  // Anzeigegröße des Sprites (setDisplaySize). Bewusst von der Hitbox (width/height)
+  // entkoppelt: die Figur rendert groß, die Hitbox bleibt über HITBOX_SCALE moderat.
+  private displaySize: number;
+  // Optische Bezugsbreite für Healthbar/Ringe (≈ sichtbare Figurbreite, nicht die
+  // kleine Hitbox und nicht das ganze gepaddete Chip). In sync() wiederverwendet.
+  private barRef = 0;
+
   // Darstellung (statisches Kenney-Sprite, Faktionsfarbe ist ins PNG gebacken).
   private sprite: Phaser.GameObjects.Sprite;
   private spriteKey: string;
@@ -139,8 +146,7 @@ export class Unit extends Entity {
       this.dashTimer = CONFIG.dashCooldown;
       this.shieldCooldownTimer = CONFIG.shieldAbilityCooldown;
       this.leader = this;
-      this.width = UNIT_STATS.king.size;
-      this.height = UNIT_STATS.king.size;
+      this.displaySize = UNIT_STATS.king.size;
       // Persönlichkeit gleichverteilt würfeln. So verhalten sich die 10 KI-Könige
       // spürbar unterschiedlich (Aggro/Rückzug/Sammeln), statt 10x identisch.
       const pool = AI.personalityPool;
@@ -151,8 +157,7 @@ export class Unit extends Entity {
       this.speed = UNIT_STATS.archer.speed;
       this.leader = leader!;
       this.attackCooldown = UNIT_STATS.archer.attackCooldown;
-      this.width = UNIT_STATS.archer.size;
-      this.height = UNIT_STATS.archer.size;
+      this.displaySize = UNIT_STATS.archer.size;
     } else if (unitType === "champion") {
       // Legendäre Spezialeinheit (aus Gold-Orb). Deutlich größer/zäher als ein Vasall;
       // die fraktionsspezifische Mechanik (Aura/Reichweite/AoE) steckt in LEGENDARY.
@@ -160,8 +165,7 @@ export class Unit extends Entity {
       this.hp = UNIT_STATS.champion.hp;
       this.speed = UNIT_STATS.champion.speed;
       this.leader = leader!;
-      this.width = UNIT_STATS.champion.size;
-      this.height = UNIT_STATS.champion.size;
+      this.displaySize = UNIT_STATS.champion.size;
       // Fernkampf-Legendäre (Elf-Erzschütze) brauchen eine Feuerrate (sonst feuert
       // updateArcher mit attackCooldown 0 jeden Frame).
       this.attackCooldown = LEGENDARY[faction].attackCooldown ?? UNIT_STATS.archer.attackCooldown;
@@ -170,10 +174,12 @@ export class Unit extends Entity {
       this.hp = UNIT_STATS.vassal.hp;
       this.speed = UNIT_STATS.vassal.speed;
       this.leader = leader!;
-      const s = UNIT_STATS.vassal.sizeByLevel[level] ?? 40;
-      this.width = s;
-      this.height = s;
+      this.displaySize = UNIT_STATS.vassal.sizeByLevel[level] ?? UNIT_STATS.vassal.sizeByLevel[1];
     }
+    // Hitbox (width/height) aus der Anzeigegröße ableiten – bewusst kleiner (HITBOX_SCALE),
+    // damit die großen Figuren den Kollisions-/Formations-Footprint nicht aufblähen.
+    this.width = this.displaySize * HITBOX_SCALE;
+    this.height = this.displaySize * HITBOX_SCALE;
 
     // Fraktions-Identität: hp/speed/damage werden EINMAL mit dem fraktionseigenen
     // Modifikator multipliziert (siehe FACTION_STATS). Gilt für JEDEN Typ – König,
@@ -196,35 +202,45 @@ export class Unit extends Entity {
     // genau diesen Keys); kein Tint, die Faktionsfarbe steckt im Sprite.
     this.spriteKey = unitType === "king" ? `${faction}_king` : unitType === "champion" ? `${faction}_l3` : `${faction}_l${level}`;
     this.sprite = scene.add.sprite(this.centerX, this.centerY, this.spriteKey).setDepth(DEPTH.unit);
-    this.sprite.setDisplaySize(this.width, this.height);
+    this.sprite.setDisplaySize(this.displaySize, this.displaySize);
 
+    // Healthbar/Ringe orientieren sich an einer optischen Bezugsbreite, NICHT an der
+    // (kleinen) Hitbox – sonst wären Bar/Ring unter den großen Figuren viel zu schmal.
+    // barRef ≈ tatsächliche Figurbreite im Chip (displaySize * Figur-Anteil), damit die
+    // Leiste etwa so breit wie die sichtbare Figur ist statt wie das ganze (gepaddete) Chip.
+    this.barRef = this.displaySize * (unitType === "king" ? 0.26 : 0.32);
+    const barRef = this.barRef;
     const barH = unitType === "king" ? 8 : 5;
-    this.barBg = scene.add.rectangle(this.x, this.y, this.width, barH, 0x000000).setOrigin(0, 0.5).setDepth(DEPTH.healthbar);
-    this.barFill = scene.add.rectangle(this.x, this.y, this.width, barH, 0xff0000).setOrigin(0, 0.5).setDepth(DEPTH.healthbar);
+    this.barBg = scene.add.rectangle(this.x, this.y, barRef, barH, 0x000000).setOrigin(0, 0.5).setDepth(DEPTH.healthbar);
+    this.barFill = scene.add.rectangle(this.x, this.y, barRef, barH, 0xff0000).setOrigin(0, 0.5).setDepth(DEPTH.healthbar);
 
     if (unitType === "king") {
-      this.shieldRing = scene.add.circle(this.centerX, this.centerY, this.width, 0x00ffff, 0).setStrokeStyle(3, 0x00ffff).setDepth(DEPTH.healthbar).setVisible(false);
+      this.shieldRing = scene.add.circle(this.centerX, this.centerY, barRef, 0x00ffff, 0).setStrokeStyle(3, 0x00ffff).setDepth(DEPTH.healthbar).setVisible(false);
     }
     if (unitType === "archer") {
-      this.archerOutline = scene.add.rectangle(this.x, this.y, this.width, this.height).setOrigin(0, 0).setStrokeStyle(2, 0xffd700).setDepth(DEPTH.unit);
+      // Gold-Umriss als Archer-Marker, an der optischen Figur zentriert (barRef), nicht an
+      // der kleinen Hitbox – sonst säße der Rahmen winzig mitten in der Figur.
+      this.archerOutline = scene.add.rectangle(this.centerX, this.centerY, barRef, barRef).setStrokeStyle(2, 0xffd700).setDepth(DEPTH.unit);
     }
     if (unitType === "champion") {
       // Goldener Aura-Ring kennzeichnet den Champion klar als legendäre Einheit.
-      this.championRing = scene.add.circle(this.centerX, this.centerY, this.width * 0.62, 0xffd700, 0).setStrokeStyle(3, 0xffd700, 0.9).setDepth(DEPTH.healthbar);
+      this.championRing = scene.add.circle(this.centerX, this.centerY, barRef * 0.62, 0xffd700, 0).setStrokeStyle(3, 0xffd700, 0.9).setDepth(DEPTH.healthbar);
     }
   }
 
   // Vasall auf eine höhere Stufe heben: Grösse/Sprite aktualisieren + Aufleucht-Pop.
   setLevel(n: number): void {
     this.level = n;
-    const s = UNIT_STATS.vassal.sizeByLevel[n] ?? 40;
-    this.width = s;
-    this.height = s;
+    this.displaySize = UNIT_STATS.vassal.sizeByLevel[n] ?? UNIT_STATS.vassal.sizeByLevel[1];
+    // Hitbox + optische Bar-Bezugsbreite aus der neuen Anzeigegröße ableiten (s. Konstruktor).
+    this.width = this.displaySize * HITBOX_SCALE;
+    this.height = this.displaySize * HITBOX_SCALE;
+    this.barRef = this.displaySize * 0.32;
 
     // Neuer Texture-Key = neuer Stufen-spriteKey (statisches Kenney-PNG, kein Tint).
     this.spriteKey = `${this.faction}_l${n}`;
     this.sprite.setTexture(this.spriteKey);
-    this.sprite.setDisplaySize(s, s);
+    this.sprite.setDisplaySize(this.displaySize, this.displaySize);
 
     // Level-up: kurzer Skalierungs-Pop
     this.sprite.scene.tweens.add({
@@ -505,7 +521,9 @@ export class Unit extends Entity {
       } else {
         angle = 0;
       }
-      scene.spawnSlash(this.centerX, this.centerY, angle - 2.35619449, this.width);
+      // Slash an der optischen Figurbreite (barRef) ausrichten, nicht an der kleinen Hitbox,
+      // damit die Sichel zur sichtbaren Figur passt (spawnSlash hält sie bewusst kompakt).
+      scene.spawnSlash(this.centerX, this.centerY, angle - 2.35619449, this.barRef);
     }
     if (this.attackTimer <= 0) {
       this.isAttacking = false;
@@ -987,9 +1005,11 @@ export class Unit extends Entity {
     }
 
     const playerTeam = this.scenePlayerTeam;
-    const barW = this.unitType === "king" ? this.width * 1.1 : this.width;
-    const barX = this.x - (barW - this.width) / 2;
-    const barY = this.y - (this.unitType === "king" ? 8 : 5) - 2;
+    // Bar an der optischen Figur ausrichten (barRef), zentriert über der (kleinen) Hitbox.
+    const barW = this.unitType === "king" ? this.barRef * 1.1 : this.barRef;
+    const barX = this.centerX - barW / 2;
+    // Bar oberhalb der sichtbaren Figur platzieren: halbe Figurhöhe (≈ barRef) über der Mitte.
+    const barY = this.centerY - this.barRef / 2 - (this.unitType === "king" ? 10 : 6);
     this.barBg.setPosition(barX, barY).width = barW;
     const ratio = Phaser.Math.Clamp(this.hp / this.maxHp, 0, 1);
     this.barFill.setPosition(barX, barY);
@@ -1000,7 +1020,7 @@ export class Unit extends Entity {
       this.shieldRing.setVisible(this.isShieldActive);
       if (this.isShieldActive) this.shieldRing.setPosition(this.centerX, this.centerY);
     }
-    if (this.archerOutline) this.archerOutline.setPosition(this.x, this.y);
+    if (this.archerOutline) this.archerOutline.setPosition(this.centerX, this.centerY);
     if (this.championRing) this.championRing.setPosition(this.centerX, this.centerY);
   }
 

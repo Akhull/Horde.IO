@@ -33,22 +33,42 @@ export const CONFIG = {
 // (vorher gaben ALLE Einheiten flat 20). So lohnt sich das Leveln spürbar und der
 // König hat echte Nahkampf-Präsenz. archer.damage ist der Pfeilschaden (vorher als
 // Literal 10 in spawnProjectile hartkodiert) und bleibt unverändert.
+//
+// WICHTIG – `size` ist die ANZEIGEGRÖSSE (setDisplaySize), NICHT die Hitbox.
+// Hitbox/Kollision/Formation/Healthbar laufen über HITBOX_SCALE (< 1, s. u.), damit
+// die Figuren groß rendern, ohne den Kollisions-/Formations-Footprint aufzublähen.
+//
+// WARUM die King-`size` so viel größer ist als sie "wirken" muss: die Kenney-King-Chips
+// (medievalUnit_05/17/23) haben DEUTLICH mehr transparenten Rand als die Vasallen-Chips –
+// die eigentliche Figur füllt nur ~25.8% der Chip-Breite (Vasall ~32%). setDisplaySize
+// skaliert das GANZE Chip inkl. Rand, der König rendert bei gleicher size also optisch
+// ~24% KLEINER. Die King-size kompensiert diesen Padding-Unterschied UND macht ihn klar
+// zum größten Sprite im Feld (optische Figur ~30px ggü. ~18–22px Vasall, ~28px Champion).
 export const UNIT_STATS = {
-  king: { hp: 300, speed: 1.35 * 1.88, size: 40 * 1.3, damage: 24 },
-  archer: { hp: 100, speed: 1.2 * 1.88, size: 40, attackCooldown: 1500, attackRange: 300, damage: 10 },
+  king: { hp: 300, speed: 1.35 * 1.88, size: 116, damage: 24 },
+  archer: { hp: 100, speed: 1.2 * 1.88, size: 56, attackCooldown: 1500, attackRange: 300, damage: 10 },
   vassal: {
     hp: 100,
     speed: 1.35 * 0.95 * 1.88,
-    sizeByLevel: { 1: 40, 2: 40 * 1.1, 3: 40 * 1.2 } as Record<number, number>,
+    sizeByLevel: { 1: 56, 2: 64, 3: 70 } as Record<number, number>,
     // Nahkampfschaden nach Stufe: L1 schwächer als zuvor, L2 = alter Flat-Wert, L3 stärker.
     damageByLevel: { 1: 15, 2: 20, 3: 25 } as Record<number, number>,
   },
   // Champion: legendäre Spezialeinheit, beschworen aus einem Gold-Orb.
-  // Größer als der König (klare "legendär"-Optik), zäh und schlagkräftig, läuft
-  // mit Vasallen-Tempo in der Formation mit (elitärer Leibwächter, kein König-Insta-Kill).
-  // Die fraktionsspezifische MECHANIK steht in LEGENDARY (Aura/Reichweite/AoE).
-  champion: { hp: 200, speed: 1.35 * 0.95 * 1.88, size: 40 * 1.5, damage: 35 },
+  // Nutzt das l3-Sprite, rendert deutlich größer als ein Vasall (elitäre "legendär"-Optik),
+  // bleibt aber unter dem König (der als Anführer klar dominieren soll). Zäh und schlagkräftig,
+  // läuft mit Vasallen-Tempo in der Formation mit. MECHANIK steht in LEGENDARY (Aura/Reichweite/AoE).
+  champion: { hp: 200, speed: 1.35 * 0.95 * 1.88, size: 90, damage: 35 },
 } as const;
+
+// Hitbox-Skalierung: die ANZEIGEGRÖSSE (UNIT_STATS.size) ist bewusst entkoppelt von der
+// logischen Hitbox (width/height). width/height = size * HITBOX_SCALE und speisen Kollision
+// (resolveUnitUnitCollisions: width/2 + width/2), Formation (Mindestabstände), Separation und
+// die Healthbar-/Ring-Breite. So rendern die Figuren groß und lesbar, während der Kollisions-/
+// Formations-Footprint moderat bleibt (König-Hitbox ~52px ggü. Formation-Mindestabstand 60–100px,
+// Separation-Wunschabstand 30px) – die Formationen/Separation gehen NICHT kaputt. Healthbar und
+// Ringe orientieren sich an der sichtbaren Figur (barRef in Unit.ts), nicht an der Hitbox.
+export const HITBOX_SCALE = 0.45;
 
 // Power-Up-Stärken zentral, statt als Literale in Unit/PowerUp verstreut.
 // Spiegelt bewusst den Tempo-Boost (x1.5 / 6 s, siehe PowerUp-Default-Dauer):
