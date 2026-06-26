@@ -232,6 +232,12 @@ M7  Steam-Release-Vorbereitung
 
 ## 9. Fortschritts-Log (mp/main, neueste zuerst)
 
+- **2026-06-26 — Iso-Spike v3 ✅ (nahtloses Terrain + Engpässe).** Gelände ist jetzt EIN
+  **Gouraud-Mesh** (PixiJS-v8 `Mesh`/`Geometry`/`GlProgram`, `aColor`-Vertexfarbe im Shader
+  interpoliert) — Höhe pro Eckpunkt → geneigte Hänge statt flacher Kacheln, **keine sichtbaren
+  Quadrate/Blöcke mehr**, weiche Küsten. Plus **markante Berge** (Ridge-Noise), **eingegrabene
+  Flüsse** und **Berge + Wasser unbegehbar → natürliche Chokepoints**. **~218 FPS** bei 6252 Units.
+  (Fix: Index-Buffer braucht `BufferUsage.INDEX`, sonst `glDrawElements`-Fehler → Terrain unsichtbar.)
 - **2026-06-26 — Iso-Spike v2 ✅ (größer + realistischer).** Insel-Heightmap (fBm + Rand-Bias),
   **kontinuierliche** Höhen-Farbrampe statt harter Biome-Stufen (kein „Quadrat"-Look mehr),
   **Wasser unbegehbar** (Units bleiben auf Land), 140×140-Welt, **12 Horden / 6732 Units** über
