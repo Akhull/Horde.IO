@@ -24,7 +24,7 @@ export function recalcFormationOffset(unit: Unit, units: Unit[], leader: Unit): 
   const formationRadius = 100 + alliedUnits.length * 5;
   const minRadius = Math.max(30, minDistanceFromKing);
 
-  let candidate: Vec2 = { x: 0, y: 0 };
+  let candidate: Vec2;
   let attempts = 0;
   do {
     const currentAngle = Math.atan2(unit.y - leader.y, unit.x - leader.x);

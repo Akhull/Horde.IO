@@ -76,7 +76,7 @@ export function handleSouls(scene: GameScene): void {
   for (let i = scene.souls.length - 1; i >= 0; i--) {
     const soul = scene.souls[i];
     let collected = false;
-    let collector: Unit | null = null;
+    let collector: Unit;
 
     for (const unit of scene.units) {
       if (Math.hypot(unit.centerX - soul.centerX, unit.centerY - soul.centerY) >= 40) continue;

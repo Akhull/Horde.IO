@@ -88,7 +88,7 @@ function drawDemoFrame(ctx: CanvasRenderingContext2D, i: number): void {
   const cx = FW / 2;
   const groundY = FW - 7;
 
-  let bodyY = 0;
+  let bodyY: number;
   let legSwing = 0;
   let armAngle = Math.PI * 0.12;
   let rot = 0;

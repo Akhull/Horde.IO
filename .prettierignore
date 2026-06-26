@@ -1,0 +1,6 @@
+dist
+legacy
+node_modules
+coverage
+public/assets
+*.md
