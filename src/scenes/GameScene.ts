@@ -181,6 +181,21 @@ export class GameScene extends Phaser.Scene {
     this.cameras.main.fadeIn(400, 0, 0, 0);
     this.cameras.main.setBounds(0, 0, CONFIG.worldWidth, CONFIG.worldHeight);
 
+    // Atmosphäre per Post-FX (nur WebGL – im Canvas-Fallback ist postFX undefined und wird
+    // übersprungen). Drei dezente, vollbildschirm-feste Pässe heben das flache Bild an:
+    //   1) Farbgrad: leichte Sättigung/Helligkeit → satteres, weniger ausgewaschenes Bild.
+    //   2) Bloom: bewusst schwach – lässt vor allem die additiven Effekte (Gold-Kills, Funken,
+    //      Elite-Auren, helle Glanzlichter) weich leuchten, ohne das Gras zu überstrahlen.
+    //   3) Vignette: dunkelt die Bildränder ab → Tiefe + Fokus auf den König in der Mitte.
+    const cam = this.cameras.main;
+    if (cam.postFX) {
+      const grade = cam.postFX.addColorMatrix();
+      grade.saturate(0.16);
+      grade.brightness(1.03, true);
+      cam.postFX.addBloom(0xffffff, 1, 1, 1, 0.55, 4);
+      cam.postFX.addVignette(0.5, 0.5, 0.82, 0.4);
+    }
+
     // Boden (gekachelte Gras-Textur über die ganze Welt)
     this.ground = this.add
       .tileSprite(0, 0, CONFIG.worldWidth, CONFIG.worldHeight, "grass")

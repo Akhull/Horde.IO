@@ -139,6 +139,9 @@ export class Unit extends Entity {
 
   // Darstellung (statisches Kenney-Sprite, Faktionsfarbe ist ins PNG gebacken).
   private sprite: Phaser.GameObjects.Sprite;
+  // Weicher Schlagschatten unter der Figur. Erdet das Sprite auf dem Boden (sonst "klebt"
+  // es frei in der Luft). Siehe Konstruktor/sync/destroyView.
+  private shadow: Phaser.GameObjects.Image;
   private spriteKey: string;
   private barBg: Phaser.GameObjects.Rectangle;
   private barFill: Phaser.GameObjects.Rectangle;
@@ -221,6 +224,13 @@ export class Unit extends Entity {
     this.spriteKey = unitType === "king" ? `${faction}_king` : unitType === "champion" ? `${faction}_l3` : `${faction}_l${level}`;
     this.sprite = scene.add.sprite(this.centerX, this.centerY, this.spriteKey).setDepth(DEPTH.unit);
     this.sprite.setDisplaySize(this.displaySize, this.displaySize);
+
+    // Weicher Schlagschatten: eine schwarz getönte Weichkreis-Textur ("orb"), in sync() flach
+    // zur Ellipse gedrückt und an die Füße gesetzt. Bewusst OHNE Bobbing-Versatz (siehe sync),
+    // damit die Figur beim Laufen sichtbar vom Schatten abhebt. Liegt auf DEPTH.shadow (über
+    // Boden/Deko, unter der Figur). Alle Schatten teilen die "orb"-Textur → batchen zu wenigen
+    // Draw-Calls. Größe/Position folgen pro Frame der (bei Level-ups wachsenden) displaySize.
+    this.shadow = scene.add.image(this.centerX, this.centerY, "orb").setTint(0x000000).setAlpha(0.28).setDepth(DEPTH.shadow);
 
     // Healthbar/Ringe orientieren sich an einer optischen Bezugsbreite, NICHT an der
     // (kleinen) Hitbox – sonst wären Bar/Ring unter den großen Figuren viel zu schmal.
@@ -1156,6 +1166,11 @@ export class Unit extends Entity {
     this.sprite.setPosition(this.centerX, this.centerY + this.bobbingOffset);
     this.sprite.setFlipX(this.facingDirection === -1);
 
+    // Schatten an die Füße (ohne Bobbing-Versatz, bleibt am Boden) und auf die aktuelle
+    // Figurgröße skalieren – flach gedrückt (Höhe ≈ 0.4× Breite) liest er als Boden-Ellipse.
+    this.shadow.setPosition(this.centerX, this.centerY + this.displaySize * 0.34);
+    this.shadow.setDisplaySize(this.displaySize * 0.6, this.displaySize * 0.24);
+
     // Treffer-Aufleuchten (weiße Silhouette) – nur bei Zustandswechsel umschalten.
     if (this.flashTimer > 0 && !this.flashShown) {
       this.sprite.setTintFill(0xffffff);
@@ -1171,11 +1186,21 @@ export class Unit extends Entity {
     const barX = this.centerX - barW / 2;
     // Bar oberhalb der sichtbaren Figur platzieren: halbe Figurhöhe (≈ barRef) über der Mitte.
     const barY = this.centerY - this.barRef / 2 - (this.unitType === "king" ? 10 : 6);
-    this.barBg.setPosition(barX, barY).width = barW;
     const ratio = Phaser.Math.Clamp(this.hp / this.maxHp, 0, 1);
-    this.barFill.setPosition(barX, barY);
-    this.barFill.width = barW * ratio;
-    this.barFill.setFillStyle(this.team === playerTeam ? 0x00ff00 : 0xff0000);
+    // Entrümpelung: voll geheilte Vasallen/Schützen blenden ihre Leiste aus (zu Partie-Beginn
+    // ist sonst das ganze Feld mit grünen Balken zugepflastert). Könige zeigen sie IMMER
+    // (wichtige Ziel-Info); sobald Schaden anliegt, erscheint jede Leiste wieder.
+    const showBar = this.unitType === "king" || ratio < 0.999;
+    this.barBg.setVisible(showBar);
+    this.barFill.setVisible(showBar);
+    if (showBar) {
+      this.barBg.setPosition(barX, barY).width = barW;
+      this.barFill.setPosition(barX, barY);
+      this.barFill.width = barW * ratio;
+      // Team-Farbe bleibt die Lesbarkeits-Konvention (eigenes Team grün, Gegner rot), nur
+      // etwas weicher/sattere Töne statt des grellen Voll-Rot/-Grün.
+      this.barFill.setFillStyle(this.team === playerTeam ? 0x46d65a : 0xe23b3b);
+    }
 
     if (this.shieldRing) {
       this.shieldRing.setVisible(this.isShieldActive);
@@ -1200,6 +1225,10 @@ export class Unit extends Entity {
     // Elite-Aura mit-zerstören – destroy() killt auch die endlose Puls-Tween, die auf das
     // Image zielt (Phaser räumt Tweens toter Targets ab), darum kein Tween-Leak.
     this.eliteAura?.destroy();
+
+    // Schatten mit ausblenden (etwas schneller als die Figur) und danach zerstören.
+    const sh = this.shadow;
+    sh.scene.tweens.add({ targets: sh, alpha: 0, duration: 400, onComplete: () => sh.destroy() });
 
     // Anmutiger Tod ohne Sheet-Animation: kurz umkippen + ausblenden, dann zerstören.
     const s = this.sprite;

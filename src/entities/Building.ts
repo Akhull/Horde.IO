@@ -18,6 +18,9 @@ export class Building extends Entity {
   spawnTimer = 0;
   private flashFrames = 0;
   private sprite: Phaser.GameObjects.Image;
+  // Statischer Schlagschatten unter dem Gebäude (erdet es; Gebäude bewegen sich nicht,
+  // daher einmal gesetzt). Mit-zerstört in destroyView.
+  private shadow: Phaser.GameObjects.Image;
   private barBg: Phaser.GameObjects.Rectangle;
   private barFill: Phaser.GameObjects.Rectangle;
 
@@ -34,6 +37,16 @@ export class Building extends Entity {
     // Kasernen zeitlich versetzt starten, damit nicht alle gleichzeitig emittieren
     // (gleicher Trick wie beim Turm-fireTimer).
     if (buildingType === "barracks") this.spawnTimer = Math.random() * BARRACKS.spawnInterval;
+
+    // Schatten zuerst (knapp UNTER der Gebäude-Tiefe, sonst läge er über der Fassade): eine
+    // schwarz getönte, flach gedrückte Weichkreis-Textur ("orb") an der Sockellinie. Teilt die
+    // "orb"-Textur mit den Einheiten-Schatten → batcht zu wenigen Draw-Calls.
+    this.shadow = scene.add
+      .image(this.centerX, this.centerY + this.height * 0.42, "orb")
+      .setTint(0x000000)
+      .setAlpha(0.32)
+      .setDisplaySize(this.width * 0.8, this.height * 0.34)
+      .setDepth(DEPTH.building - 1);
 
     this.sprite = scene.add
       .image(this.centerX, this.centerY, buildingType)
@@ -64,10 +77,18 @@ export class Building extends Entity {
       this.flashFrames--;
       if (this.flashFrames === 0) this.sprite.clearTint();
     }
-    this.barFill.width = this.width * Phaser.Math.Clamp(this.hp / this.maxHp, 0, 1);
+    const ratio = Phaser.Math.Clamp(this.hp / this.maxHp, 0, 1);
+    // Wie bei den Einheiten: unbeschädigte Gebäude blenden ihre Leiste aus (das Feld ist
+    // dicht mit Gebäuden bestückt → sonst überall rote Vollbalken). Sobald Schaden anliegt,
+    // erscheint die Leiste wieder als Fortschritts-Anzeige des Abrisses.
+    const showBar = ratio < 0.999;
+    this.barBg.setVisible(showBar);
+    this.barFill.setVisible(showBar);
+    if (showBar) this.barFill.width = this.width * ratio;
   }
 
   destroyView(): void {
+    this.shadow.destroy();
     this.sprite.destroy();
     this.barBg.destroy();
     this.barFill.destroy();
