@@ -62,6 +62,12 @@
 **Ziel:** Das Entwicklungs-Substrat, das den MP-Pivot parallel zu akhulls Loop laufen lässt, ohne dass die zwei Linien sich über Dateien streiten oder gegenseitig den Build brechen.
 **Phasen:** P0 Branch/Worktree-Strategie + Koordinationskontrakt → P1 CI-Härtung (`build` als Pflicht, Lint blockierend via `--max-warnings` Ratchet, `bench` informativ) → P2 Characterization-Tests, die den Headless-Refactor gaten → P3 Electron/Pixi/Steam-Build-Smoke-Checks → P4 Autonomes Operating-Model (Ralph-Loop, Gate-Hook, ein-Slice-pro-Commit).
 
+### S8 — Worldgen & Terrain *(neuer Strom, aus der Maxed-Out-Richtung)*
+**Ziel:** Die Random-Rechteck-Worldgen ersetzen durch eine deterministische Seed-Heightmap (fBm-Noise) → Wasser/Flüsse/Küsten/Täler/Hügel/Berge/Biome + Autotiling. Terrain ist **autoritative Cartesian-Sim-Daten** (Passierbarkeit, Move-Cost, High-Ground, Chokepoints), gerendert als gebackene Iso-RenderTexture-Chunks (Client-only).
+**Phasen:** P0 `TerrainGrid` + fBm-Heightmap aus `src/sim/rng` (rein, getestet) → P1 Biome/Wasser/Flüsse/Autotiling-Klassifikation → P2 Sim-Integration (Move-Cost/Passierbarkeit in collision/pathing + SpatialGrid) → P3 Iso-Terrain-Render (gebackene Chunks). **Verortung: M5/M6, NACH Sim-Fundament + MVP.**
+
+> **Erweiterte Richtung (Art, Welt, Perspektive, Combat):** Details, Entscheidungen und das tragende Sim-vs-Präsentation-Prinzip in **[MAXED-DIRECTION.md](./MAXED-DIRECTION.md)**. Erweitert S4 (Render→Iso), S5 (Content+volles Ability-System), S6 (Bake-Pipeline+VFX) und fügt S8 (oben) hinzu. Bricht **nichts** am laufenden S1-Fundament.
+
 ---
 
 ## 4. Abhängigkeits- & Sequencing-Karte (kritischer Pfad)
@@ -226,6 +232,8 @@ M7  Steam-Release-Vorbereitung
 
 ## 9. Fortschritts-Log (mp/main, neueste zuerst)
 
+- **2026-06-26 — Richtung: Maxed-Out (Art/Welt/Perspektive/Combat) entschieden.** `docs/MAXED-DIRECTION.md`.
+  4 Festlegungen: **Iso/Dimetric 2.5D** (reine Client-Projektion des Cartesian-Sims) · **Vektor/Skeletal→Offline-Bake→Pixel-Atlanten** (Horde gebacken, Kings Runtime-Skeletal; Kenney-Lock nur für SP-`main`) · **deterministische Heightmap-Worldgen** (autoritative Terrain-Daten) · **datengetriebenes `ABILITY_DEFS`-System** (geteilt + fraktionsspezifisch, nur über Seams). Neuer Strom **S8 Worldgen**; S4/S5/S6 erweitert. Verortung M5/M6 — blockiert das laufende S1-Fundament nicht.
 - **2026-06-26 — S1-P2 (Teil 1) ✅ SafeZone deterministisch.** `SafeZone` bekommt einen
   injizierten `Rng` (eigener `fork()` aus dem GameScene-Master-`rng`); die 2 `Math.random`-
   Stellen im Zonenpfad (shrink-target + moving-target) ersetzt. `GameScene` hält jetzt ein
