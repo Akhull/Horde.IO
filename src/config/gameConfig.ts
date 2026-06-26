@@ -310,10 +310,37 @@ export const FACTION_STATS: Record<Faction, { hp: number; speed: number; damage:
   orc: { hp: 1.1, speed: 0.95, damage: 1.1 }, // langsam, zäh, schlagkräftig – Brecher
 } as const;
 
+// Decorative world dressing (rein optisch, KEINE Kollision) – siehe systems/decor.ts.
+// Bricht die monotone 9000x9000-Gras-Fläche auf: Boden-Variations-Flecken (Erde/
+// Pflaster/Sand/Dunkelgras) + gestreute Einzel-Props (Bäume/Felsen/Büsche/Stämme).
+// Counts sind bewusst hoch, aber alles statisch (kein Per-Frame-Update) und unter den
+// ~487 Gebäuden/121 Einheiten, die die Engine schon mühelos rendert.
+export const DECOR = {
+  props: 1100, // gestreute Einzel-Props über die offene Welt (~14 im Sichtfeld)
+  patches: 90, // Boden-Variations-Flecken ("Lichtungen/Felder")
+  minScale: 0.8, // zufällige Größenvariation pro Prop (unten) ...
+  maxScale: 1.25, // ... für ein natürlich-unregelmäßiges Streubild
+  patchAlpha: 0.55, // Deckkraft der Boden-Flecken: bewusst niedrig, damit die harte
+  // Rechteck-Kante in der Gras-Fläche aufweicht und der Fleck als abgenutzter Boden wirkt
+  patchMinSize: 200, // Kantenlänge der kleinsten Boden-Fläche (px)
+  patchMaxSize: 460, // Kantenlänge der grössten Boden-Fläche (px) – kleiner = weniger Billboard-Wirkung
+} as const;
+
+// Battle-Royale-Gefahrenzone: getönter, abgedunkelter Bereich AUSSERHALB des
+// Safe-Kreises ("Sturm"). Macht die sichere Fläche klar lesbar und sieht nach echtem
+// Battle-Royale aus, statt nur eines dünnen roten Rings (drawSafeZone in GameScene).
+export const SAFE_ZONE_VIS = {
+  dangerColor: 0x6a0000, // dunkles Rot des Sturm-Overlays (Fläche ausserhalb der Zone)
+  dangerAlpha: 0.22, // Deckkraft des Overlays – subtil, Einheiten am Rand bleiben lesbar
+  ringColor: 0xff3030, // heller roter Zonen-Ring (Kante)
+} as const;
+
 // Tiefen-Ebenen für die Phaser-Darstellung (z-Sortierung)
 export const DEPTH = {
   ground: -100,
+  groundPatch: -90, // Boden-Variations-Flecken: über dem Gras, unter Hindernissen
   obstacle: -50,
+  decor: -10, // Deko-Props: über Boden/Hindernissen, UNTER Gebäuden/Einheiten
   building: 0,
   soul: 5,
   powerup: 6,

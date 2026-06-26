@@ -47,6 +47,32 @@ export class BootScene extends Phaser.Scene {
     this.load.image("water", `${T}/medievalTile_27.png`);
     this.load.image("forest", `${T}/medievalTile_46.png`);
 
+    // Boden-Variations-Kacheln (nahtlos, 100% deckend) für die Decor-Flecken in
+    // systems/decor.ts – brechen die monotone Gras-Fläche auf (Erde/Pflaster/Sand/
+    // dunkleres Gras). Werden als kleine TileSprite-"Lichtungen/Felder" gestreut.
+    const E = `${A}kenney/medieval-rts/PNG/Retina/Environment`;
+    this.load.image("patch_dirt", `${T}/medievalTile_13.png`);
+    this.load.image("patch_cobble", `${T}/medievalTile_15.png`);
+    this.load.image("patch_sand", `${T}/medievalTile_01.png`);
+    this.load.image("patch_grass_dark", `${T}/medievalTile_58.png`);
+
+    // Dekorative, rein optische Props (transparent, nicht kollidierend) – Bäume,
+    // Büsche, Felsen, Baumstamm. Gestreut über die offene Welt (systems/decor.ts),
+    // damit das Feld lebt statt leer zu wirken. Werden NICHT getönt (Kenney-Art ist
+    // bereits voll koloriert).
+    this.load.image("decor_tree_big", `${E}/medievalEnvironment_03.png`);
+    this.load.image("decor_cypress", `${E}/medievalEnvironment_01.png`);
+    this.load.image("decor_pine", `${E}/medievalEnvironment_02.png`);
+    this.load.image("decor_bush", `${E}/medievalEnvironment_12.png`);
+    this.load.image("decor_bush2", `${E}/medievalEnvironment_19.png`);
+    this.load.image("decor_shrub", `${E}/medievalEnvironment_21.png`);
+    this.load.image("decor_rock_grey", `${E}/medievalEnvironment_07.png`);
+    this.load.image("decor_boulder_grey", `${E}/medievalEnvironment_08.png`);
+    this.load.image("decor_pebble", `${E}/medievalEnvironment_06.png`);
+    this.load.image("decor_rock_brown", `${E}/medievalEnvironment_14.png`);
+    this.load.image("decor_boulder_brown", `${E}/medievalEnvironment_15.png`);
+    this.load.image("decor_log", `${E}/medievalEnvironment_05.png`);
+
     // Partikel-/Pickup-Basen aus dem particle-pack (near-weiss -> pro Instanz getönt).
     // "orb" (Seelen + Partikel), "powerup" (Pickup-Glow), "dot" (Effekt-Partikel).
     this.load.image("orb", `${P}/circle_05.png`);

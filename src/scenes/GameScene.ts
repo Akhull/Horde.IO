@@ -1,5 +1,5 @@
 import Phaser from "phaser";
-import { CONFIG, DEPTH, FEEDBACK, CAMERA, BATTLE_ESCALATION, DIFFICULTY, DEFAULT_DIFFICULTY } from "../config/gameConfig";
+import { CONFIG, DEPTH, FEEDBACK, CAMERA, BATTLE_ESCALATION, DIFFICULTY, DEFAULT_DIFFICULTY, SAFE_ZONE_VIS } from "../config/gameConfig";
 import type { Difficulty } from "../config/gameConfig";
 import {
   frameLerpAlpha,
@@ -23,6 +23,7 @@ import { SafeZone } from "../systems/SafeZone";
 import { SoundManager } from "../systems/SoundManager";
 import { recalcFormationOffset } from "../systems/AI";
 import { generateObstacles, generateBuildingClusters, generatePowerUps, spawnVassal } from "../systems/worldgen";
+import { generateDecor } from "../systems/decor";
 import {
   resolveUnitUnitCollisions,
   resolveUnitBuildingCollisions,
@@ -114,6 +115,11 @@ export class GameScene extends Phaser.Scene {
   private particlePool: Particle[] = [];
   private fxGfx!: Phaser.GameObjects.Graphics;
   private safeGfx!: Phaser.GameObjects.Graphics;
+  // Battle-Royale-"Sturm": welt-große getönte Fläche, aus der eine invertierte
+  // Geometrie-Maske (safeMaskGfx) das sichere Rund ausstanzt -> alles AUSSERHALB der
+  // Zone wird abgedunkelt/rot getönt. Robuster als ein fillPath-Loch (WebGL-Triangulation).
+  private dangerOverlay!: Phaser.GameObjects.Rectangle;
+  private safeMaskGfx!: Phaser.GameObjects.Graphics;
   private ground!: Phaser.GameObjects.TileSprite;
 
   // Schaden-Feedback: roter Vignette-Flash (Treffer + Gefahrenzone) und Schadenszahl-Deckel.
@@ -179,6 +185,20 @@ export class GameScene extends Phaser.Scene {
 
     this.fxGfx = this.add.graphics().setDepth(DEPTH.fx);
     this.safeGfx = this.add.graphics().setDepth(DEPTH.safezone);
+
+    // Sturm-Overlay (Gefahrenzone): welt-große getönte Fläche, knapp unter dem Zonen-Ring.
+    // Eine invertierte Geometrie-Maske aus safeMaskGfx (Kreis = sichere Fläche) blendet das
+    // Overlay nur AUSSERHALB des Safe-Kreises ein. safeMaskGfx ist unsichtbar (dient nur als
+    // Stencil-Quelle) und wird mit der Szene automatisch aufgeräumt. drawSafeZone steuert beides.
+    this.dangerOverlay = this.add
+      .rectangle(0, 0, CONFIG.worldWidth, CONFIG.worldHeight, SAFE_ZONE_VIS.dangerColor, SAFE_ZONE_VIS.dangerAlpha)
+      .setOrigin(0, 0)
+      .setDepth(DEPTH.safezone - 1)
+      .setVisible(false);
+    this.safeMaskGfx = this.add.graphics().setVisible(false);
+    const safeMask = this.safeMaskGfx.createGeometryMask();
+    safeMask.invertAlpha = true;
+    this.dangerOverlay.setMask(safeMask);
 
     // Bildschirmfester roter Vignette-Flash (Treffer / Gefahrenzone).
     this.vignette = this.add
@@ -256,6 +276,10 @@ export class GameScene extends Phaser.Scene {
     }
 
     generateObstacles(this);
+    // Dekorative Welt-Ausstattung NACH den Hindernissen (weicht ihnen aus), VOR den
+    // Gebäuden in der Erzeugungsreihenfolge – die Tiefen-Ebenen (DEPTH.decor < building)
+    // sorgen ohnehin dafür, dass Gebäude/Einheiten über den Props liegen.
+    generateDecor(this);
     generateBuildingClusters(this);
     generatePowerUps(this);
     for (const u of this.units) this.grid.addEntity(u);
@@ -573,13 +597,25 @@ export class GameScene extends Phaser.Scene {
 
   private drawSafeZone(): void {
     this.safeGfx.clear();
-    if (this.safeZone.state === "delay") return;
+    // Vor Aktivierung (Vorlauf) ist die ganze Welt sicher -> kein Ring, kein Sturm.
+    if (this.safeZone.state === "delay") {
+      this.dangerOverlay.setVisible(false);
+      return;
+    }
     const c = this.safeZone.current;
-    this.safeGfx.lineStyle(4, 0xff0000, 1);
+    // Maske (sicheres Rund) aktualisieren – das invertiert-maskierte Sturm-Overlay
+    // zeigt sich dadurch nur AUSSERHALB des aktuellen Safe-Kreises.
+    this.safeMaskGfx.clear();
+    this.safeMaskGfx.fillStyle(0xffffff, 1);
+    this.safeMaskGfx.fillCircle(c.centerX, c.centerY, c.radius);
+    this.dangerOverlay.setVisible(true);
+    // Heller roter Zonen-Ring (Kante der sicheren Fläche).
+    this.safeGfx.lineStyle(4, SAFE_ZONE_VIS.ringColor, 1);
     this.safeGfx.strokeCircle(c.centerX, c.centerY, c.radius);
     const t = this.safeZone.target;
     if (c.radius !== t.radius || c.centerX !== t.centerX || c.centerY !== t.centerY) {
-      this.safeGfx.lineStyle(2, 0xff0000, 0.7);
+      // Vorschau-Ring des nächsten Ziel-Kreises (wohin geschrumpft/gewandert wird).
+      this.safeGfx.lineStyle(2, SAFE_ZONE_VIS.ringColor, 0.6);
       this.safeGfx.strokeCircle(t.centerX, t.centerY, t.radius);
     }
   }
