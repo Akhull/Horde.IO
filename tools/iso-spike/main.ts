@@ -11,11 +11,11 @@
 import { Application, Container, Sprite, Texture, Assets, Geometry, Buffer, BufferUsage, Mesh, Shader, GlProgram, Graphics } from "pixi.js";
 
 const TILE_W = 32, TILE_H = 16, HW = TILE_W / 2, HH = TILE_H / 2;
-const MAP = 300, N = MAP + 1;
+const MAP = 600, N = MAP + 1; // 4x größer (16-Spieler-Battle-Royale)
 const ELEV = 150;           // Screen-Y-Lift (markante Berge)
 const NORM_K = 26;          // Höhen->Slope-Skala für die Beleuchtung
-const WATER = 0.38, MOUNTAIN = 0.74;
-const PLAYERS = 12, HORDE = 520, BUILDINGS = 240, TREES = 650, BANDS = 120;
+const WATER = 0.38, MOUNTAIN = 0.80; // höhere Block-Schwelle -> weniger gesperrte Fläche, mehr Pässe
+const PLAYERS = 16, HORDE = 520, BUILDINGS = 520, TREES = 2200, BANDS = 170;
 const ASSET = "/assets/kenney/medieval-rts/PNG/Retina";
 
 function hash(x: number, y: number): number {
@@ -57,16 +57,18 @@ function rampRGB(h: number, out: { r: number; g: number; b: number }): void {
 const H = new Float32Array(N * N);
 const HG = (i: number, j: number): number => H[Math.max(0, Math.min(N - 1, i)) * N + Math.max(0, Math.min(N - 1, j))];
 function baseHeight(i: number, j: number): number {
-  const n = fbm(i * 0.028 + 7, j * 0.028 + 7, 5);
-  const ridge = 1 - Math.abs(fbm(i * 0.016 + 51, j * 0.016 + 51, 4) * 2 - 1);
+  const n = fbm(i * 0.014 + 7, j * 0.014 + 7, 5);
+  const ridge = 1 - Math.abs(fbm(i * 0.010 + 51, j * 0.010 + 51, 4) * 2 - 1);
   const dx = (i / MAP) * 2 - 1, dy = (j / MAP) * 2 - 1;
-  const island = 1 - Math.min(1, (dx * dx + dy * dy) * 0.92);
-  const h = n * 0.46 + ridge * ridge * 0.46 + island * 0.42 - 0.12;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+  // Ozean-Ring NUR am Rand (dist>0.72); Inneres bleibt FLACH -> kein zentraler Berg-Dom mehr.
+  const edge = 1 - Math.max(0, Math.min(1, (dist - 0.72) / 0.28));
+  const h = (n * 0.6 + ridge * ridge * 0.34) * edge + edge * 0.16 - 0.03;
   return Math.max(0, Math.min(1, h));
 }
 function buildHeight(terrace: boolean): void {
   for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) H[i * N + j] = baseHeight(i, j);
-  erode(120000); // hydraulische Erosion: Wassertropfen graben dendritische Täler bergab ->
+  erode(180000); // hydraulische Erosion: Wassertropfen graben dendritische Täler bergab ->
   // natürliche Fluss-/Drainage-Netze direkt aus der Heightmap (kein Carving-Hack, keine Pfützen).
   for (let k = 0; k < N * N; k++) H[k] = Math.max(0, Math.min(1, H[k]));
   if (terrace) for (let k = 0; k < N * N; k++) H[k] = Math.floor(H[k] * 13) / 13; // Voxel-Stufen
@@ -119,11 +121,18 @@ function sampleH(fx: number, fy: number): number {
   return (a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + d * tx) * ty;
 }
 const passable = (fx: number, fy: number): boolean => { const h = sampleH(fx, fy); return h >= WATER && h <= MOUNTAIN; };
+// Hangneigung (für „flach genug zum Bauen"): Summe der Höhendifferenzen ringsum.
+function slopeAt(gx: number, gy: number): number {
+  const e = 1.5;
+  return Math.abs(sampleH(gx + e, gy) - sampleH(gx - e, gy)) + Math.abs(sampleH(gx, gy + e) - sampleH(gx, gy - e));
+}
+// Wald-Dichte-Maske (eigenes Low-Freq-Noise) -> Bäume clustern zu echten Waldflächen statt random.
+function forestMask(gx: number, gy: number): number { return fbm(gx * 0.02 + 200, gy * 0.02 + 200, 3); }
 
 let terrainShader: Shader;
 function buildTerrainMesh(): Mesh {
   const pos = new Float32Array(N * N * 2), col = new Float32Array(N * N * 3);
-  const nrm = new Float32Array(N * N * 3), wld = new Float32Array(N * N * 2), hgt = new Float32Array(N * N);
+  const nrm = new Float32Array(N * N * 3), wld = new Float32Array(N * N * 2), hgt = new Float32Array(N * N), flow = new Float32Array(N * N * 2);
   const tmp = { r: 0, g: 0, b: 0 };
   for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
     const k = i * N + j, h = H[k], p = worldToIso(i, j);
@@ -134,6 +143,7 @@ function buildTerrainMesh(): Mesh {
     const inv = 1 / Math.hypot(nx, ny, nz);
     nrm[3 * k] = nx * inv; nrm[3 * k + 1] = ny * inv; nrm[3 * k + 2] = nz * inv;
     wld[2 * k] = i; wld[2 * k + 1] = j; hgt[k] = h;
+    flow[2 * k] = -(HG(i + 1, j) - HG(i - 1, j)) * 12; flow[2 * k + 1] = -(HG(i, j + 1) - HG(i, j - 1)) * 12; // Fließrichtung = bergab
   }
   const idx: number[] = [];
   for (let d = 0; d < 2 * MAP; d++)
@@ -150,21 +160,22 @@ function buildTerrainMesh(): Mesh {
       aNormal: { buffer: buf(nrm, "nrm"), format: "float32x3", stride: 12, offset: 0 },
       aWorld: { buffer: buf(wld, "wld"), format: "float32x2", stride: 8, offset: 0 },
       aHeight: { buffer: buf(hgt, "hgt"), format: "float32", stride: 4, offset: 0 },
+      aFlow: { buffer: buf(flow, "flow"), format: "float32x2", stride: 8, offset: 0 },
     },
     indexBuffer: new Buffer({ data: new Uint32Array(idx), label: "idx", usage: BufferUsage.INDEX | BufferUsage.COPY_DST }),
   });
   const glProgram = new GlProgram({
     vertex: `
-      attribute vec2 aPosition; attribute vec3 aColor; attribute vec3 aNormal; attribute vec2 aWorld; attribute float aHeight;
-      varying vec3 vColor; varying vec3 vNormal; varying vec2 vWorld; varying float vHeight;
+      attribute vec2 aPosition; attribute vec3 aColor; attribute vec3 aNormal; attribute vec2 aWorld; attribute float aHeight; attribute vec2 aFlow;
+      varying vec3 vColor; varying vec3 vNormal; varying vec2 vWorld; varying float vHeight; varying vec2 vFlow;
       uniform mat3 uProjectionMatrix; uniform mat3 uWorldTransformMatrix; uniform mat3 uTransformMatrix;
       void main() {
         gl_Position = vec4((uProjectionMatrix*uWorldTransformMatrix*uTransformMatrix*vec3(aPosition,1.0)).xy, 0.0, 1.0);
-        vColor = aColor; vNormal = aNormal; vWorld = aWorld; vHeight = aHeight;
+        vColor = aColor; vNormal = aNormal; vWorld = aWorld; vHeight = aHeight; vFlow = aFlow;
       }`,
     fragment: `
       precision mediump float;
-      varying vec3 vColor; varying vec3 vNormal; varying vec2 vWorld; varying float vHeight;
+      varying vec3 vColor; varying vec3 vNormal; varying vec2 vWorld; varying float vHeight; varying vec2 vFlow;
       uniform float uTime; uniform vec3 uLight; uniform float uStyle; // 0 real | 1 pixel | 2 voxel | 3 cel
       float h2(vec2 p){ p=fract(p*vec2(123.34,456.21)); p+=dot(p,p+45.32); return fract(p.x*p.y); }
       float vn(vec2 p){ vec2 i=floor(p),f=fract(p); float a=h2(i),b=h2(i+vec2(1.,0.)),c=h2(i+vec2(0.,1.)),d=h2(i+vec2(1.,1.)); vec2 u=f*f*(3.-2.*f); return mix(mix(a,b,u.x),mix(c,d,u.x),u.y); }
@@ -181,17 +192,20 @@ function buildTerrainMesh(): Mesh {
       void main() {
         vec3 nB = normalize(vNormal);
         float diff = clamp(dot(nB, normalize(uLight)), 0.0, 1.0);
-        // ---- WASSER ----
+        // ---- WASSER (Tiefe + Brandung am Ufer + Flussrichtung) ----
         if (vHeight < 0.382) {
-          if (uStyle > 0.5) {
-            float d2 = vHeight < 0.33 ? 0.0 : 1.0;
-            vec3 cp = mix(vec3(0.18,0.40,0.66), vec3(0.10,0.22,0.48), d2);
-            cp += vec3(0.16)*step(0.82, h2(floor(vWorld*1.4) + vec2(floor(uTime*3.0))));
-            gl_FragColor = vec4(cp,1.0); return;
-          }
-          float w = sin(vWorld.x*0.7 + uTime*1.6)*0.5 + sin(vWorld.y*0.55 - uTime*1.2)*0.5;
-          vec3 col = mix(vec3(0.18,0.46,0.72), vec3(0.07,0.20,0.42), clamp((0.382-vHeight)*5.0,0.0,1.0)) + 0.06*w;
-          col += vec3(0.4)*pow(max(0.0, vn(vWorld*4.0 + uTime*0.4)-0.6), 2.0);
+          float shoreT = clamp((vHeight - 0.33) / 0.052, 0.0, 1.0);     // 0 tief ... 1 Ufer
+          vec3 col = mix(vec3(0.05,0.16,0.38), vec3(0.16,0.45,0.70), shoreT);
+          // Strömung: Rippeln entlang der Fließrichtung vFlow (Seen still, Flüsse sichtbar fließend)
+          float fmag = clamp(length(vFlow), 0.0, 1.0);
+          vec2 fdir = fmag > 0.001 ? normalize(vFlow) : vec2(0.7, 0.7);
+          float flowR = sin(dot(vWorld, fdir) * 2.4 - uTime * (1.5 + fmag * 6.0));
+          col += 0.05 * flowR * (0.5 + fmag);
+          // Brandung: weiße Wellen, die zum Ufer laufen
+          float wave = sin((vWorld.x + vWorld.y) * 0.8 - uTime * 2.4);
+          float foam = smoothstep(0.78, 1.0, shoreT) * smoothstep(0.0, 0.6, wave);
+          col = mix(col, vec3(0.85,0.93,1.0), foam * 0.7);
+          if (uStyle > 0.5 && uStyle < 2.5) col = floor(col * 8.0 + 0.5) / 8.0; // pixel/voxel quantisieren
           gl_FragColor = vec4(col, 1.0); return;
         }
         // ---- LAND ----
@@ -288,13 +302,24 @@ async function main(): Promise<void> {
     const p = worldToIso(gx, gy); spr.x = p.x; spr.y = p.y - elevLift(sampleH(gx, gy)); bands[bandOf(gx, gy)].addChild(spr);
   }
 
+  // WÄLDER: Bäume clustern in Wald-Zonen (forestMask) auf Gras -> echte Waldflächen statt random.
   const treeT = [tex.tree1, tex.tree2, tex.tree3], rockT = [tex.rock1, tex.rock2];
-  for (let i = 0; i < TREES; i++) {
-    const { gx, gy } = placeOnLand();
-    const isRock = i % 4 === 0; // ~25% Steine, kleiner; Rest Bäume, groß
-    const s = new Sprite(isRock ? rockT[i % rockT.length] : treeT[i % treeT.length]);
-    s.anchor.set(0.5, 0.9); s.scale.set(isRock ? 0.28 : 0.64); s.zIndex = 0;
-    place(s, gx, gy);
+  let tPlaced = 0, tGuard = 0;
+  while (tPlaced < TREES && tGuard < TREES * 25) {
+    tGuard++;
+    const gx = 6 + Math.random() * (MAP - 12), gy = 6 + Math.random() * (MAP - 12);
+    const h = sampleH(gx, gy);
+    if (h < WATER + 0.04 || h > 0.70 || slopeAt(gx, gy) > 0.06) continue;
+    if (forestMask(gx, gy) < 0.52) continue; // nur in Wald-Zonen -> Cluster
+    const s = new Sprite(treeT[(Math.random() * 3) | 0]);
+    s.anchor.set(0.5, 0.9); s.scale.set(0.6); s.zIndex = 0; place(s, gx, gy); tPlaced++;
+  }
+  // STEINE: am Bergfuß / höherem felsigem Gelände gestreut.
+  for (let i = 0; i < TREES * 0.2; i++) {
+    let gx = 0, gy = 0, ok = false;
+    for (let k = 0; k < 25; k++) { gx = 6 + Math.random() * (MAP - 12); gy = 6 + Math.random() * (MAP - 12); if (sampleH(gx, gy) > 0.58 && sampleH(gx, gy) < 0.9) { ok = true; break; } }
+    if (!ok) continue;
+    const s = new Sprite(rockT[i % 2]); s.anchor.set(0.5, 0.9); s.scale.set(0.28); s.zIndex = 0; place(s, gx, gy);
   }
 
   const bTex = [tex.barn, tex.house, tex.tower, tex.barracks];
@@ -302,15 +327,34 @@ async function main(): Promise<void> {
   const orbs: Orb[] = [];
   let buildingsLeft = 0;
   const orbTex = makeOrbTexture(app);
-  for (let i = 0; i < BUILDINGS; i++) {
-    const { gx, gy } = placeOnLand();
-    const s = new Sprite(bTex[i % 4]); s.anchor.set(0.5, 0.88); s.scale.set(0.58); s.zIndex = 1; s.eventMode = "static"; s.cursor = "pointer";
+  const addBuilding = (gx: number, gy: number): void => {
+    const s = new Sprite(bTex[(Math.random() * 4) | 0]);
+    s.anchor.set(0.5, 0.88); s.scale.set(0.58); s.zIndex = 1; s.eventMode = "static"; s.cursor = "pointer";
     s.on("pointerdown", (e) => {
       e.stopPropagation();
       const orb = new Sprite(orbTex); orb.anchor.set(0.5); orb.x = s.x; orb.y = s.y - 12; orb.tint = 0xffd24a; orb.scale.set(0.5);
       (s.parent ?? bandParent).addChild(orb); orbs.push({ spr: orb, life: 1 }); s.destroy(); buildingsLeft--;
     });
     place(s, gx, gy); buildingsLeft++;
+  };
+  // STÄDTE: Zentren auf flachem Gras (nie Berg/uneben), dann Gebäude drumherum clustern.
+  const towns: { gx: number; gy: number }[] = [];
+  for (let g = 0; g < 20000 && towns.length < 26; g++) {
+    const gx = 14 + Math.random() * (MAP - 28), gy = 14 + Math.random() * (MAP - 28);
+    const h = sampleH(gx, gy);
+    if (h > 0.43 && h < 0.58 && slopeAt(gx, gy) < 0.022 && towns.every((t) => Math.hypot(t.gx - gx, t.gy - gy) > 34)) towns.push({ gx, gy });
+  }
+  for (const t of towns) {
+    let n = 0, g2 = 0;
+    const target = Math.ceil(BUILDINGS / Math.max(1, towns.length));
+    while (n < target && g2 < 800) {
+      g2++;
+      const a = Math.random() * Math.PI * 2, r = Math.random() * 20;
+      const gx = t.gx + Math.cos(a) * r, gy = t.gy + Math.sin(a) * r;
+      const h = sampleH(gx, gy);
+      if (h < 0.42 || h > 0.62 || slopeAt(gx, gy) > 0.03) continue; // flach + Gras, nie Berg/uneben
+      addBuilding(gx, gy); n++;
+    }
   }
 
   const factions = [{ u: tex.humanU, k: tex.humanK }, { u: tex.elfU, k: tex.elfK }, { u: tex.orcU, k: tex.orcK }];
