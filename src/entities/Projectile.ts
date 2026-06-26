@@ -53,7 +53,7 @@ export class Projectile extends Entity {
     const originX = x + this.width / 2;
     const originY = y + this.height / 2;
     const deviation = 10;
-    const ang = Math.random() * 2 * Math.PI;
+    const ang = (scene as GameScene).rng.next() * 2 * Math.PI;
     const targetCenterX = target.x + target.width / 2 + Math.cos(ang) * deviation;
     const targetCenterY = target.y + target.height / 2 + Math.sin(ang) * deviation;
     const dx = targetCenterX - originX;

@@ -30,10 +30,10 @@ export class Building extends Entity {
       this.maxHp = BARRACKS.hp;
     }
     // Türme zeitlich versetzt starten, damit nicht alle gleichzeitig feuern.
-    if (buildingType === "tower") this.fireTimer = Math.random() * TOWER.fireInterval;
+    if (buildingType === "tower") this.fireTimer = (scene as GameScene).rng.next() * TOWER.fireInterval;
     // Kasernen zeitlich versetzt starten, damit nicht alle gleichzeitig emittieren
     // (gleicher Trick wie beim Turm-fireTimer).
-    if (buildingType === "barracks") this.spawnTimer = Math.random() * BARRACKS.spawnInterval;
+    if (buildingType === "barracks") this.spawnTimer = (scene as GameScene).rng.next() * BARRACKS.spawnInterval;
 
     this.sprite = scene.add
       .image(this.centerX, this.centerY, buildingType)

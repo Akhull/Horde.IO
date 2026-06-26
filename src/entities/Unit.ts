@@ -162,7 +162,7 @@ export class Unit extends Entity {
       // Persönlichkeit gleichverteilt würfeln. So verhalten sich die 10 KI-Könige
       // spürbar unterschiedlich (Aggro/Rückzug/Sammeln), statt 10x identisch.
       const pool = AI.personalityPool;
-      this.aiPersonality = pool[Math.floor(Math.random() * pool.length)];
+      this.aiPersonality = pool[Math.floor((scene as GameScene).rng.next() * pool.length)];
     } else if (unitType === "archer") {
       this.team = leader!.team;
       this.hp = UNIT_STATS.archer.hp;
@@ -1076,7 +1076,7 @@ export class Unit extends Entity {
 
     // 3. SAMMELN: nahe grüne Seele / Power-Up ansteuern (Horde wächst).
     // soulGreed entscheidet, ob das Tier sich überhaupt dafür von der Stelle bewegt.
-    if (!this.isAttacking && Math.random() < tier.soulGreed) {
+    if (!this.isAttacking && scene.rng.next() < tier.soulGreed) {
       const collectible = findKingCollectible(this, scene, this.aiPersonality);
       if (collectible) {
         moveToward(collectible.x, collectible.y);
@@ -1099,7 +1099,7 @@ export class Unit extends Entity {
       return;
     }
     if (!this.idleTarget || Math.hypot(this.idleTarget.x - this.x, this.idleTarget.y - this.y) < 10) {
-      this.idleTarget = { x: Math.random() * CONFIG.worldWidth, y: Math.random() * CONFIG.worldHeight };
+      this.idleTarget = { x: scene.rng.next() * CONFIG.worldWidth, y: scene.rng.next() * CONFIG.worldHeight };
     }
     moveToward(this.idleTarget.x, this.idleTarget.y);
   }
