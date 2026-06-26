@@ -11,7 +11,7 @@
 import { Application, Container, Sprite, Texture, Assets, Geometry, Buffer, BufferUsage, Mesh, Shader, GlProgram, Graphics } from "pixi.js";
 
 const TILE_W = 32, TILE_H = 16, HW = TILE_W / 2, HH = TILE_H / 2;
-const MAP = 150, N = MAP + 1;
+const MAP = 300, N = MAP + 1;
 const ELEV = 150;           // Screen-Y-Lift (markante Berge)
 const NORM_K = 26;          // Höhen->Slope-Skala für die Beleuchtung
 const WATER = 0.38, MOUNTAIN = 0.74;
@@ -150,11 +150,17 @@ function buildTerrainMesh(): Mesh {
     fragment: `
       precision mediump float;
       varying vec3 vColor; varying vec3 vNormal; varying vec2 vWorld; varying float vHeight;
-      uniform float uTime; uniform vec3 uLight;
+      uniform float uTime; uniform vec3 uLight; uniform float uPixel;
       float h2(vec2 p){ p=fract(p*vec2(123.34,456.21)); p+=dot(p,p+45.32); return fract(p.x*p.y); }
       float vn(vec2 p){ vec2 i=floor(p),f=fract(p); float a=h2(i),b=h2(i+vec2(1.,0.)),c=h2(i+vec2(0.,1.)),d=h2(i+vec2(1.,1.)); vec2 u=f*f*(3.-2.*f); return mix(mix(a,b,u.x),mix(c,d,u.x),u.y); }
       void main() {
         if (vHeight < 0.382) {
+          if (uPixel > 0.5) {
+            float d2 = vHeight < 0.33 ? 0.0 : 1.0;
+            vec3 cp = mix(vec3(0.10,0.22,0.46), vec3(0.20,0.42,0.66), d2);
+            cp += vec3(0.18)*step(0.82, h2(floor(vWorld*1.5) + vec2(floor(uTime*3.0))));
+            gl_FragColor = vec4(cp,1.0); return;
+          }
           // animiertes Wasser
           float w = sin(vWorld.x*0.7 + uTime*1.6)*0.5 + sin(vWorld.y*0.55 - uTime*1.2)*0.5;
           vec3 deep = vec3(0.07,0.20,0.42), shallow = vec3(0.18,0.46,0.72);
@@ -166,6 +172,13 @@ function buildTerrainMesh(): Mesh {
         }
         vec3 nB = normalize(vNormal);
         float diff = clamp(dot(nB, normalize(uLight)), 0.0, 1.0);
+        if (uPixel > 0.5) {
+          float shade = 0.62 + 0.38*floor(diff*3.0)/3.0;     // 3 Toon-Lichtstufen
+          float sp = h2(floor(vWorld*2.0));                  // blockige Gras-Sprenkel
+          float speck = sp > 0.66 ? 1.12 : (sp < 0.33 ? 0.9 : 1.0);
+          vec3 cp = floor(vColor*shade*speck*7.0 + 0.5)/7.0; // begrenzte Palette -> Pixel-Banding
+          gl_FragColor = vec4(cp, 1.0); return;
+        }
         float shade = 0.42 + 0.78*diff;                    // Hillshading -> Relief
         float n = vn(vWorld*1.6)*0.55 + vn(vWorld*6.0)*0.3; // Detail-Grain
         float grain = 0.8 + 0.42*n;
@@ -174,16 +187,28 @@ function buildTerrainMesh(): Mesh {
   });
   terrainShader = new Shader({
     glProgram,
-    resources: { terr: { uTime: { value: 0, type: "f32" }, uLight: { value: new Float32Array([-0.5, -0.62, 0.6]), type: "vec3<f32>" } } },
+    resources: { terr: { uTime: { value: 0, type: "f32" }, uLight: { value: new Float32Array([-0.5, -0.62, 0.6]), type: "vec3<f32>" }, uPixel: { value: 0, type: "f32" } } },
   });
   return new Mesh({ geometry, shader: terrainShader });
 }
 
 async function main(): Promise<void> {
+  const params = new URLSearchParams(location.search);
+  const style = params.get("style") ?? "real"; // "real" = geshadetes Mesh | "pixel" = Pixel-Art-Look
+  const zoom = parseFloat(params.get("zoom") ?? "0.4");
+  const pixel = style === "pixel";
   const hud = document.getElementById("hud")!;
   hud.textContent = "Lade…";
   const app = new Application();
-  await app.init({ background: 0x0a1422, resizeTo: window, antialias: true });
+  // Pixel-Look: in NIEDRIGER Aufloesung rendern, dann per CSS nearest hochskalieren -> knackige Pixel.
+  if (pixel) {
+    await app.init({ width: window.innerWidth, height: window.innerHeight, background: 0x0a1422, antialias: false, resolution: 0.25, autoDensity: false });
+    app.canvas.style.width = "100vw";
+    app.canvas.style.height = "100vh";
+    app.canvas.style.imageRendering = "pixelated";
+  } else {
+    await app.init({ background: 0x0a1422, resizeTo: window, antialias: true });
+  }
   document.getElementById("app")!.appendChild(app.canvas);
 
   const M = {
@@ -194,16 +219,22 @@ async function main(): Promise<void> {
     tower: `${ASSET}/Structure/medievalStructure_12.png`, barracks: `${ASSET}/Structure/medievalStructure_02.png`,
     tree1: `${ASSET}/Environment/medievalEnvironment_01.png`, tree2: `${ASSET}/Environment/medievalEnvironment_02.png`,
     tree3: `${ASSET}/Environment/medievalEnvironment_03.png`,
+    rock1: `${ASSET}/Environment/medievalEnvironment_07.png`, rock2: `${ASSET}/Environment/medievalEnvironment_08.png`,
   };
   const tex: Record<string, Texture> = {};
   for (const [k, url] of Object.entries(M)) tex[k] = await Assets.load(url);
+  if (pixel) for (const tt of Object.values(tex)) tt.source.scaleMode = "nearest";
 
   hud.textContent = "Baue Welt…";
   buildHeight();
   const world = new Container();
   app.stage.addChild(world);
-  world.scale.set(0.4); world.x = app.screen.width / 2; world.y = 60;
+  world.scale.set(zoom);
+  const cc = worldToIso(MAP / 2, MAP / 2);
+  world.x = app.screen.width / 2 - cc.x * zoom;
+  world.y = app.screen.height / 2 - (cc.y - elevLift(sampleH(MAP / 2, MAP / 2))) * zoom;
   world.addChild(buildTerrainMesh());
+  terrainShader.resources.terr.uniforms.uPixel = pixel ? 1 : 0;
 
   const bandParent = new Container();
   bandParent.sortableChildren = true;
@@ -223,8 +254,14 @@ async function main(): Promise<void> {
     const p = worldToIso(gx, gy); spr.x = p.x; spr.y = p.y - elevLift(sampleH(gx, gy)); bands[bandOf(gx, gy)].addChild(spr);
   }
 
-  const treeTex = [tex.tree1, tex.tree2, tex.tree3];
-  for (let i = 0; i < TREES; i++) { const { gx, gy } = placeOnLand(); const s = new Sprite(treeTex[i % 3]); s.anchor.set(0.5, 0.9); s.scale.set(0.16); s.zIndex = 0; place(s, gx, gy); }
+  const treeT = [tex.tree1, tex.tree2, tex.tree3], rockT = [tex.rock1, tex.rock2];
+  for (let i = 0; i < TREES; i++) {
+    const { gx, gy } = placeOnLand();
+    const isRock = i % 4 === 0; // ~25% Steine, kleiner; Rest Bäume, groß
+    const s = new Sprite(isRock ? rockT[i % rockT.length] : treeT[i % treeT.length]);
+    s.anchor.set(0.5, 0.9); s.scale.set(isRock ? 0.28 : 0.64); s.zIndex = 0;
+    place(s, gx, gy);
+  }
 
   const bTex = [tex.barn, tex.house, tex.tower, tex.barracks];
   interface Orb { spr: Sprite; life: number; }
@@ -233,7 +270,7 @@ async function main(): Promise<void> {
   const orbTex = makeOrbTexture(app);
   for (let i = 0; i < BUILDINGS; i++) {
     const { gx, gy } = placeOnLand();
-    const s = new Sprite(bTex[i % 4]); s.anchor.set(0.5, 0.88); s.scale.set(0.34); s.zIndex = 1; s.eventMode = "static"; s.cursor = "pointer";
+    const s = new Sprite(bTex[i % 4]); s.anchor.set(0.5, 0.88); s.scale.set(0.58); s.zIndex = 1; s.eventMode = "static"; s.cursor = "pointer";
     s.on("pointerdown", (e) => {
       e.stopPropagation();
       const orb = new Sprite(orbTex); orb.anchor.set(0.5); orb.x = s.x; orb.y = s.y - 12; orb.tint = 0xffd24a; orb.scale.set(0.5);
@@ -253,8 +290,8 @@ async function main(): Promise<void> {
   }
   for (let pi = 0; pi < PLAYERS; pi++) {
     const f = factions[pi % 3], c = placeOnLand();
-    spawn(c.gx, c.gy, f.k, 0.2);
-    for (let i = 0; i < HORDE; i++) spawn(c.gx + (Math.random() - 0.5) * 12, c.gy + (Math.random() - 0.5) * 12, f.u, 0.12);
+    spawn(c.gx, c.gy, f.k, 0.65);
+    for (let i = 0; i < HORDE; i++) spawn(c.gx + (Math.random() - 0.5) * 12, c.gy + (Math.random() - 0.5) * 12, f.u, 0.38);
   }
 
   let dragging = false, lastX = 0, lastY = 0;
