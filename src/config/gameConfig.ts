@@ -82,7 +82,7 @@ export const KING_PROGRESSION = {
   xpToNext: [0, 6, 10, 16, 24, 34] as const,
   // Pro gewonnener Stufe KUMULATIV angewandte Buffs (read off kingLevel, kein State-Leak):
   hpBonusPerLevel: 28, // +28 maxHp je Stufe; beim Level-up wird derselbe Betrag SOFORT geheilt (Belohnung mitten im Kampf)
-  damageMultPerLevel: 0.08, // +8% Nahkampfschaden je Stufe; effektiver Mult = 1 + (kingLevel-1)*0.08 (additiv-multiplikativ)
+  damageMultPerLevel: 0.07, // +7% Nahkampfschaden je Stufe; effektiver Mult = 1 + (kingLevel-1)*0.07 -> L6-Deckel +35% (statt +40%). Bewusst leicht unter dem HP-Wachstum (+47% auf L6) gehalten: so bleibt ein Vorsprung spürbar, ohne dass das End-1v1 (zwei Könige, einer deutlich höher) durch DOPPELT gestapelten Schaden+Zähigkeit vorentschieden wirkt – und der auf Hardcore ZUSÄTZLICH mit aiDamage stapelnde KI-Königsschaden bleibt fairer.
   sizeMultPerLevel: 0.05, // +5% Anzeigegröße je Stufe ...
   maxSizeMult: 1.3, // ... GEDECKELT auf +30% Gesamtwachstum gegenüber UNIT_STATS.king.size (Lesbarkeit: der König darf das Feld nicht erdrücken)
 } as const;
