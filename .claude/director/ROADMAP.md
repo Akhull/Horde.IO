@@ -61,6 +61,28 @@ MUST pull from `medieval-rts` and keep this language; new pickups reuse the `orb
 
 ## Changelog (append-only, newest first)
 <!-- Director appends: `- YYYY-MM-DD — feat: <slice> — verified <how> — <commit>` -->
+- 2026-06-26 — polish: brighter, consistent daylight. updateTime tönte NUR den Gras-Boden und
+  pulste 0.5–1.0 ab timeOfDay=0 (dunkelster Frame) → jede Partie startete auf dunklem Gras, und
+  mit der neuen hellen Deko darauf las sich das Gras-only-Dimmen als "dunkles Gras / helle Bäume"-
+  Desync. Auf subtiles 0.85–1.0-"Atmen" gedämpft + Start bei timeOfDay=0.5 (volles Tageslicht zum
+  Auftakt). — verified typecheck + 40 vitest + src-eslint + vite build grün; Live-Capture zeigt
+  helle, kohärente Welt — c37db9c.
+- 2026-06-26 — feat: WELT-OPTIK-PASS (das Spiel sah leer aus — 9000×9000 ~94% flaches Kachelgras).
+  (1) systems/decor.ts (NEU): streut ~1100 nicht-kollidierende Props (Bäume/Büsche/Felsen/Findlinge/
+  Stämme) + ~90 Boden-Variations-Flecken (Dunkelgras/Erde/Sand/Pflaster) über das offene Feld, weicht
+  Hindernissen (Wasser/Wald) aus. Props/Flecken werden TEXTUR-GRUPPIERT erzeugt → Phaser batcht je Textur
+  in EINEN Draw-Call, dichte Streuung bleibt billig (146 FPS bei ~3000 Objekten). Größen/Anker aus dem
+  visuell verifizierten asset-librarian-Katalog (medieval-rts Environment/Tile); Flecken bei Alpha 0.55,
+  damit die Rechteck-Kante im Gras zerläuft statt als Billboard zu lesen. (2) Safe-Zone-"Sturm": drawSafeZone
+  dunkelt/rötet jetzt ALLES AUSSERHALB des Safe-Kreises via invertierter Geometrie-Maske (robust ggü. unzu-
+  verlässigen fillPath-Löchern) → liest sich wie eine echte BR-Gefahrenzone statt nur eines dünnen roten Rings.
+  (3) gameConfig: DECOR + SAFE_ZONE_VIS-Blöcke; DEPTH.groundPatch/decor-Ebenen. (4) BootScene lädt 12 Prop-
+  + 4 Flecken-Texturen. — verified typecheck + 40 vitest + src-eslint + vite build grün; LIVE Playwright-Pass:
+  Dichte/Vielfalt bestätigt, Sturm-Overlay korrekt, voller Sieg→Neustart→Niederlage-Loop intakt, 0 Konsolen-
+  Fehler — 16975f7.
+- 2026-06-26 — feat: battle-feel/perf-overlay/HUD-Arbeit aus dem Arbeitsbaum als sauberen Commit gesichert
+  (cameraFeel-System + 19 Tests, stats.js-Perf-Overlay F3, reicheres DOM-HUD: Könige-übrig/Cooldowns/Gefolge).
+  Alle Gates grün; user-eigenes tools/bench-ECS-Experiment blieb untracked — d7b12c1.
 - 2026-06-26 — feat: sprite-size correction pass (user reported 3 live problems with the new medieval-rts
   chips). (1) König war nur knapp größer als seine Vasallen → jetzt klar dominant. URSACHE per Pixel-Audit
   (asset-librarian): die King-Chips (medievalUnit_05/17/23) haben mehr transparenten Rand — die Figur füllt
