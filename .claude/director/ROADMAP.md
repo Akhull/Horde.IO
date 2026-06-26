@@ -61,6 +61,25 @@ MUST pull from `medieval-rts` and keep this language; new pickups reuse the `orb
 
 ## Changelog (append-only, newest first)
 <!-- Director appends: `- YYYY-MM-DD — feat: <slice> — verified <how> — <commit>` -->
+- 2026-06-26 — feat: sprite-size correction pass (user reported 3 live problems with the new medieval-rts
+  chips). (1) König war nur knapp größer als seine Vasallen → jetzt klar dominant. URSACHE per Pixel-Audit
+  (asset-librarian): die King-Chips (medievalUnit_05/17/23) haben mehr transparenten Rand — die Figur füllt
+  nur ~25.8% der Chip-Breite ggü. ~32% beim Vasall, also rendert der König bei gleicher displaySize optisch
+  ~24% KLEINER. King-`size` kompensiert das Padding UND hebt ihn klar über alle Sprites. (2) Alle Units zu
+  klein → Anzeigegrößen angehoben (displaySize vorher→nachher: König 52→116, Archer 40→56, Vasall L1/L2/L3
+  40/44/48→56/64/70, Champion 60→90; optische Figur König ~30px > Champion ~28px > L3-Vasall ~22px > L1/Archer
+  ~18px). (3) Pfeil + Slash zu groß → Pfeil 35×7→26×6; Slash startet 0.9× statt 1.0× der Figurbreite und wischt
+  auf 1.8× statt 2.4× (an Unit.barRef statt Hitbox ausgerichtet). ARCHITEKTUR: Anzeige von der Hitbox ENTKOPPELT
+  — `UNIT_STATS.size` ist jetzt die Anzeigegröße (setDisplaySize), die logische Hitbox (width/height, speist
+  Kollision/Formation/Separation) = `size * HITBOX_SCALE` (0.45). So bleibt der Kollisions-/Formations-Footprint
+  moderat (König-Hitbox ~52px ggü. Formation-Mindestabstand 60–100px) → Formationen/Separation gehen NICHT kaputt.
+  Healthbar + Schild-/Champion-/Archer-Ringe orientieren sich an `barRef` (≈ sichtbare Figurbreite), nicht an der
+  kleinen Hitbox. — verified: typecheck + 21 vitest + eslint (4 geänderte Dateien) + vite build alle grün; LIVE
+  visuell verifiziert via Playwright + __horde (Chrome --autoplay-policy=no-user-gesture-required, DOM-Menü
+  Mensch/Einzelspieler, Kamera-Close-ups): König dominiert in jedem Cluster klar, alle Figuren lesbar, Pfeil
+  kompakt, König-/Vasallen-Slash proportional nebeneinander, Konsole fehlerfrei. (In isoliertem git-worktree
+  gebaut, da parallel ein battleFeel-Feature dieselben Dateien im Haupt-Arbeitsbaum bearbeitete — sauber per
+  Fast-Forward auf main gepusht, Fremdarbeit unangetastet.) — dd84eac.
 - 2026-06-26 — art: FULL sprite migration to Kenney medieval-rts (+ particle-pack for pickups/particles). Threw out
   EVERY old game sprite and the entire LPC sprite-sheet/animation system — no half-migration. REPLACED: 12 unit
   textures (3 factions × king/l1/l2/l3, faction color baked in, no tint), barn/house/tower, grass/water/forest
