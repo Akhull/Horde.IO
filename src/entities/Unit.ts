@@ -375,7 +375,8 @@ export class Unit extends Entity {
       duration: 180,
       yoyo: true,
     });
-    // Goldener Partikel-Burst als sichtbare Belohnung am König.
+    // Goldener Partikel-Burst + Schockwellen-Ring als sichtbare Belohnung am König (rein additive FX).
+    scene.kingLevelUpShockwave(this.centerX, this.centerY);
     scene.spawnVisualEffect(this.centerX, this.centerY, { r: 255, g: 215, b: 0 }, 22, 480, 4, 1.6);
     // Schwebetext NUR für das Spieler-Team (sonst floutet das Feld bei 10 KI-Königen voll).
     if (this.team === scene.playerKing?.team) {

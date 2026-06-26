@@ -367,6 +367,44 @@ export class GameScene extends Phaser.Scene {
     this.screenShake(cfg.shakeDuration, intensity);
   }
 
+  // König-Level-up-Schockwelle: rein additive FX, wenn der König SELBST eine Stufe aufsteigt –
+  // ein persönlicher Wachstums-Beat, kein screen-weites Ereignis. Daher KEIN Screen-Flash und
+  // KEIN Shake (anders als der Königstöter-Finisher), und bewusst kleiner als dieser, damit ein
+  // Kill der größere Moment bleibt. Lokal am König, nur on-screen gefeuert (offscreen billig übersprungen).
+  kingLevelUpShockwave(x: number, y: number): void {
+    if (!this.isOnScreen(x, y)) return;
+    const cfg = FEEDBACK.kingLevelUp;
+
+    // a) Schockwellen-Ring: expandierende Gold-Konkussion (powerup-Textur, ADD-Blend) – kleiner als beim Kill.
+    const ring = this.add.image(x, y, "powerup");
+    ring.setBlendMode(Phaser.BlendModes.ADD).setTint(cfg.ringColor).setDepth(DEPTH.fx);
+    ring.setDisplaySize(30, 30).setAlpha(0.9);
+    this.tweens.add({
+      targets: ring,
+      displayWidth: cfg.ringMaxSize,
+      displayHeight: cfg.ringMaxSize,
+      alpha: 0,
+      duration: cfg.ringDuration,
+      ease: "Cubic.easeOut",
+      onComplete: () => ring.destroy(),
+    });
+
+    // b) Gold-weißer Stern-Flash (sparkle-Textur, ADD-Blend) – heller Kern-Funke am König.
+    const star = this.add.image(x, y, "sparkle");
+    star.setBlendMode(Phaser.BlendModes.ADD).setTint(cfg.starColor).setDepth(DEPTH.fx);
+    star.setDisplaySize(10, 10).setAlpha(1);
+    this.tweens.add({
+      targets: star,
+      displayWidth: cfg.starSize,
+      displayHeight: cfg.starSize,
+      angle: 35,
+      alpha: 0,
+      duration: cfg.starDuration,
+      ease: "Cubic.easeOut",
+      onComplete: () => star.destroy(),
+    });
+  }
+
   spawnProjectile(x: number, y: number, target: ProjectileTarget, damage: number, team: number, attacker?: ProjectileAttacker): void {
     this.projectiles.push(new Projectile(this, x, y, target, damage, team, attacker));
   }

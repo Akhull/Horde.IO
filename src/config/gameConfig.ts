@@ -198,6 +198,18 @@ export const FEEDBACK = {
     shakeBase: 0.004, // Grund-Shake (subtil, auch mid-game)
     shakeEpicBonus: 0.012, // +bis hierhin im finalen Duell (battlePhase=1)
   },
+  // König-Level-up-FX: macht das EIGENE Wachstum des Königs (Stufe-Aufstieg) sichtbar "knallen" –
+  // rein additive Optik (Ring + Kern-Funke), bewusst KLEINER/kühler als der Königstöter-Finisher
+  // (kein Screen-Flash, kein Shake), damit ein Kill weiterhin der größere Beat bleibt. Lokal am
+  // König – kein screen-weites Ereignis. Ändert KEINE Gameplay-/Balance-Werte.
+  kingLevelUp: {
+    ringColor: 0xffd24a, // sattes Gold des Level-up-Rings (etwas wärmer/satter als der Kill-Ring)
+    ringMaxSize: 200, // px Durchmesser — kleiner als der Kill-Ring (360), der Kill bleibt der größere Beat
+    ringDuration: 420, // ms
+    starColor: 0xfff3c0, // heller Gold-weißer Kern-Funke
+    starSize: 96, // px, auf den der Funke hochskaliert (kleiner als der Kill-Funke 150)
+    starDuration: 360, // ms
+  },
 } as const;
 
 // Kamera-Follow: die Kamera ZIEHT dem König geglättet NACH (lerp), statt pro Frame hart auf
