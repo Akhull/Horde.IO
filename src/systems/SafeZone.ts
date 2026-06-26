@@ -1,5 +1,6 @@
 import { CONFIG } from "../config/gameConfig";
 import type { SafeZoneCircle } from "../types";
+import type { Rng } from "../sim/rng";
 
 type SafeZoneState = "delay" | "shrinking" | "pause" | "moving";
 
@@ -10,8 +11,13 @@ export class SafeZone {
   target: SafeZoneCircle;
   state: SafeZoneState = "delay";
   private timer = 0;
+  // Geseedeter Sim-RNG (eigener fork je SafeZone). Treibt den Zonenpfad deterministisch —
+  // im Multiplayer schrumpft die Zone so auf allen Clients identisch (war zuvor Math.random
+  // => sofortiger Desync). Siehe docs/ARCHITECTURE.md §4a.
+  private rng: Rng;
 
-  constructor() {
+  constructor(rng: Rng) {
+    this.rng = rng;
     const cx = CONFIG.worldWidth / 2;
     const cy = CONFIG.worldHeight / 2;
     this.current = { centerX: cx, centerY: cy, radius: CONFIG.safeZoneStartRadius };
@@ -19,8 +25,8 @@ export class SafeZone {
   }
 
   private pickShrinkTarget(): void {
-    this.target.centerX = this.current.centerX + (Math.random() - 0.5) * this.current.radius * 0.5;
-    this.target.centerY = this.current.centerY + (Math.random() - 0.5) * this.current.radius * 0.5;
+    this.target.centerX = this.current.centerX + (this.rng.next() - 0.5) * this.current.radius * 0.5;
+    this.target.centerY = this.current.centerY + (this.rng.next() - 0.5) * this.current.radius * 0.5;
     this.target.radius = Math.max(this.current.radius * 0.6, CONFIG.safeZoneMinRadius);
   }
 
@@ -58,8 +64,8 @@ export class SafeZone {
           this.pickShrinkTarget();
         } else {
           this.state = "moving";
-          this.target.centerX = this.current.centerX + (Math.random() - 0.5) * this.current.radius * 0.5;
-          this.target.centerY = this.current.centerY + (Math.random() - 0.5) * this.current.radius * 0.5;
+          this.target.centerX = this.current.centerX + (this.rng.next() - 0.5) * this.current.radius * 0.5;
+          this.target.centerY = this.current.centerY + (this.rng.next() - 0.5) * this.current.radius * 0.5;
           this.target.radius = this.current.radius;
         }
       }

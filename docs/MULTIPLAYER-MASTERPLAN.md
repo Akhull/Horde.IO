@@ -226,4 +226,10 @@ M7  Steam-Release-Vorbereitung
 
 ## 9. Fortschritts-Log (mp/main, neueste zuerst)
 
+- **2026-06-26 — S1-P2 (Teil 1) ✅ SafeZone deterministisch.** `SafeZone` bekommt einen
+  injizierten `Rng` (eigener `fork()` aus dem GameScene-Master-`rng`); die 2 `Math.random`-
+  Stellen im Zonenpfad (shrink-target + moving-target) ersetzt. `GameScene` hält jetzt ein
+  Master-`rng` (SP seedet zufällig, MP später aus Lobby). Neuer Determinismus-Test: gleicher
+  Seed => identischer Zonenpfad über 5000 Ticks. Gates grün: typecheck + 65 vitest + build.
+  *Nächste Slice: worldgen — Planner-Refactor (reine Placement-Records) + Golden-Master, dann rng durchfädeln.*
 - **2026-06-26 — S1-P1 ✅ Seeded Rng-Primitive.** `src/sim/rng.ts` (`Rng`-Klasse: `next`/`nextInt`/`range`/`fork` auf mulberry32) + 6 Tests; `tools/bench/shared.ts` re-exportiert mulberry32 von dort (eine Implementierung, Benchmark byte-identisch). Kein Spielverhalten geändert. Gates grün: typecheck + 64 vitest + build. *Nächste Slice: S1-P0 Golden-Master-Snapshot + S1-P2 rng durch worldgen/SafeZone fädeln.*

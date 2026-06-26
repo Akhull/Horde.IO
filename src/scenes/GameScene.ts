@@ -20,6 +20,7 @@ import { PowerUp } from "../entities/PowerUp";
 import { Projectile, type ProjectileTarget, type ProjectileAttacker } from "../entities/Projectile";
 import { SpatialGrid } from "../systems/SpatialGrid";
 import { SafeZone } from "../systems/SafeZone";
+import { Rng } from "../sim/rng";
 import { SoundManager } from "../systems/SoundManager";
 import { recalcFormationOffset } from "../systems/AI";
 import { generateObstacles, generateBuildingClusters, generatePowerUps, spawnVassal } from "../systems/worldgen";
@@ -82,6 +83,10 @@ export class GameScene extends Phaser.Scene {
 
   grid!: SpatialGrid;
   safeZone!: SafeZone;
+  // Geseedeter Sim-RNG. Single-Player seedet zufällig (Variety); im Multiplayer wird
+  // der Seed später aus den Lobby-Daten gesetzt, damit alle Clients dieselbe Welt fahren.
+  // Subsysteme bekommen je einen fork() -> unabhängige, reproduzierbare Teilströme.
+  rng!: Rng;
   // Eigener Audio-Manager (NICHT this.sound nennen – das ist Phasers Sound-Manager!)
   audio!: SoundManager;
 
@@ -213,7 +218,9 @@ export class GameScene extends Phaser.Scene {
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.scale.off(Phaser.Scale.Events.RESIZE, fitVignette));
 
     this.grid = new SpatialGrid(CONFIG.worldWidth, CONFIG.worldHeight, 150);
-    this.safeZone = new SafeZone();
+    // Seed im App-Layer (Math.random hier erlaubt; nur src/sim/** muss deterministisch sein).
+    this.rng = new Rng((Math.random() * 0xffffffff) >>> 0);
+    this.safeZone = new SafeZone(this.rng.fork());
     this.audio = new SoundManager(this);
     this.audio.startWarAmbience();
 
