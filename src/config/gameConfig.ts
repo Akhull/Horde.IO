@@ -34,6 +34,28 @@ export const UNIT_STATS = {
   },
 } as const;
 
+// Kampf-Feedback ("Juice") – zentral tunbar, damit Treffer sich anfühlen.
+export const FEEDBACK = {
+  flashDuration: 90, // ms weißer Aufleucht-Flash bei Treffer
+  knockback: 3.2, // Rückstoß-Impuls (px) bei einem Treffer
+  knockbackDecay: 0.8, // Geschwindigkeits-Abbau pro Update
+  kingKnockbackFactor: 0.25, // Könige werden weniger zurückgestoßen (schwerer)
+  shakeOnPlayerHit: 0.006, // Kamera-Shake-Intensität, wenn der Spielerkönig getroffen wird
+  shakeDuration: 110, // ms
+  kingDeathShake: 0.006, // Shake bei sichtbarem Königstod
+  damageNumbers: true, // Schadenszahlen für sichtbare Treffer anzeigen
+  maxDamageNumbers: 16, // gleichzeitig aktive Schadenszahlen (Performance-Deckel)
+  vignettePeak: 0.55, // Spitzen-Alpha des roten Schaden-Vignette-Flashs
+} as const;
+
+// Verteidigungstürme: neutrale Gebäude (Typ "tower"), die auf alle Fraktionen feuern.
+export const TOWER = {
+  range: 260, // Reichweite, in der Einheiten beschossen werden
+  damage: 8, // Schaden pro Pfeil
+  fireInterval: 1600, // ms zwischen Schüssen
+  team: -1, // gehört keinem König -> feindlich zu allen
+} as const;
+
 export const FACTIONS = ["human", "elf", "orc"] as const;
 
 // Tiefen-Ebenen für die Phaser-Darstellung (z-Sortierung)

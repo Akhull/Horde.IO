@@ -105,6 +105,21 @@ vervollständigt:
 - **Neu vervollständigt:** Power-Ups (Tempo/Schild) werden nun tatsächlich
   in der Welt platziert (im Original existierte nur die Aufsammel-Logik).
 
+### ⚔️ Neu: Kampf-Feedback & Verteidigungstürme
+
+- **Treffer-Feedback ("Juice"):** Getroffene Einheiten leuchten kurz weiß auf,
+  werden zurückgestoßen und zeigen schwebende Schadenszahlen (nur sichtbare
+  Treffer, mit Mengen-Deckel). Auch Gebäude blinken bei Treffern.
+- **Tod-Effekte:** Partikel-Ausbruch beim Sterben; bei sichtbaren Königstoden
+  ein kurzer Kamera-Shake.
+- **Spieler-Feedback:** Nimmt dein König Schaden, ruckelt die Kamera und ein roter
+  Vignette-Flash blitzt auf. Außerhalb der Safe-Zone pulsiert die Vignette als
+  ständige Gefahren-Warnung. Fähigkeiten (Dash/Schild) lösen Partikel-Effekte aus.
+- **Verteidigungstürme:** `tower`-Gebäude sind jetzt keine Deko mehr — sie feuern
+  Pfeile auf alle Einheiten in Reichweite (neutral, gegen jede Fraktion). Damit
+  werden Turm-Cluster zu gefährlichen, umkämpften Zielen. Werte tunbar in
+  `src/config/gameConfig.ts` (`FEEDBACK`, `TOWER`).
+
 > **Multiplayer:** Im Original war der Server nur ein Rumpf (synchronisierte
 > lediglich Königs-Positionen). Die Neuauflage konzentriert sich auf den
 > vollständigen Singleplayer; ein moderner Multiplayer kann später ergänzt werden.

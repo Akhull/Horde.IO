@@ -4,6 +4,8 @@ import { DEPTH } from "../config/gameConfig";
 import type { GameScene } from "../scenes/GameScene";
 
 // Ziel eines Pfeils: alles mit Bounding-Box und HP (Einheit oder Gebäude).
+// takeDamage (optional) erlaubt Treffer-Feedback (Flash/Rückstoß/Schadenszahl);
+// fehlt es, wird HP direkt abgezogen.
 export interface ProjectileTarget {
   x: number;
   y: number;
@@ -11,6 +13,7 @@ export interface ProjectileTarget {
   height: number;
   hp: number;
   dead?: boolean;
+  takeDamage?(amount: number, srcX: number, srcY: number, scene: GameScene): void;
 }
 
 // Ballistischer Pfeil mit Flughöhe (z), Schwerkraft und Einschlag.
@@ -84,7 +87,10 @@ export class Projectile extends Entity {
       const projCenterX = this.centerX;
       const projCenterY = this.centerY - this.z;
       if (Math.hypot(targetCenterX - projCenterX, targetCenterY - projCenterY) < 15) {
-        if (!this.target.dead) this.target.hp -= this.damage;
+        if (!this.target.dead) {
+          if (this.target.takeDamage) this.target.takeDamage(this.damage, projCenterX, projCenterY, scene);
+          else this.target.hp -= this.damage;
+        }
         this.expired = true;
         if (!this.impactSpawned) {
           scene.spawnVisualEffect(this.centerX, this.centerY - this.z, { r: 255, g: 100, b: 0 }, 5, 150, 2, 0.5);

@@ -1,5 +1,5 @@
 import Phaser from "phaser";
-import { CONFIG, DEPTH } from "../config/gameConfig";
+import { CONFIG, DEPTH, FEEDBACK } from "../config/gameConfig";
 import type { Faction, RGB, SafeZoneCircle } from "../types";
 import type { Vec2 } from "../systems/AI";
 import { Unit } from "../entities/Unit";
@@ -21,6 +21,7 @@ import {
   applySeparationForce,
 } from "../systems/collision";
 import { applySafeZoneDamage, handlePowerUps, handleSouls, handleBuildings, removeDeadUnits } from "../systems/gameplay";
+import { updateTowers } from "../systems/combat";
 
 interface Particle {
   x: number;
@@ -73,6 +74,11 @@ export class GameScene extends Phaser.Scene {
   private safeGfx!: Phaser.GameObjects.Graphics;
   private ground!: Phaser.GameObjects.TileSprite;
 
+  // Schaden-Feedback: roter Vignette-Flash (Treffer + Gefahrenzone) und Schadenszahl-Deckel.
+  private vignette!: Phaser.GameObjects.Image;
+  private hitVignette = 0;
+  private activeDamageTexts = 0;
+
   constructor() {
     super("Game");
   }
@@ -113,6 +119,18 @@ export class GameScene extends Phaser.Scene {
 
     this.fxGfx = this.add.graphics().setDepth(DEPTH.fx);
     this.safeGfx = this.add.graphics().setDepth(DEPTH.safezone);
+
+    // Bildschirmfester roter Vignette-Flash (Treffer / Gefahrenzone).
+    this.vignette = this.add
+      .image(0, 0, "vignette")
+      .setOrigin(0, 0)
+      .setScrollFactor(0)
+      .setDepth(DEPTH.floatingText + 10)
+      .setAlpha(0);
+    const fitVignette = () => this.vignette.setDisplaySize(this.scale.width, this.scale.height);
+    fitVignette();
+    this.scale.on(Phaser.Scale.Events.RESIZE, fitVignette);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.scale.off(Phaser.Scale.Events.RESIZE, fitVignette));
 
     this.grid = new SpatialGrid(CONFIG.worldWidth, CONFIG.worldHeight, 150);
     this.safeZone = new SafeZone();
@@ -237,6 +255,68 @@ export class GameScene extends Phaser.Scene {
     this.tweens.add({ targets: t, y: y - 40, alpha: 0, duration, onComplete: () => t.destroy() });
   }
 
+  // Kurzer Kamera-Shake (komponiert mit dem manuellen centerOn pro Frame).
+  screenShake(duration: number = FEEDBACK.shakeDuration, intensity: number = FEEDBACK.shakeOnPlayerHit): void {
+    this.cameras.main.shake(duration, intensity);
+  }
+
+  // Liegt ein Weltpunkt (grob) im sichtbaren Kamerabereich?
+  isOnScreen(x: number, y: number, margin = 100): boolean {
+    const v = this.cameras.main.worldView;
+    return x >= v.x - margin && x <= v.right + margin && y >= v.y - margin && y <= v.bottom + margin;
+  }
+
+  // Wird ausgelöst, wenn der Spielerkönig Schaden nimmt: Shake + roter Vignette-Flash.
+  onPlayerKingHit(amount: number): void {
+    this.hitVignette = FEEDBACK.vignettePeak;
+    this.screenShake(FEEDBACK.shakeDuration, FEEDBACK.shakeOnPlayerHit * Math.min(2, 1 + amount / 20));
+  }
+
+  // Schwebende Schadenszahl – nur sichtbare Treffer, mit hartem Mengen-Deckel.
+  spawnDamageNumber(amount: number, x: number, y: number): void {
+    if (this.activeDamageTexts >= FEEDBACK.maxDamageNumbers) return;
+    if (!this.isOnScreen(x, y, 40)) return;
+    this.activeDamageTexts++;
+    const jitterX = (Math.random() - 0.5) * 14;
+    const t = this.add
+      .text(x + jitterX, y - 8, `-${Math.round(amount)}`, {
+        fontFamily: "Arial, sans-serif",
+        fontStyle: "bold",
+        fontSize: "14px",
+        color: "#ff5b5b",
+        stroke: "#2a0000",
+        strokeThickness: 3,
+      })
+      .setOrigin(0.5)
+      .setDepth(DEPTH.floatingText);
+    this.tweens.add({
+      targets: t,
+      y: y - 36,
+      alpha: 0,
+      duration: 620,
+      ease: "Quad.easeOut",
+      onComplete: () => {
+        this.activeDamageTexts--;
+        t.destroy();
+      },
+    });
+  }
+
+  // Treibt das Vignette-Alpha aus zwei Quellen: Treffer-Flash (abklingend) und
+  // dauerhafter Gefahren-Puls, solange der Spielerkönig ausserhalb der Safe-Zone ist.
+  private updateDamageVignette(dt: number): void {
+    if (this.hitVignette > 0) this.hitVignette = Math.max(0, this.hitVignette - dt * 0.0025);
+
+    let danger = 0;
+    const king = this.playerKing;
+    if (king) {
+      const sz = this.safeZoneCurrent;
+      const dist = Math.hypot(king.centerX - sz.centerX, king.centerY - sz.centerY);
+      if (dist > sz.radius) danger = 0.22 + 0.08 * Math.sin(this.gameTime * 0.008);
+    }
+    this.vignette.setAlpha(Math.max(this.hitVignette, danger));
+  }
+
   // ---- Haupt-Loop ----
 
   update(_time: number, delta: number): void {
@@ -249,6 +329,7 @@ export class GameScene extends Phaser.Scene {
     this.updateFormations(dt);
 
     for (const u of this.units) u.update(dt, this);
+    updateTowers(this, dt);
 
     for (let i = this.projectiles.length - 1; i >= 0; i--) {
       this.projectiles[i].update(dt, this);
@@ -275,6 +356,7 @@ export class GameScene extends Phaser.Scene {
 
     this.updateParticles(dt);
     this.updateWarVolume();
+    this.updateDamageVignette(dt);
 
     // Darstellung aktualisieren
     const playerTeam = this.playerKing ? this.playerKing.team : null;
@@ -348,6 +430,7 @@ export class GameScene extends Phaser.Scene {
     this.gameOver = true;
     this.audio.stopAll();
     this.scene.stop("HUD");
+    if (message === "Verloren") this.cameras.main.shake(260, 0.011);
     this.cameras.main.fadeOut(600, 0, 0, 0);
     this.cameras.main.once("camerafadeoutcomplete", () => {
       this.scene.start("GameOver", { message, faction: this.playerFaction });

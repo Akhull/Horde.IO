@@ -1,6 +1,7 @@
 import { Unit } from "../entities/Unit";
 import { Soul } from "../entities/Soul";
 import { spawnVassal } from "./worldgen";
+import { FEEDBACK } from "../config/gameConfig";
 import type { SoulType } from "../types";
 import type { GameScene } from "../scenes/GameScene";
 
@@ -24,6 +25,12 @@ export function removeDeadUnits(scene: GameScene): void {
     const u = scene.units[i];
     if (u.hp <= 0) {
       if (u === scene.playerKing) continue;
+      // Todes-Effekt: Partikel-Ausbruch; bei Königen zusätzlich Kamera-Shake (wenn sichtbar).
+      const count = u.unitType === "king" ? 26 : u.unitType === "archer" ? 8 : 12;
+      scene.spawnVisualEffect(u.centerX, u.centerY, { r: 150, g: 20, b: 20 }, count, 360, 3, 1.4);
+      if (u.unitType === "king" && scene.isOnScreen(u.centerX, u.centerY)) {
+        scene.screenShake(160, FEEDBACK.kingDeathShake);
+      }
       spawnSoulFromUnit(scene, u);
       scene.grid.removeEntity(u);
       u.dead = true;

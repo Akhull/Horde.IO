@@ -1,11 +1,12 @@
 import Phaser from "phaser";
 import { Entity } from "./Entity";
-import { CONFIG, UNIT_STATS, DEPTH } from "../config/gameConfig";
+import { CONFIG, UNIT_STATS, DEPTH, FEEDBACK } from "../config/gameConfig";
 import type { Faction, UnitType } from "../types";
 import type { Vec2 } from "../systems/AI";
 import { determineVassalTarget } from "../systems/AI";
 import { resolveUnitSheet, animKey } from "../systems/animations";
 import { FACTION_TINT, type AnimName } from "../config/spriteConfig";
+import type { ProjectileTarget } from "./Projectile";
 import type { GameScene } from "../scenes/GameScene";
 
 // Eine Einheit: König (Spieler/KI), Vasall (Nahkampf) oder Bogenschütze.
@@ -39,8 +40,14 @@ export class Unit extends Entity {
   isAttacking = false;
   attackTimer = 0;
   attackDamageDealt = false;
-  currentTarget: { x: number; y: number; width: number; height: number; hp: number; dead?: boolean } | null = null;
+  currentTarget: ProjectileTarget | null = null;
   formationOffset: Vec2 | null = null;
+
+  // Treffer-Feedback
+  private flashTimer = 0;
+  private flashShown = false;
+  knockbackVx = 0;
+  knockbackVy = 0;
 
   deathSoundPlayed = false;
   facingDirection: 1 | -1 = 1;
@@ -190,13 +197,41 @@ export class Unit extends Entity {
     return { key: "melee_l3", vol: 1.3 };
   }
 
+  // Zentraler Treffer-Eingang: HP abziehen + Feedback (Aufleuchten, Rückstoß,
+  // Schadenszahl). Quelle (srcX/srcY) bestimmt die Rückstoßrichtung.
+  takeDamage(amount: number, srcX: number, srcY: number, scene: GameScene): void {
+    if (this.hp <= 0) return;
+    this.hp -= amount;
+    this.flashTimer = FEEDBACK.flashDuration;
+
+    // Rückstoß weg von der Schadensquelle (Spielerkönig behält volle Kontrolle).
+    if (this !== scene.playerKing) {
+      const dx = this.centerX - srcX;
+      const dy = this.centerY - srcY;
+      const d = Math.hypot(dx, dy) || 1;
+      const factor = this.unitType === "king" ? FEEDBACK.kingKnockbackFactor : 1;
+      this.knockbackVx += (dx / d) * FEEDBACK.knockback * factor;
+      this.knockbackVy += (dy / d) * FEEDBACK.knockback * factor;
+    }
+
+    if (FEEDBACK.damageNumbers) scene.spawnDamageNumber(amount, this.centerX, this.y);
+    if (this === scene.playerKing) scene.onPlayerKingHit(amount);
+  }
+
+  // Stellt die Grund-Färbung nach einem Treffer-Flash wieder her.
+  private restoreTint(): void {
+    if (this.isDemoSheet) this.sprite.setTint(FACTION_TINT[this.faction]);
+    else this.sprite.clearTint();
+  }
+
   // Wendet im Angriffsfenster 20 Schaden an, spielt Sound und zeigt den Slash-Effekt.
   private executeAttack(deltaTime: number, scene: GameScene): void {
     if (!this.isAttacking) return;
     this.attackTimer -= deltaTime;
     if (this.attackTimer < 250 && !this.attackDamageDealt) {
       if (this.currentTarget && !this.currentTarget.dead) {
-        this.currentTarget.hp -= 20;
+        if (this.currentTarget.takeDamage) this.currentTarget.takeDamage(20, this.centerX, this.centerY, scene);
+        else this.currentTarget.hp -= 20;
       }
       this.attackDamageDealt = true;
       const s = this.meleeSound();
@@ -232,6 +267,17 @@ export class Unit extends Entity {
     this.prevY = this.y;
     this.isMoving = false;
     const step = (this.speed * deltaTime) / 16;
+
+    // Treffer-Flash & Rückstoß – immer, vor allen Bewegungs-Verzweigungen.
+    if (this.flashTimer > 0) this.flashTimer -= deltaTime;
+    if (this.knockbackVx !== 0 || this.knockbackVy !== 0) {
+      this.x += (this.knockbackVx * deltaTime) / 16;
+      this.y += (this.knockbackVy * deltaTime) / 16;
+      this.knockbackVx *= FEEDBACK.knockbackDecay;
+      this.knockbackVy *= FEEDBACK.knockbackDecay;
+      if (Math.abs(this.knockbackVx) < 0.05) this.knockbackVx = 0;
+      if (Math.abs(this.knockbackVy) < 0.05) this.knockbackVy = 0;
+    }
 
     // Todessound einmalig
     if (this.hp <= 0 && !this.deathSoundPlayed) {
@@ -308,7 +354,7 @@ export class Unit extends Entity {
           this.isAttacking = true;
           this.attackTimer = 500;
           this.attackDamageDealt = false;
-          this.currentTarget = info.target as { x: number; y: number; width: number; height: number; hp: number; dead?: boolean };
+          this.currentTarget = info.target as ProjectileTarget;
         }
       } else if (!this.isAttacking) {
         const mx = (dx / d) * step;
@@ -408,9 +454,12 @@ export class Unit extends Entity {
     if (this.dashTimer >= CONFIG.dashCooldown && prevDash < CONFIG.dashCooldown) this.dashReadyFlashTimer = 250;
     if (this.dashReadyFlashTimer > 0) this.dashReadyFlashTimer -= deltaTime;
     if (scene.keyDash && this.dashTimer >= CONFIG.dashCooldown && (this.lastDirection.x || this.lastDirection.y)) {
+      // Staubwolke am Start + Funken am Zielpunkt für spürbaren Dash.
+      scene.spawnVisualEffect(this.centerX, this.centerY, { r: 210, g: 205, b: 190 }, 14, 320, 3, 2);
       this.x += this.lastDirection.x * CONFIG.dashDistance;
       this.y += this.lastDirection.y * CONFIG.dashDistance;
       this.dashTimer = 0;
+      scene.spawnVisualEffect(this.centerX, this.centerY, { r: 255, g: 255, b: 255 }, 8, 260, 2, 1.5);
     }
 
     // Schild
@@ -422,6 +471,8 @@ export class Unit extends Entity {
       this.isShieldActive = true;
       this.shieldTimer = CONFIG.shieldAbilityDuration;
       this.shieldCooldownTimer = 0;
+      // Energie-Ring beim Aktivieren des Schilds.
+      scene.spawnVisualEffect(this.centerX, this.centerY, { r: 0, g: 200, b: 255 }, 18, 420, 3, 1.6);
     }
     if (this.isShieldActive) {
       this.shieldTimer -= deltaTime;
@@ -437,7 +488,7 @@ export class Unit extends Entity {
           this.isAttacking = true;
           this.attackTimer = 500;
           this.attackDamageDealt = false;
-          this.currentTarget = info.target as { x: number; y: number; width: number; height: number; hp: number; dead?: boolean };
+          this.currentTarget = info.target as ProjectileTarget;
         }
       }
     }
@@ -454,7 +505,7 @@ export class Unit extends Entity {
           this.isAttacking = true;
           this.attackTimer = 500;
           this.attackDamageDealt = false;
-          this.currentTarget = info.target as { x: number; y: number; width: number; height: number; hp: number; dead?: boolean };
+          this.currentTarget = info.target as ProjectileTarget;
         }
       } else if (!this.isAttacking) {
         const mx = (dx / d) * step;
@@ -540,6 +591,15 @@ export class Unit extends Entity {
   sync(): void {
     this.sprite.setPosition(this.centerX, this.centerY + this.bobbingOffset);
     this.sprite.setFlipX(this.facingDirection === -1);
+
+    // Treffer-Aufleuchten (weiße Silhouette) – nur bei Zustandswechsel umschalten.
+    if (this.flashTimer > 0 && !this.flashShown) {
+      this.sprite.setTintFill(0xffffff);
+      this.flashShown = true;
+    } else if (this.flashTimer <= 0 && this.flashShown) {
+      this.restoreTint();
+      this.flashShown = false;
+    }
 
     const playerTeam = this.scenePlayerTeam;
     const barW = this.unitType === "king" ? this.width * 1.1 : this.width;

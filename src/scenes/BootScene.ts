@@ -66,6 +66,7 @@ export class BootScene extends Phaser.Scene {
   create(): void {
     this.makeGrassTexture();
     this.makeDotTexture();
+    this.makeVignetteTexture();
     setupAnimations(this); // Demo-Charakter erzeugen + Animationen registrieren
     this.scene.start("Title");
   }
@@ -119,6 +120,23 @@ export class BootScene extends Phaser.Scene {
     ctx.beginPath();
     ctx.arc(8, 8, 8, 0, Math.PI * 2);
     ctx.fill();
+    tex.refresh();
+  }
+
+  // Radialer roter Vignette-Verlauf (transparente Mitte -> rote Ränder) für den
+  // Schaden-/Gefahren-Flash. Wird in der GameScene bildschirmfest skaliert.
+  private makeVignetteTexture(): void {
+    const W = 256;
+    const H = 256;
+    const tex = this.textures.createCanvas("vignette", W, H);
+    if (!tex) return;
+    const ctx = tex.getContext();
+    const g = ctx.createRadialGradient(W / 2, H / 2, W * 0.28, W / 2, H / 2, W * 0.62);
+    g.addColorStop(0, "rgba(200,0,0,0)");
+    g.addColorStop(0.7, "rgba(200,0,0,0.35)");
+    g.addColorStop(1, "rgba(170,0,0,1)");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
     tex.refresh();
   }
 }
