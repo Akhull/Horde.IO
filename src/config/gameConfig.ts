@@ -81,6 +81,7 @@ export const POWERUP = {
   armorMultiplier: 0.6, // eingehender Schaden während des Armor-Boosts (−40%)
   lifestealFactor: 0.35, // geheilter Anteil des ausgeteilten Schadens (Lifesteal)
   regenPerSecond: 10, // passiv regenerierte HP pro Sekunde während des Regen-Boosts
+  knockbackResistFactor: 0.2, // verbleibender Anteil des Rückstoß-Impulses während "steady" (0.2 = 20% bleiben, −80% Knockback)
 } as const;
 
 // Legendäre Spezialeinheiten pro Fraktion (aus Gold-Orbs beschworen).

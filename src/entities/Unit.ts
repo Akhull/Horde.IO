@@ -67,6 +67,12 @@ export class Unit extends Entity {
   // Anders als der Lifesteal heilt er IMMER (auch beim Fliehen/Wandern), nicht nur
   // beim Zuschlagen; es gibt keinen Faktor zurückzusetzen – der Timer steuert alles.
   regenTimer = 0;
+  // Steady-Power-Up (Anti-CC/defensiv): gleiche Zeitlogik wie die übrigen Boosts.
+  // Solange steadyTimer > 0 ist, wird der EINGEHENDE Rückstoß-Impuls in takeDamage
+  // mit POWERUP.knockbackResistFactor (< 1) multipliziert (der Träger steht fest).
+  // Es gibt – wie beim Regen – keinen Faktor zurückzusetzen: der Timer steuert alles,
+  // der Resist-Faktor wird konstant aus der Config gelesen, solange der Timer läuft.
+  steadyTimer = 0;
   dashReadyFlashTimer = 0;
   shieldReadyFlashTimer = 0;
   idleTarget: Vec2 | null = null;
@@ -340,6 +346,14 @@ export class Unit extends Entity {
     this.regenTimer = Math.max(this.regenTimer, duration);
   }
 
+  // Steady-Power-Up aufnehmen (Spieler- ODER KI-König). Idempotent gegen Stacking wie
+  // die übrigen Boosts: es gibt keinen Faktor zu setzen (der Resist-Wert ist konstant aus
+  // POWERUP.knockbackResistFactor), weitere Aufnahmen verlängern nur den Timer. tickSteady
+  // zählt den Timer herunter; knockbackResistFactor liest den Faktor, solange er läuft.
+  applySteady(duration: number): void {
+    this.steadyTimer = Math.max(this.steadyTimer, duration);
+  }
+
   // Heilt den Angreifer um lifestealFactor des ausgeteilten Schadens, geklemmt auf
   // das fraktions-skalierte maxHp (kein Überheilen). No-Op, wenn kein Lifesteal aktiv
   // ist oder die Einheit bereits tot/vollgeheilt ist. Wird im Moment des bestätigten
@@ -362,6 +376,15 @@ export class Unit extends Entity {
   // dort multiplikativ mit der Schild-Halbierung kombiniert (zwei Schutzschichten).
   get armorDamageFactor(): number {
     return this.armorMult;
+  }
+
+  // Rückstoß-Resist-Faktor durch das Steady-Power-Up (1 = voller Rückstoß, < 1 = reduziert).
+  // Wird in takeDamage auf den angewandten Knockback-Impuls multipliziert. Kombiniert sich
+  // MULTIPLIKATIV mit dem bestehenden kingKnockbackFactor (Könige sind ohnehin schwerer) –
+  // Steady ERSETZT den König-Faktor nicht, sondern reduziert den bereits gewichteten Impuls
+  // zusätzlich (z. B. 0.25 König × 0.2 Steady = 0.05 -> nahezu standfest).
+  get knockbackResistFactor(): number {
+    return this.steadyTimer > 0 ? POWERUP.knockbackResistFactor : 1;
   }
 
   // Schild-Power-Up aufnehmen (Spieler- ODER KI-König). Verlängert ein aktives
@@ -428,6 +451,14 @@ export class Unit extends Entity {
     if (this.regenTimer <= 0) this.regenTimer = 0;
   }
 
+  // Zählt den Steady-Boost herunter. Wie beim Regen gibt es keinen Faktor zurückzusetzen –
+  // knockbackResistFactor liefert von selbst wieder 1, sobald steadyTimer auf 0 fällt.
+  private tickSteady(deltaTime: number): void {
+    if (this.steadyTimer <= 0) return;
+    this.steadyTimer -= deltaTime;
+    if (this.steadyTimer <= 0) this.steadyTimer = 0;
+  }
+
   // Zählt ein aktives Schild herunter (Fähigkeit beim Spieler, Power-Up bei allen
   // Königen). Zentral in updateKing, damit es auch für KI-Könige korrekt abläuft.
   private tickShield(deltaTime: number): void {
@@ -454,8 +485,11 @@ export class Unit extends Entity {
       const dy = this.centerY - srcY;
       const d = Math.hypot(dx, dy) || 1;
       const factor = this.unitType === "king" ? FEEDBACK.kingKnockbackFactor : 1;
-      this.knockbackVx += (dx / d) * FEEDBACK.knockback * factor;
-      this.knockbackVy += (dy / d) * FEEDBACK.knockback * factor;
+      // Steady-Power-Up reduziert den Rückstoß-Impuls MULTIPLIKATIV zum kingKnockbackFactor
+      // (ersetzt ihn nicht): ein König mit Steady steht nahezu fest (0.25 × 0.2 = 0.05).
+      const resist = this.knockbackResistFactor;
+      this.knockbackVx += (dx / d) * FEEDBACK.knockback * factor * resist;
+      this.knockbackVy += (dy / d) * FEEDBACK.knockback * factor * resist;
     }
 
     if (FEEDBACK.damageNumbers) scene.spawnDamageNumber(dmg, this.centerX, this.y);
@@ -750,6 +784,7 @@ export class Unit extends Entity {
     this.tickArmorBoost(deltaTime);
     this.tickLifesteal(deltaTime);
     this.tickRegen(deltaTime);
+    this.tickSteady(deltaTime);
     this.tickShield(deltaTime);
     if (this === scene.playerKing) {
       this.updatePlayerKing(deltaTime, step, scene);

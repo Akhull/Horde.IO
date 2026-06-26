@@ -159,6 +159,10 @@ export function handlePowerUps(scene: GameScene): void {
       // Regen-Boost: smaragdgrüner Heil-Funkenausbruch passend zur Orb-Farbe.
       taker.applyRegen(p.duration);
       scene.spawnVisualEffect(p.centerX, p.centerY, { r: 46, g: 204, b: 113 }, 15, 400, 3, 1.2);
+    } else if (p.effectType === "steady") {
+      // Steady-Boost: erdbraun-steinerner Staubausbruch passend zur Orb-Farbe (standfest).
+      taker.applySteady(p.duration);
+      scene.spawnVisualEffect(p.centerX, p.centerY, { r: 139, g: 90, b: 43 }, 15, 400, 3, 1.2);
     } else {
       taker.applyShieldPowerUp(p.duration);
       scene.spawnVisualEffect(p.centerX, p.centerY, { r: 0, g: 191, b: 255 }, 15, 400, 3, 1.2);

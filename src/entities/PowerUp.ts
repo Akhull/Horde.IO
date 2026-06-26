@@ -17,7 +17,8 @@ export class PowerUp extends Entity {
     // speed = gold, shield = himmelblau, damage = rot-orange (aggressiv),
     // armor = stahl-blaugrau (defensiv/robust), lifesteal = blutrot (Vampir-Sustain),
     // regen = smaragdgrün (Heilung; bewusst gedämpfter/türkiser als das grelle Soul-Grün
-    // 0x00ff00 und klar von der goldenen Speed-Orb getrennt).
+    // 0x00ff00 und klar von der goldenen Speed-Orb getrennt),
+    // steady = erdbraun/Stein (standfest gegen Rückstoß; klar von allen übrigen Orbs getrennt).
     const color =
       effectType === "speed"
         ? 0xffd700
@@ -29,7 +30,9 @@ export class PowerUp extends Entity {
               ? 0x9aa7b4
               : effectType === "lifesteal"
                 ? 0xb00020
-                : 0x2ecc71;
+                : effectType === "regen"
+                  ? 0x2ecc71
+                  : 0x8b5a2b;
     this.sprite = scene.add
       .circle(this.centerX, this.centerY, 14, color, 0.9)
       .setStrokeStyle(3, 0xffffff)
