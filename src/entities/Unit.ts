@@ -6,6 +6,7 @@ import { AURA_TINT } from "../config/spriteConfig";
 import type { Faction, UnitType } from "../types";
 import type { Vec2 } from "../systems/AI";
 import { determineVassalTarget, chooseAIKingTarget, findKingCollectible, computeKingAvoidance } from "../systems/AI";
+import { applyKingXp, kingDamageMult, kingDisplaySize } from "../systems/kingProgression";
 import type { ProjectileTarget } from "./Projectile";
 import type { GameScene } from "../scenes/GameScene";
 
@@ -336,13 +337,12 @@ export class Unit extends Entity {
   // erntet – nicht nur Gold –, parallel zum dichten Horde-Wachstum.
   gainKingXp(amount: number, scene: GameScene): void {
     if (this.unitType !== "king" || this.kingLevel >= KING_PROGRESSION.maxLevel) return;
-    this.kingXp += amount;
-    // xpToNext ist über die AKTUELLE Stufe indiziert (s. Config); Schwelle verbrauchen,
-    // solange sie erreicht ist und der Deckel noch nicht steht.
-    while (this.kingLevel < KING_PROGRESSION.maxLevel && this.kingXp >= KING_PROGRESSION.xpToNext[this.kingLevel]) {
-      this.kingXp -= KING_PROGRESSION.xpToNext[this.kingLevel];
-      this.levelUpKing(scene);
-    }
+    // Reiner Schwellen-/Level-Kern liegt phaser-frei in systems/kingProgression; hier wird er nur
+    // angewandt und das sichtbare Level-up-Juice pro gewonnener Stufe gefeuert. levelUpKing macht
+    // selbst this.kingLevel++ – nach levelsGained Aufrufen stimmt kingLevel mit result.level überein.
+    const result = applyKingXp(this.kingLevel, this.kingXp, amount);
+    for (let i = 0; i < result.levelsGained; i++) this.levelUpKing(scene);
+    this.kingXp = result.xp;
   }
 
   // Eine König-Stufe aufsteigen: maxHp anheben + denselben Betrag SOFORT heilen (Belohnung
@@ -359,8 +359,8 @@ export class Unit extends Entity {
 
     // Größe NEU aus dem Basis-König-Wert berechnen (nicht kompoundieren), Wachstum auf
     // maxSizeMult (+30%) deckeln, damit der König lesbar bleibt und das Feld nicht erdrückt.
-    const growth = Math.min(KING_PROGRESSION.maxSizeMult, 1 + (this.kingLevel - 1) * KING_PROGRESSION.sizeMultPerLevel);
-    this.displaySize = UNIT_STATS.king.size * growth;
+    // Reine Mathematik dazu in systems/kingProgression (kingDisplaySize), nach this.kingLevel++.
+    this.displaySize = kingDisplaySize(this.kingLevel);
     // Hitbox + optische Bar-Bezugsbreite aus der neuen Anzeigegröße ableiten (wie Konstruktor/setLevel).
     this.width = this.displaySize * HITBOX_SCALE;
     this.height = this.displaySize * HITBOX_SCALE;
@@ -405,7 +405,7 @@ export class Unit extends Entity {
     // König-Progression: NUR der König bekommt seinen Stufen-Schadensmultiplikator (Vasallen/
     // Champion unverändert). Read-time wie die Power-Up-Mults, OBEN AUF Fraktions-Mod und
     // Schadens-Boost: effektiver Mult = 1 + (kingLevel-1)*damageMultPerLevel.
-    const kingMult = this.unitType === "king" ? 1 + (this.kingLevel - 1) * KING_PROGRESSION.damageMultPerLevel : 1;
+    const kingMult = this.unitType === "king" ? kingDamageMult(this.kingLevel) : 1;
     // Schadens-Boost (Power-Up) wirkt OBEN AUF den Fraktions-Modifikator.
     return base * this.factionDamageMod * this.damageBoostMult * kingMult;
   }
