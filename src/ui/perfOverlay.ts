@@ -25,6 +25,14 @@ export function initPerfOverlay(game: Phaser.Game): void {
   dom.style.cssText = "position:fixed;bottom:0;left:0;display:flex;gap:2px;z-index:10000;opacity:0.92;pointer-events:none;";
   for (const child of Array.from(dom.children) as HTMLElement[]) child.style.display = "block";
 
+  // Welt-Seed-Anzeige (oben links): macht den deterministischen Seed sichtbar + testbar.
+  // Gleicher Seed (?seed=N in der URL) => identische Welt. Teilt die F3-Sichtbarkeit.
+  const seedDom = document.createElement("div");
+  seedDom.style.cssText =
+    "position:fixed;top:0;left:0;z-index:10000;font:12px/1.5 monospace;color:#7ab8ff;background:#04101f;padding:2px 7px;opacity:0.92;pointer-events:none;";
+  seedDom.textContent = "SEED —";
+  document.body.appendChild(seedDom);
+
   // Graph-Skalen wachsen mit dem bisher gesehenen Maximum (kein Beschneiden).
   let unitsMax = 50;
   let objMax = 200;
@@ -33,6 +41,7 @@ export function initPerfOverlay(game: Phaser.Game): void {
   game.events.on(Phaser.Core.Events.POST_RENDER, () => {
     const scene = gameRef.current;
     if (scene) {
+      seedDom.textContent = "SEED " + scene.seed;
       const units = scene.units.length;
       unitsMax = Math.max(unitsMax, units);
       unitsPanel.update(units, unitsMax);
@@ -52,6 +61,7 @@ export function initPerfOverlay(game: Phaser.Game): void {
 
   const apply = (): void => {
     dom.style.visibility = visible ? "visible" : "hidden";
+    seedDom.style.visibility = visible ? "visible" : "hidden";
   };
   apply();
 

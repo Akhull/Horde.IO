@@ -87,6 +87,8 @@ export class GameScene extends Phaser.Scene {
   // der Seed später aus den Lobby-Daten gesetzt, damit alle Clients dieselbe Welt fahren.
   // Subsysteme bekommen je einen fork() -> unabhängige, reproduzierbare Teilströme.
   rng!: Rng;
+  // Der konkrete Welt-Seed dieser Runde (im Perf-Overlay angezeigt, via ?seed=N steuerbar).
+  seed!: number;
   // Eigener Audio-Manager (NICHT this.sound nennen – das ist Phasers Sound-Manager!)
   audio!: SoundManager;
 
@@ -218,8 +220,13 @@ export class GameScene extends Phaser.Scene {
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.scale.off(Phaser.Scale.Events.RESIZE, fitVignette));
 
     this.grid = new SpatialGrid(CONFIG.worldWidth, CONFIG.worldHeight, 150);
-    // Seed im App-Layer (Math.random hier erlaubt; nur src/sim/** muss deterministisch sein).
-    this.rng = new Rng((Math.random() * 0xffffffff) >>> 0);
+    // Seed: ?seed=N aus der URL (reproduzierbare Welt zum Testen/Debuggen), sonst zufällig.
+    // Im Multiplayer setzt später die Lobby den Seed -> alle Clients fahren dieselbe Welt.
+    // Math.random hier im App-Layer erlaubt; nur src/sim/** muss deterministisch sein.
+    const seedParam = new URLSearchParams(location.search).get("seed");
+    this.seed = seedParam !== null && seedParam !== "" ? Number(seedParam) >>> 0 : (Math.random() * 0xffffffff) >>> 0;
+    this.rng = new Rng(this.seed);
+    console.log(`[Horde.IO] Welt-Seed: ${this.seed} — gleicher Seed (?seed=${this.seed}) = identische Welt`);
     this.safeZone = new SafeZone(this.rng.fork());
     this.audio = new SoundManager(this);
     this.audio.startWarAmbience();
