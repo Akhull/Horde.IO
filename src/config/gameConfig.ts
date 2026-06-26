@@ -174,14 +174,20 @@ export const CAMERA = {
 // "epische Kampf"-Gefühl. Reine Kurven-Mathematik dazu liegt in systems/cameraFeel.ts.
 export const BATTLE_ESCALATION = {
   // ── Phasen-Mapping über lebende Könige (Spieler + KI) ───────────────────────
-  earlyKings: 6, // ab so vielen lebenden Königen ist die Phase 0 (ruhig, kein Phasen-Shake)
+  // Match startet mit 11 Königen. earlyKings=3 => die GESAMTE Partie bis hinunter zu den
+  // letzten 3 Königen ist Phase 0 (mit baselineShakePx=0 also KOMPLETT shake-frei). Erst der
+  // Sprung auf finalKings=2 (das finale Duell) hebt die Phase auf 1 -> dann erst bebt das Bild.
+  earlyKings: 3, // ab so vielen lebenden Königen ist die Phase 0 (kein Phasen-Shake)
   finalKings: 2, // bei 2 lebenden Königen ist die Phase 1 (episches Duell: max. Shake & Musik)
   // ── Clash-Gate: Eskalation reagiert nur auf echtes Gemetzel (recentCombatEvents) ──
   clashThreshold: 6, // ab so vielen recentCombatEvents beginnt überhaupt ein Schütteln
   clashRange: 10, // +so viele Events bis zur vollen Clash-Intensität
   // ── Shake-Amplituden in Pixeln (bewusst klein – "leicht shaken", kein Erdbeben) ──
-  baselineShakePx: 1.4, // Spitze in einer großen Schlacht der Frühphase (Phase 0)
-  epicShakePx: 4.5, // Spitze im finalen Duell (Phase 1)
+  // baselineShakePx=0: in der Frühphase (Phase 0) wackelt NICHTS, egal wie heftig gerade
+  // gekämpft wird – das tötet das frühere "Bild vibriert durchgehend". Wer ein dezentes
+  // Wackeln auch in großen Frühschlachten will, hebt diesen Wert leicht an (z.B. 0.6).
+  baselineShakePx: 0, // Spitze in einer großen Schlacht der Frühphase (Phase 0) – 0 = aus
+  epicShakePx: 3.5, // Spitze im finalen Duell (Phase 1) – "leicht shaken" fürs epische Gefühl
   shakeSmooth: 0.08, // Glättung, mit der die aktuelle Shake-Stärke der Zielstärke folgt (sanftes An-/Abschwellen)
   // ── Kriegs-Ambience / dynamische Schlacht-Musik ─────────────────────────────
   ambienceEarlyCeiling: 0.4, // max. Lautstärke-Anteil in der Frühphase (ruhiger Start)

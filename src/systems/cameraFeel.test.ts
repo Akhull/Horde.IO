@@ -96,8 +96,13 @@ describe("battleShakeAmplitude (Phase × Clash)", () => {
     expect(battleShakeAmplitude(1, 0, baselineShakePx, epicShakePx)).toBe(0);
   });
 
-  it("liefert die Baseline-Spitze in der Frühphase bei vollem Clash", () => {
+  it("liefert in der Frühphase exakt die Baseline (Mathe – unabhängig vom Clash-Vollausschlag)", () => {
     expect(battleShakeAmplitude(0, 1, baselineShakePx, epicShakePx)).toBeCloseTo(baselineShakePx);
+  });
+
+  it("ist mit der AUSGELIEFERTEN Konfig in der Frühphase shake-frei (ruhiger Start, kein Dauervibrieren)", () => {
+    // Schutz vor Regression: die Frühphase muss komplett ruhig bleiben.
+    expect(BATTLE_ESCALATION.baselineShakePx).toBe(0);
   });
 
   it("liefert die epische Spitze im Finale bei vollem Clash", () => {
