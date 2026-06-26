@@ -27,4 +27,20 @@ export default tseslint.config(
       "@typescript-eslint/no-explicit-any": "warn",
     },
   },
+  {
+    // Entwickler-Werkzeuge (Benchmarks, Asset-/Credits-Generatoren) laufen in Node, nicht im
+    // Browser, und sind keine Spiel-Auslieferung. Gleiche relaxte Unused-Regel wie src/, dazu
+    // Node-Globals (process/Buffer/console) – damit `npm run lint` über das GANZE Repo grün wird.
+    files: ["tools/**/*.{ts,js,mjs,cjs}"],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: "module",
+      globals: { ...globals.node },
+    },
+    rules: {
+      "no-undef": "off",
+      "@typescript-eslint/no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
+      "@typescript-eslint/no-explicit-any": "warn",
+    },
+  },
 );
