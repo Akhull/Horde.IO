@@ -155,6 +155,10 @@ export function handlePowerUps(scene: GameScene): void {
       // Lifesteal-Boost: blutroter Funkenausbruch passend zur Orb-Farbe.
       taker.applyLifesteal(p.duration);
       scene.spawnVisualEffect(p.centerX, p.centerY, { r: 176, g: 0, b: 32 }, 15, 400, 3, 1.2);
+    } else if (p.effectType === "regen") {
+      // Regen-Boost: smaragdgrüner Heil-Funkenausbruch passend zur Orb-Farbe.
+      taker.applyRegen(p.duration);
+      scene.spawnVisualEffect(p.centerX, p.centerY, { r: 46, g: 204, b: 113 }, 15, 400, 3, 1.2);
     } else {
       taker.applyShieldPowerUp(p.duration);
       scene.spawnVisualEffect(p.centerX, p.centerY, { r: 0, g: 191, b: 255 }, 15, 400, 3, 1.2);

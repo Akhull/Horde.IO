@@ -61,6 +61,12 @@ export class Unit extends Entity {
   // 0 als Inaktiv-Wert: tickLifesteal setzt den Faktor beim Ablauf sauber zurück.
   lifestealTimer = 0;
   private lifestealFactor = 0;
+  // Regen-Power-Up (passive Sustain): gleiche Zeitlogik wie die übrigen Boosts.
+  // Solange regenTimer > 0 ist, regeneriert tickRegen pro Frame POWERUP.regenPerSecond
+  // HP (zeitbasiert über deltaSeconds), GEKLEMMT auf das fraktions-skalierte maxHp.
+  // Anders als der Lifesteal heilt er IMMER (auch beim Fliehen/Wandern), nicht nur
+  // beim Zuschlagen; es gibt keinen Faktor zurückzusetzen – der Timer steuert alles.
+  regenTimer = 0;
   dashReadyFlashTimer = 0;
   shieldReadyFlashTimer = 0;
   idleTarget: Vec2 | null = null;
@@ -326,6 +332,14 @@ export class Unit extends Entity {
     this.lifestealTimer = Math.max(this.lifestealTimer, duration);
   }
 
+  // Regen-Power-Up aufnehmen (Spieler- ODER KI-König). Idempotent gegen Stacking wie
+  // die übrigen Boosts: es gibt keinen Faktor zu setzen (die Heilrate ist konstant aus
+  // POWERUP.regenPerSecond), weitere Aufnahmen verlängern nur den Timer. tickRegen
+  // erledigt die eigentliche Heilung pro Frame und das Herunterzählen des Timers.
+  applyRegen(duration: number): void {
+    this.regenTimer = Math.max(this.regenTimer, duration);
+  }
+
   // Heilt den Angreifer um lifestealFactor des ausgeteilten Schadens, geklemmt auf
   // das fraktions-skalierte maxHp (kein Überheilen). No-Op, wenn kein Lifesteal aktiv
   // ist oder die Einheit bereits tot/vollgeheilt ist. Wird im Moment des bestätigten
@@ -399,6 +413,19 @@ export class Unit extends Entity {
       this.lifestealTimer = 0;
       this.lifestealFactor = 0;
     }
+  }
+
+  // Regeneriert pro Frame POWERUP.regenPerSecond HP, geklemmt auf maxHp, solange der
+  // Regen-Boost läuft. deltaTime ist hier – wie bei den übrigen tick*-Methoden – in
+  // Millisekunden (die Timer zählen gegen Power-Up-Dauern wie 6000), daher wird über
+  // deltaTime/1000 in Sekunden umgerechnet. No-Op bei toter Einheit (kein Wiederbeleben).
+  private tickRegen(deltaTime: number): void {
+    if (this.regenTimer <= 0) return;
+    this.regenTimer -= deltaTime;
+    if (this.hp > 0 && this.hp < this.maxHp) {
+      this.hp = Math.min(this.maxHp, this.hp + POWERUP.regenPerSecond * (deltaTime / 1000));
+    }
+    if (this.regenTimer <= 0) this.regenTimer = 0;
   }
 
   // Zählt ein aktives Schild herunter (Fähigkeit beim Spieler, Power-Up bei allen
@@ -722,6 +749,7 @@ export class Unit extends Entity {
     this.tickDamageBoost(deltaTime);
     this.tickArmorBoost(deltaTime);
     this.tickLifesteal(deltaTime);
+    this.tickRegen(deltaTime);
     this.tickShield(deltaTime);
     if (this === scene.playerKing) {
       this.updatePlayerKing(deltaTime, step, scene);
