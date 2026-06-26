@@ -268,7 +268,7 @@ export class GameScene extends Phaser.Scene {
       kingPositions.push(pos);
     }
 
-    const playerIndex = Math.floor(Math.random() * totalKings);
+    const playerIndex = Math.floor(this.rng.next() * totalKings);
     this.playerKing = new Unit(this, kingPositions[playerIndex].x, kingPositions[playerIndex].y, this.playerFaction, "king");
     this.units.push(this.playerKing);
     for (let i = 0; i < 10; i++) this.units.push(spawnVassal(this, this.playerKing));
@@ -276,7 +276,7 @@ export class GameScene extends Phaser.Scene {
     const factions: Faction[] = ["human", "elf", "orc"];
     for (let i = 0; i < totalKings; i++) {
       if (i === playerIndex) continue;
-      const faction = factions[Math.floor(Math.random() * factions.length)];
+      const faction = factions[Math.floor(this.rng.next() * factions.length)];
       const aiKing = new Unit(this, kingPositions[i].x, kingPositions[i].y, faction, "king");
       this.units.push(aiKing);
       for (let j = 0; j < 10; j++) this.units.push(spawnVassal(this, aiKing));
@@ -646,7 +646,7 @@ export class GameScene extends Phaser.Scene {
       this.kingStationaryTime += dt;
       if (this.kingStationaryTime >= CONFIG.formationUpdateInterval) {
         for (const u of this.units) {
-          if (u.unitType !== "king") u.formationOffset = recalcFormationOffset(u, this.units, u.leader);
+          if (u.unitType !== "king") u.formationOffset = recalcFormationOffset(u, this.units, u.leader, this.rng);
         }
         this.kingStationaryTime = 0;
       }

@@ -4,6 +4,7 @@ import { Building } from "../entities/Building";
 import { AI, TOWER } from "../config/gameConfig";
 import type { AIPersonality } from "../config/gameConfig";
 import type { GameScene } from "../scenes/GameScene";
+import type { Rng } from "../sim/rng";
 
 export interface Vec2 {
   x: number;
@@ -19,7 +20,7 @@ export interface TargetInfo {
 
 // Verteilt Einheiten in einer lockeren Formation um ihren Anführer.
 // Port von recalcFormationOffset (utils.js).
-export function recalcFormationOffset(unit: Unit, units: Unit[], leader: Unit): Vec2 {
+export function recalcFormationOffset(unit: Unit, units: Unit[], leader: Unit, rng: Rng): Vec2 {
   // Dichter Schwarm-Feel: Vasallen sollen sich als kompakte Masse um den König
   // ballen, nicht als dünner Halo. Werte bewusst niedrig gehalten, aber der
   // Abstand bleibt klar über dem Separations-Sollwert von 30px (collision.ts),
@@ -34,8 +35,8 @@ export function recalcFormationOffset(unit: Unit, units: Unit[], leader: Unit): 
   let attempts = 0;
   do {
     const currentAngle = Math.atan2(unit.y - leader.y, unit.x - leader.x);
-    const newAngle = currentAngle - Math.PI / 4 + Math.random() * (Math.PI / 2);
-    const newRadius = minRadius + Math.random() * (formationRadius - minRadius);
+    const newAngle = currentAngle - Math.PI / 4 + rng.next() * (Math.PI / 2);
+    const newRadius = minRadius + rng.next() * (formationRadius - minRadius);
     candidate = { x: newRadius * Math.cos(newAngle), y: newRadius * Math.sin(newAngle) };
     let valid = true;
     for (const u of alliedUnits) {
@@ -149,7 +150,7 @@ export function determineVassalTarget(unit: Unit, scene: GameScene): TargetInfo 
 
   // Standard: Formation um den Anführer
   if (!unit.formationOffset) {
-    unit.formationOffset = recalcFormationOffset(unit, scene.units, unit.leader);
+    unit.formationOffset = recalcFormationOffset(unit, scene.units, unit.leader, scene.rng);
   }
   return {
     x: unit.leader.x + unit.formationOffset.x,
