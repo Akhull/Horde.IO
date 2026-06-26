@@ -1,14 +1,19 @@
 {
-  "name": "horde.io",
-  "version": "1.0.0",
-  "description": "RTS-Hybrid: Battle Royale – Medieval Style",
-  "main": "server/server.js",
+  "name": "horde-io",
+  "version": "2.0.0",
+  "description": "Horde.IO – RTS/Battle-Royale-Hybrid im Mittelalter-Stil. Neuauflage mit TypeScript + Phaser 3 + Vite.",
   "type": "module",
   "scripts": {
-    "start": "node server/server.js"
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "express": "^4.21.2",
-    "socket.io": "^4.8.1"
+    "phaser": "^3.80.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4",
+    "vite": "^5.4.2"
   }
 }

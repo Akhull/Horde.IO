@@ -1,0 +1,14 @@
+{
+  "name": "horde.io",
+  "version": "1.0.0",
+  "description": "RTS-Hybrid: Battle Royale – Medieval Style",
+  "main": "server/server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server/server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "socket.io": "^4.8.1"
+  }
+}

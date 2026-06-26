@@ -17,3 +17,10 @@ node_modules/
 # Falls du Build-Artefakte erzeugst (z. B. bei Webpack)
 dist/
 build/
+
+# Vite-Cache
+.vite/
+
+# Editor/OS
+.DS_Store
+*.local
