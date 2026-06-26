@@ -155,6 +155,41 @@ export const FEEDBACK = {
   vignettePeak: 0.55, // Spitzen-Alpha des roten Schaden-Vignette-Flashs
 } as const;
 
+// Kamera-Follow: die Kamera ZIEHT dem König geglättet NACH (lerp), statt pro Frame hart auf
+// seine exakte Position zu schnappen. WARUM: der König bekommt im Getümmel ständig Knockback-
+// und Separations-Impulse (hochfrequentes Zittern); ein harter centerOn überträgt das 1:1 auf
+// die Kamera -> "Bild vibriert durchgehend". Das Nachziehen filtert dieses Zittern heraus, das
+// Bild bleibt im Normalspiel ruhig. Pixel-Rundung killt zusätzlich das Sub-Pixel-Flimmern
+// (render.roundPixels ist aus). Gewolltes Schütteln kommt separat aus BATTLE_ESCALATION.
+export const CAMERA = {
+  followLerp: 0.16, // Anteil pro 60-FPS-Frame, mit dem die Kamera zum König-Zentrum rückt (klein = ruhiger, träger)
+  roundToPixel: true, // Kamera-Scroll auf ganze Pixel runden (gegen Sub-Pixel-Flimmern)
+} as const;
+
+// Schlacht-Eskalation: das Match beginnt RUHIG und baut sich zum epischen Finale auf. Sowohl
+// das (gewollte) leichte Kamera-Schütteln als auch die Lautstärke der Kriegs-Ambience/Schlacht-
+// Musik skalieren mit der Match-Phase (= wie viele Könige noch leben) UND mit der tatsächlichen
+// On-Screen-Kampfaktivität. So vibriert am Anfang nichts grundlos; erst wenn das Feld auf die
+// letzten Spieler zusammenschrumpft und die Horden aufeinanderprallen, bebt das Bild fürs
+// "epische Kampf"-Gefühl. Reine Kurven-Mathematik dazu liegt in systems/cameraFeel.ts.
+export const BATTLE_ESCALATION = {
+  // ── Phasen-Mapping über lebende Könige (Spieler + KI) ───────────────────────
+  earlyKings: 6, // ab so vielen lebenden Königen ist die Phase 0 (ruhig, kein Phasen-Shake)
+  finalKings: 2, // bei 2 lebenden Königen ist die Phase 1 (episches Duell: max. Shake & Musik)
+  // ── Clash-Gate: Eskalation reagiert nur auf echtes Gemetzel (recentCombatEvents) ──
+  clashThreshold: 6, // ab so vielen recentCombatEvents beginnt überhaupt ein Schütteln
+  clashRange: 10, // +so viele Events bis zur vollen Clash-Intensität
+  // ── Shake-Amplituden in Pixeln (bewusst klein – "leicht shaken", kein Erdbeben) ──
+  baselineShakePx: 1.4, // Spitze in einer großen Schlacht der Frühphase (Phase 0)
+  epicShakePx: 4.5, // Spitze im finalen Duell (Phase 1)
+  shakeSmooth: 0.08, // Glättung, mit der die aktuelle Shake-Stärke der Zielstärke folgt (sanftes An-/Abschwellen)
+  // ── Kriegs-Ambience / dynamische Schlacht-Musik ─────────────────────────────
+  ambienceEarlyCeiling: 0.4, // max. Lautstärke-Anteil in der Frühphase (ruhiger Start)
+  ambienceFinalCeiling: 0.95, // max. Lautstärke-Anteil im Finale (große Schlacht)
+  ambienceEventRef: 10, // recentCombatEvents für vollen Event-Anteil
+  ambienceUnitRef: 50, // Truppenmenge für vollen Mengen-Anteil
+} as const;
+
 // Verteidigungstürme: neutrale Gebäude (Typ "tower"), die auf alle Fraktionen feuern.
 export const TOWER = {
   range: 260, // Reichweite, in der Einheiten beschossen werden (bewusst < Archer-Range 300, damit Archer Türme kontern können)

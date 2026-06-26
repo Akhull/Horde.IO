@@ -3,6 +3,7 @@ import { BootScene } from "./scenes/BootScene";
 import { GameScene } from "./scenes/GameScene";
 import { setGame } from "./ui/controller";
 import { initUI } from "./ui";
+import { initPerfOverlay } from "./ui/perfOverlay";
 
 // Phaser rendert nur noch die Spielwelt (Boot lädt Assets, Game spielt). Sämtliche
 // UI (Menüs, HUD, Pause) liegt als DOM-Overlay darüber – siehe src/ui.
@@ -29,6 +30,8 @@ game.registry.set("sfxVolume", 0.5);
 // Engine an die UI-Steuerschicht übergeben und das DOM-UI aufbauen.
 setGame(game);
 initUI();
+// Performance-Overlay (stats.js): FPS/ms/Speicher + Einheiten/Objekte. F3 schaltet um.
+initPerfOverlay(game);
 
 // Für Debugging/Tests von aussen erreichbar.
 (globalThis as unknown as { __horde?: Phaser.Game }).__horde = game;

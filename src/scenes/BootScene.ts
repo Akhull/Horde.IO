@@ -52,6 +52,9 @@ export class BootScene extends Phaser.Scene {
     this.load.image("orb", `${P}/circle_05.png`);
     this.load.image("powerup", `${P}/light_03.png`);
     this.load.image("dot", `${P}/circle_05.png`);
+    // Stern-Funke für den Belohnungs-Moment (Champion-Beschwörung / Vasall-Level-3):
+    // ein einmaliger ADD-Blend-Sparkle, der hochskaliert und ausblendet (Unit.ts).
+    this.load.image("sparkle", `${P}/star_01.png`);
 
     // Menü-Hintergründe werden vom DOM-UI direkt als CSS-Bilder geladen
     // (siehe src/ui) – Phaser muss sie nicht mehr in den Texturspeicher ziehen.

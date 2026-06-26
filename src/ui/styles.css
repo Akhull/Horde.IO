@@ -72,6 +72,10 @@
   opacity: 1;
   visibility: visible;
   transform: none;
+  /* Aktiver Screen fängt Eingaben wieder ab (der #ui-Container hat
+     pointer-events:none). OHNE diese Zeile sind ALLE Menü-Buttons tot –
+     Klicks fallen durch das Overlay ins Canvas. */
+  pointer-events: auto;
   transition: opacity 0.4s ease, transform 0.4s ease;
 }
 
@@ -395,9 +399,64 @@ input[type="range"]::-moz-range-thumb {
 .ability-fill.ready { animation: ready-pulse 0.9s ease-in-out infinite; }
 @keyframes ready-pulse { 0%, 100% { filter: brightness(1); } 50% { filter: brightness(1.5); } }
 
-.hud-vassals { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 14px; font-size: 12.5px; color: var(--text-dim); }
-.hud-vassals .vh { grid-column: 1 / -1; font-family: var(--font-display); color: var(--text); font-size: 13px; margin-bottom: 2px; }
-.hud-vassals b { color: var(--text); font-variant-numeric: tabular-nums; }
+/* Gefolge: Elite-Belohnungen oben (leuchtende Badges), Reihen-Einheiten schlicht darunter. */
+.hud-vassals { display: flex; flex-direction: column; gap: 8px; }
+.hud-vassals .vh { font-family: var(--font-display); color: var(--text); font-size: 13px; }
+
+/* ----- Elite-Belohnungs-Badges (Gold-Champion / Lila-Stufe-3) ------------- */
+.hud-elite { display: flex; gap: 8px; flex-wrap: wrap; }
+.elite-badge {
+  --c: #ffffff;          /* Text-/Randfarbe der jeweiligen Belohnung */
+  --glow: 255, 255, 255; /* RGB-Tripel für die Leucht-Schatten (rgba(...)) */
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 11px;
+  border-radius: 10px;
+  border: 1.5px solid rgba(var(--glow), 0.5);
+  background: rgba(0, 0, 0, 0.5);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: rgba(var(--glow), 0.8);
+  /* Noch nicht erspielt: gedämpft/entsättigt – das Badge "zündet" beim ersten Erwerb. */
+  opacity: 0.4;
+  filter: grayscale(0.55);
+  transition: opacity 0.3s ease, filter 0.3s ease, box-shadow 0.3s ease, border-color 0.3s ease, color 0.3s ease;
+}
+.elite-badge .eb-ico { font-size: 14px; line-height: 1; filter: drop-shadow(0 0 5px rgba(var(--glow), 0.75)); }
+.elite-badge .eb-label { letter-spacing: 0.02em; }
+.elite-badge b { color: #fff; font-variant-numeric: tabular-nums; font-weight: 800; min-width: 1ch; text-align: right; }
+
+.elite-badge.gold   { --c: #ffe27a; --glow: 255, 210, 74; }   /* identisch zur Gold-Orb-/Champion-Aura */
+.elite-badge.purple { --c: #d2a4ff; --glow: 176, 110, 255; }  /* identisch zur Lila-Orb-/Elite-Aura */
+
+/* Erspielt: volles Leuchten + sanftes "Atmen", damit die Belohnung lebendig wirkt. */
+.elite-badge.is-earned {
+  opacity: 1;
+  filter: none;
+  color: var(--c);
+  border-color: rgba(var(--glow), 0.95);
+  box-shadow: 0 0 12px rgba(var(--glow), 0.45), inset 0 0 8px rgba(var(--glow), 0.18);
+  animation: badge-breathe 2.4s ease-in-out infinite;
+}
+@keyframes badge-breathe {
+  0%, 100% { box-shadow: 0 0 10px rgba(var(--glow), 0.32), inset 0 0 6px rgba(var(--glow), 0.14); }
+  50%      { box-shadow: 0 0 18px rgba(var(--glow), 0.62), inset 0 0 11px rgba(var(--glow), 0.26); }
+}
+
+/* Zuwachs: kräftiger Belohnungs-Puls (Skalierung + Aufleuchten). Steht NACH der
+   is-earned-Regel, damit der Puls das "Atmen" kurz übernimmt; das animationend-
+   Handler in hud.ts entfernt die Klasse danach wieder. */
+.elite-badge.bump { animation: badge-pop 0.55s cubic-bezier(0.2, 0.9, 0.25, 1.4); transform-origin: center; }
+@keyframes badge-pop {
+  0%   { transform: scale(1); }
+  30%  { transform: scale(1.24); box-shadow: 0 0 28px rgba(var(--glow), 0.95), inset 0 0 15px rgba(var(--glow), 0.42); filter: brightness(1.5); }
+  100% { transform: scale(1); }
+}
+
+/* Reihen-Einheiten (häufig): schlicht, untergeordnet. */
+.hud-rankfile { display: flex; flex-wrap: wrap; gap: 2px 14px; font-size: 12px; color: var(--text-dim); }
+.hud-rankfile b { color: var(--text); font-variant-numeric: tabular-nums; }
 
 /* Timer + Pause-Button oben mittig */
 .hud-topcenter {
@@ -544,7 +603,7 @@ body.is-touch .hud-touch { display: block; }
   visibility: hidden;
   transition: opacity 0.25s ease, visibility 0s linear 0.25s;
 }
-.pause-overlay.is-active { opacity: 1; visibility: visible; transition: opacity 0.25s ease; }
+.pause-overlay.is-active { opacity: 1; visibility: visible; pointer-events: auto; transition: opacity 0.25s ease; }
 .pause-panel {
   display: flex;
   flex-direction: column;

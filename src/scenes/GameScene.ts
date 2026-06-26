@@ -1,6 +1,13 @@
 import Phaser from "phaser";
-import { CONFIG, DEPTH, FEEDBACK, DIFFICULTY, DEFAULT_DIFFICULTY } from "../config/gameConfig";
+import { CONFIG, DEPTH, FEEDBACK, CAMERA, BATTLE_ESCALATION, DIFFICULTY, DEFAULT_DIFFICULTY } from "../config/gameConfig";
 import type { Difficulty } from "../config/gameConfig";
+import {
+  frameLerpAlpha,
+  battlePhaseFactor,
+  clashIntensity,
+  battleShakeAmplitude,
+  warAmbienceTarget,
+} from "../systems/cameraFeel";
 import type { Faction, RGB, SafeZoneCircle } from "../types";
 import type { Vec2 } from "../systems/AI";
 import { buildScaledPersonalities, type ScaledPersonalities } from "../systems/difficulty";
@@ -85,6 +92,14 @@ export class GameScene extends Phaser.Scene {
   private lastKingX = 0;
   private lastKingY = 0;
   private kingStationaryTime = 0;
+  // Lebende Könige (Spieler + KI), pro Frame in checkGameOver aktualisiert. Treibt die
+  // Match-Phase (ruhiger Start -> episches Finale) für Kamera-Shake und Schlacht-Musik.
+  private aliveKingCount = 11;
+  // Geglätteter Kamera-Scroll (zieht dem König nach, statt hart zu schnappen) + aktuelle,
+  // sanft an-/abschwellende Shake-Amplitude in px. Siehe followCamera / updateBattleShake.
+  private camScrollX = 0;
+  private camScrollY = 0;
+  private camShakeIntensity = 0;
 
   // Eingabe (pro Frame aktualisiert; von Unit gelesen)
   moveVector: Vec2 = { x: 0, y: 0 };
@@ -135,6 +150,7 @@ export class GameScene extends Phaser.Scene {
     this.combatDecayTimer = 0;
     this.kingStationaryTime = 0;
     this.hitStopTimer = 0;
+    this.camShakeIntensity = 0;
     Unit.nextTeamId = 1;
     // Schwierigkeit hart auf Default zurücksetzen, bevor create() die echte Wahl
     // anwendet – so leakt nichts zwischen Runden, falls create() mal früh abbricht.
@@ -184,8 +200,9 @@ export class GameScene extends Phaser.Scene {
     this.setupInput();
     this.spawnWorld();
 
-    // Kamera folgt dem Spielerkönig (manuell zentriert – siehe update)
-    if (this.playerKing) this.cameras.main.centerOn(this.playerKing.centerX, this.playerKing.centerY);
+    // Kamera folgt dem Spielerkönig (geglättet nachgezogen – siehe followCamera/update).
+    // Beim Start hart auf den König schnappen (snap), damit das erste Bild zentriert ist.
+    this.followCamera(0, true);
 
     // Aktive Szene fürs DOM-HUD registrieren (liest den Zustand pro Frame).
     gameRef.current = this;
@@ -396,7 +413,7 @@ export class GameScene extends Phaser.Scene {
     // weiter, Tweens/Partikel laufen über Phaser-Manager normal weiter. Danach normal fort.
     if (this.hitStopTimer > 0) {
       this.hitStopTimer -= delta;
-      if (this.playerKing) this.cameras.main.centerOn(this.playerKing.centerX, this.playerKing.centerY);
+      this.followCamera(delta);
       return;
     }
 
@@ -435,6 +452,7 @@ export class GameScene extends Phaser.Scene {
     if (this.gameOver) return;
 
     this.updateParticles(dt);
+    this.updateBattleShake(dt);
     this.updateWarVolume();
     this.updateDamageVignette(dt);
 
@@ -447,7 +465,7 @@ export class GameScene extends Phaser.Scene {
     for (const p of this.projectiles) p.sync();
     for (const b of this.buildings) b.sync();
 
-    if (this.playerKing) this.cameras.main.centerOn(this.playerKing.centerX, this.playerKing.centerY);
+    this.followCamera(dt);
     this.drawSafeZone();
     this.drawParticles();
   }
@@ -503,6 +521,8 @@ export class GameScene extends Phaser.Scene {
       return;
     }
     const enemyKings = this.units.filter((u) => u.unitType === "king" && u !== this.playerKing);
+    // Lebende Könige cachen (Spieler + Gegner) – Eingang der Match-Phase für Shake & Musik.
+    this.aliveKingCount = enemyKings.length + 1;
     if (enemyKings.length === 0) this.endGame("Gewonnen");
   }
 
@@ -564,17 +584,65 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  // Aktuelle Match-Phase in [0,1]: 0 = frühe, ruhige Phase (viele Könige), 1 = episches Finale
+  // (nur noch 2 Könige). Treibt sowohl die Schlacht-Musik als auch das Kamera-Schütteln.
+  private battlePhase(): number {
+    return battlePhaseFactor(this.aliveKingCount, BATTLE_ESCALATION.earlyKings, BATTLE_ESCALATION.finalKings);
+  }
+
   private updateWarVolume(): void {
     this.combatDecayTimer += this.game.loop.delta;
     if (this.combatDecayTimer >= 1000) {
       if (this.recentCombatEvents > 0) this.recentCombatEvents = Math.max(0, this.recentCombatEvents - 1);
       this.combatDecayTimer = 0;
     }
-    const eventFactor = Math.min(1, this.recentCombatEvents / 10);
-    const unitFactor = Math.min(1, this.units.length / 50);
-    let target = Math.min(1, (eventFactor + unitFactor) / 2) * 0.7;
+    // Lautstärke skaliert mit Kampf/Truppen UND der Phase: ruhiger Start, lautes Finale.
+    let target = warAmbienceTarget(this.recentCombatEvents, this.units.length, this.battlePhase(), BATTLE_ESCALATION);
     if (this.recentCombatEvents === 0 && this.units.length < 10) target = 0;
     this.audio.setWarAmbienceVolume(target);
+  }
+
+  // Sanft an-/abschwellende Ziel-Shake-Amplitude. NUR aktiv, wenn tatsächlich gekämpft wird
+  // (Clash-Gate) und stärker, je weiter das Match Richtung Finale schrumpft (Phase). So bleibt
+  // der Match-Anfang ruhig und das Bild bebt erst beim epischen Endkampf spürbar.
+  private updateBattleShake(dt: number): void {
+    const clash = clashIntensity(this.recentCombatEvents, BATTLE_ESCALATION.clashThreshold, BATTLE_ESCALATION.clashRange);
+    const target = battleShakeAmplitude(
+      this.battlePhase(),
+      clash,
+      BATTLE_ESCALATION.baselineShakePx,
+      BATTLE_ESCALATION.epicShakePx,
+    );
+    this.camShakeIntensity += (target - this.camShakeIntensity) * frameLerpAlpha(dt, BATTLE_ESCALATION.shakeSmooth);
+    if (this.camShakeIntensity < 0.01) this.camShakeIntensity = 0;
+  }
+
+  // Kamera zieht dem König geglättet NACH (statt hart pro Frame auf seine zitternde Position
+  // zu schnappen) und addiert das gewollte Schlacht-Schütteln als kurzlebigen Zufalls-Offset.
+  // Abschließend auf ganze Pixel runden (render.roundPixels ist aus -> sonst Sub-Pixel-Flimmern).
+  // snap=true setzt die Kamera hart aufs Ziel (Start/erstes Frame). Mirror von centerOn bei zoom=1.
+  private followCamera(dt: number, snap = false): void {
+    const king = this.playerKing;
+    if (!king) return;
+    const cam = this.cameras.main;
+    const targetX = king.centerX - cam.width * 0.5;
+    const targetY = king.centerY - cam.height * 0.5;
+    if (snap) {
+      this.camScrollX = targetX;
+      this.camScrollY = targetY;
+    } else {
+      const a = frameLerpAlpha(dt, CAMERA.followLerp);
+      this.camScrollX += (targetX - this.camScrollX) * a;
+      this.camScrollY += (targetY - this.camScrollY) * a;
+    }
+    let sx = this.camScrollX;
+    let sy = this.camScrollY;
+    const amp = this.camShakeIntensity;
+    if (amp > 0.01) {
+      sx += (Math.random() * 2 - 1) * amp;
+      sy += (Math.random() * 2 - 1) * amp;
+    }
+    cam.setScroll(CAMERA.roundToPixel ? Math.round(sx) : sx, CAMERA.roundToPixel ? Math.round(sy) : sy);
   }
 }
 

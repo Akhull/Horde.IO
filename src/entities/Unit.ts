@@ -2,6 +2,7 @@ import Phaser from "phaser";
 import { Entity } from "./Entity";
 import { CONFIG, UNIT_STATS, DEPTH, FEEDBACK, AI, FACTION_STATS, LEGENDARY, POWERUP, HITBOX_SCALE } from "../config/gameConfig";
 import type { AIPersonality } from "../config/gameConfig";
+import { AURA_TINT } from "../config/spriteConfig";
 import type { Faction, UnitType } from "../types";
 import type { Vec2 } from "../systems/AI";
 import { determineVassalTarget, chooseAIKingTarget, findKingCollectible, computeKingAvoidance } from "../systems/AI";
@@ -132,6 +133,11 @@ export class Unit extends Entity {
   private shieldRing?: Phaser.GameObjects.Arc;
   private archerOutline?: Phaser.GameObjects.Rectangle;
   private championRing?: Phaser.GameObjects.Arc;
+  // Pulsierende ADD-Blend-Aura (weicher Glow-Image) unter Elite-Einheiten. Champion und
+  // Level-3-Vasall teilen sich denselben Mechanismus (attachEliteAura), nur der Tint
+  // unterscheidet sie. Liegt auf DEPTH.shadow (unter der Figur, über dem Boden), folgt
+  // der Einheit in sync() und wird in destroyView() sauber mit-zerstört (kein Leak).
+  private eliteAura?: Phaser.GameObjects.Image;
 
   constructor(scene: Phaser.Scene, x: number, y: number, faction: Faction, unitType: UnitType, level = 1, leader: Unit | null = null) {
     super(x, y, 40, 40);
@@ -225,7 +231,63 @@ export class Unit extends Entity {
     if (unitType === "champion") {
       // Goldener Aura-Ring kennzeichnet den Champion klar als legendäre Einheit.
       this.championRing = scene.add.circle(this.centerX, this.centerY, barRef * 0.62, 0xffd700, 0).setStrokeStyle(3, 0xffd700, 0.9).setDepth(DEPTH.healthbar);
+      // Zusätzlich zum statischen Ring ein "atmender" Gold-Glow UNTER der Figur, plus
+      // der einmalige Beschwörungs-Funke – beides macht die Beschwörung spürbar elitär.
+      this.attachEliteAura(AURA_TINT.champion);
+      this.sparkleBurst(scene, this.centerX, this.centerY, AURA_TINT.champion);
     }
+    // Defensiv: ein bereits auf Stufe 3 konstruierter Vasall bekommt seine Lila-Aura sofort
+    // (der Regelfall ist der Upgrade-Pfad über setLevel, der die Aura dort selbst anhängt).
+    if (unitType === "vassal" && level === 3) {
+      this.attachEliteAura(AURA_TINT.elite);
+    }
+  }
+
+  // Hängt eine pulsierende ADD-Blend-Glow-Aura unter die Einheit (gemeinsamer Mechanismus
+  // für Champion-Gold und Level-3-Lila; nur der Tint unterscheidet sie). Idempotent: ein
+  // zweiter Aufruf (z. B. erneutes setLevel(3)) wird ignoriert, damit keine Aura doppelt
+  // entsteht (Leak). Die "Atem"-Pulsation (Scale + Alpha, Sine-Yoyo, endlos) läuft an der
+  // Aura selbst und braucht keine Pro-Frame-Allokation – nur das Folgen passiert in sync().
+  private attachEliteAura(tint: number): void {
+    if (this.eliteAura) return;
+    const scene = this.sprite.scene;
+    // Durchmesser ≈ 1.6× der sichtbaren Figur, damit der Glow die Einheit weich umrahmt.
+    const d = this.sprite.displayWidth * 1.6;
+    const aura = scene.add.image(this.centerX, this.centerY, "powerup");
+    aura.setBlendMode(Phaser.BlendModes.ADD).setTint(tint).setDepth(DEPTH.shadow);
+    aura.setDisplaySize(d, d).setAlpha(0.7);
+    scene.tweens.add({
+      targets: aura,
+      scale: aura.scale * 1.14,
+      alpha: 0.45,
+      duration: 900,
+      ease: "Sine.easeInOut",
+      yoyo: true,
+      repeat: -1,
+    });
+    this.eliteAura = aura;
+  }
+
+  // Einmaliger Belohnungs-Funke: ein "sparkle"-Stern (ADD-Blend, passender Tint) auf
+  // DEPTH.fx, der von ~8px auf ~64px hochskaliert, leicht rotiert, über ~360ms ausblendet
+  // und sich danach selbst zerstört. Nur wenn der Punkt sichtbar ist (isOnScreen), damit
+  // er offscreen nichts kostet – ein reiner Feier-Effekt ohne Spiel-Relevanz.
+  private sparkleBurst(scene: Phaser.Scene, x: number, y: number, tint: number): void {
+    const gs = scene as GameScene;
+    if (!gs.isOnScreen(x, y)) return;
+    const star = scene.add.image(x, y, "sparkle");
+    star.setBlendMode(Phaser.BlendModes.ADD).setTint(tint).setDepth(DEPTH.fx);
+    star.setDisplaySize(8, 8).setAlpha(1);
+    scene.tweens.add({
+      targets: star,
+      displayWidth: 64,
+      displayHeight: 64,
+      angle: 45,
+      alpha: 0,
+      duration: 360,
+      ease: "Cubic.easeOut",
+      onComplete: () => star.destroy(),
+    });
   }
 
   // Vasall auf eine höhere Stufe heben: Grösse/Sprite aktualisieren + Aufleucht-Pop.
@@ -242,14 +304,24 @@ export class Unit extends Entity {
     this.sprite.setTexture(this.spriteKey);
     this.sprite.setDisplaySize(this.displaySize, this.displaySize);
 
-    // Level-up: kurzer Skalierungs-Pop
+    // Level-up: kurzer Skalierungs-Pop. Der Sprung auf Stufe 3 ist die Elite-Belohnung
+    // und darf kräftiger "knallen" (1.45 statt 1.3, etwas länger) als ein normaler Level-up.
+    const isElite = n === 3;
     this.sprite.scene.tweens.add({
       targets: this.sprite,
-      scaleX: this.sprite.scaleX * 1.3,
-      scaleY: this.sprite.scaleY * 1.3,
-      duration: 150,
+      scaleX: this.sprite.scaleX * (isElite ? 1.45 : 1.3),
+      scaleY: this.sprite.scaleY * (isElite ? 1.45 : 1.3),
+      duration: isElite ? 180 : 150,
       yoyo: true,
     });
+
+    // Stufe 3 = Elite ("Lila-Einheit"): pulsierende Lila-Aura anhängen (Regelfall, der
+    // Upgrade-Pfad) + einmaligen Belohnungs-Funke im passenden Lila feuern. attachEliteAura
+    // ist idempotent, ein erneutes setLevel(3) erzeugt also keine zweite Aura.
+    if (isElite) {
+      this.attachEliteAura(AURA_TINT.elite);
+      this.sparkleBurst(this.sprite.scene, this.centerX, this.centerY, AURA_TINT.elite);
+    }
   }
 
   // Spielt den passenden Nahkampf-Sound je nach Einheitentyp/Level.
@@ -1022,6 +1094,9 @@ export class Unit extends Entity {
     }
     if (this.archerOutline) this.archerOutline.setPosition(this.centerX, this.centerY);
     if (this.championRing) this.championRing.setPosition(this.centerX, this.centerY);
+    // Elite-Aura folgt der Figur (inkl. Bobbing-Versatz), wie der championRing – die
+    // Puls-Tween skaliert/alpha-t sie weiter, hier wird nur die Position nachgezogen.
+    if (this.eliteAura) this.eliteAura.setPosition(this.centerX, this.centerY + this.bobbingOffset);
   }
 
   // Wird von der GameScene pro Frame gesetzt, um Verbündete (grün) von Gegnern (rot) zu unterscheiden.
@@ -1033,6 +1108,9 @@ export class Unit extends Entity {
     this.shieldRing?.destroy();
     this.archerOutline?.destroy();
     this.championRing?.destroy();
+    // Elite-Aura mit-zerstören – destroy() killt auch die endlose Puls-Tween, die auf das
+    // Image zielt (Phaser räumt Tweens toter Targets ab), darum kein Tween-Leak.
+    this.eliteAura?.destroy();
 
     // Anmutiger Tod ohne Sheet-Animation: kurz umkippen + ausblenden, dann zerstören.
     const s = this.sprite;

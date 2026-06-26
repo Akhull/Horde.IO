@@ -10,16 +10,20 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "bench": "vitest run --config tools/bench/vitest.bench.config.ts",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write \"src/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\""
   },
   "dependencies": {
-    "phaser": "^3.80.1"
+    "miniplex": "^2.0.0",
+    "phaser": "^3.80.1",
+    "stats.js": "^0.17.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@types/stats.js": "^0.17.4",
     "eslint": "^10.5.0",
     "eslint-config-prettier": "^10.1.8",
     "globals": "^17.7.0",

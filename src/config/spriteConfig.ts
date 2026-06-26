@@ -19,3 +19,14 @@ export const ORB_TINT: Record<SoulType, number> = {
   purple: 0xa855f7, // Level-up auf 3
   gold: 0xffd700, // legendär (Champion)
 };
+
+// Tint für die pulsierende ADD-Blend-Aura unter Elite-Einheiten (Champion + Level-3-
+// Vasall). Bewusst NICHT identisch mit ORB_TINT: unter BlendMode.ADD verwaschen
+// gesättigte Farben, darum ist Gold etwas wärmer/heller (0xffd24a) und Lila deutlich
+// aufgehellt (0xc77bff), damit die Aura satt leuchtet statt matt zu wirken. Die
+// Farb-IDENTITÄT (Gold = Champion, Lila = Level-3) bleibt von Orb über Aura bis zum
+// HUD-Badge konsistent – darum leben die Konstanten hier neben ORB_TINT an einer Stelle.
+export const AURA_TINT = {
+  champion: 0xffd24a, // Gold-Aura (legendärer Champion aus Gold-Orb)
+  elite: 0xc77bff, // Lila-Aura (Level-3-Vasall aus Lila-Orb)
+};

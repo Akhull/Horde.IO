@@ -19,9 +19,11 @@ interface HudRefs {
   shieldLabel: HTMLElement;
   v1: HTMLElement;
   v2: HTMLElement;
-  v3: HTMLElement;
   archers: HTMLElement;
-  champions: HTMLElement;
+  champBadge: HTMLElement;
+  champN: HTMLElement;
+  eliteBadge: HTMLElement;
+  eliteN: HTMLElement;
   timer: HTMLElement;
   hpFill: HTMLElement;
   hpText: HTMLElement;
@@ -31,6 +33,18 @@ interface HudRefs {
 }
 
 let refs: HudRefs | null = null;
+
+// Vorherige Elite-Zähler, um echte Zuwächse (für den Belohnungs-Puls) zu erkennen.
+let prevChamp = 0;
+let prevElite = 0;
+
+// Startet die einmalige Puls-Animation eines Badges neu (remove → Reflow → add),
+// damit auch dicht aufeinanderfolgende Zuwächse jeweils sichtbar pulsen.
+function bumpBadge(node: HTMLElement): void {
+  node.classList.remove("bump");
+  void node.offsetWidth; // erzwungener Reflow → Animation startet garantiert neu
+  node.classList.add("bump");
+}
 
 export function buildHud(parent: HTMLElement): void {
   const kings = el("div", { class: "hud-kings" }, [
@@ -46,18 +60,48 @@ export function buildHud(parent: HTMLElement): void {
   const shieldLabel = el("div", { class: "ability-label", textContent: "Schild" });
   const shield = el("div", { class: "ability" }, [el("div", { class: "ability-bar" }, [shieldFill, shieldLabel])]);
 
+  // Elite-Belohnungen als leuchtende, farbumrandete Badges: der Gold-Champion und
+  // der Lila-Stufe-3-Vasall. Die Badges sind gedämpft, solange man keinen besitzt,
+  // und "zünden" (volles Leuchten + sanftes Atmen) beim ersten Erwerb; jeder weitere
+  // Zuwachs löst einen kräftigen Puls aus. So zieht sich die Belohnungs-Farbe vom
+  // aufgesammelten Orb über die leuchtende Einheit bis ins HUD durch.
+  const champN = el("b", { textContent: "0" });
+  const champBadge = el("div", { class: "elite-badge gold", title: "Gold-Champions (legendär)" }, [
+    el("span", { class: "eb-ico", html: "⚡" }),
+    el("span", { class: "eb-label", textContent: "Champions" }),
+    champN,
+  ]);
+  const eliteN = el("b", { textContent: "0" });
+  const eliteBadge = el("div", { class: "elite-badge purple", title: "Stufe-3-Elite-Vasallen" }, [
+    el("span", { class: "eb-ico", html: "✦" }),
+    el("span", { class: "eb-label", textContent: "Stufe 3" }),
+    eliteN,
+  ]);
+  const elite = el("div", { class: "hud-elite" }, [champBadge, eliteBadge]);
+
+  // Beim Ende des Zuwachs-Pulses die bump-Klasse entfernen, damit das "Atmen" der
+  // erspielten Badges (eigene, dauerhafte Animation) wieder übernimmt.
+  for (const b of [champBadge, eliteBadge]) {
+    b.addEventListener("animationend", (e) => {
+      if ((e as AnimationEvent).animationName === "badge-pop") b.classList.remove("bump");
+    });
+  }
+
+  // Reihen-Einheiten (häufig) bewusst schlicht darunter – die Hierarchie hebt die
+  // seltenen Belohnungen hervor.
   const v1 = el("b", { textContent: "0" });
   const v2 = el("b", { textContent: "0" });
-  const v3 = el("b", { textContent: "0" });
   const archers = el("b", { textContent: "0" });
-  const champions = el("b", { textContent: "0" });
-  const vassals = el("div", { class: "hud-vassals" }, [
-    el("span", { class: "vh", textContent: "Gefolge" }),
+  const rankfile = el("div", { class: "hud-rankfile" }, [
     el("span", {}, ["Stufe 1: ", v1]),
     el("span", {}, ["Stufe 2: ", v2]),
-    el("span", {}, ["Stufe 3: ", v3]),
     el("span", {}, ["Schützen: ", archers]),
-    el("span", { class: "champ" }, ["⚡ Champions: ", champions]),
+  ]);
+
+  const vassals = el("div", { class: "hud-vassals" }, [
+    el("span", { class: "vh", textContent: "Gefolge" }),
+    elite,
+    rankfile,
   ]);
 
   const status = el("div", { class: "hud-panel hud-status" }, [kings, dash, shield, vassals]);
@@ -83,7 +127,7 @@ export function buildHud(parent: HTMLElement): void {
   const root = el("div", { id: "hud" }, [status, topCenter, minimap, killfeed, hp, fps, buildTouchControls()]);
   parent.append(root);
 
-  refs = { root, kings: kings.lastElementChild as HTMLElement, dashFill, dashLabel, shieldFill, shieldLabel, v1, v2, v3, archers, champions, timer, hpFill, hpText, fps, killfeed, canvas };
+  refs = { root, kings: kings.lastElementChild as HTMLElement, dashFill, dashLabel, shieldFill, shieldLabel, v1, v2, archers, champBadge, champN, eliteBadge, eliteN, timer, hpFill, hpText, fps, killfeed, canvas };
 
   // Kill-Feed an das Königstod-Event koppeln.
   bus.on("kingKilled", ({ faction, kingsLeft }) => pushKill(faction, kingsLeft));
@@ -151,9 +195,17 @@ function tick(): void {
   }
   r.v1.textContent = `${c1}`;
   r.v2.textContent = `${c2}`;
-  r.v3.textContent = `${c3}`;
   r.archers.textContent = `${arc}`;
-  r.champions.textContent = `${champ}`;
+  // Elite-Badges: Zahl setzen, beim ersten Erwerb "zünden" (is-earned) und bei jedem
+  // echten Zuwachs einen Belohnungs-Puls auslösen (bumpBadge startet die Animation neu).
+  r.champN.textContent = `${champ}`;
+  r.eliteN.textContent = `${c3}`;
+  r.champBadge.classList.toggle("is-earned", champ > 0);
+  r.eliteBadge.classList.toggle("is-earned", c3 > 0);
+  if (champ > prevChamp) bumpBadge(r.champBadge);
+  if (c3 > prevElite) bumpBadge(r.eliteBadge);
+  prevChamp = champ;
+  prevElite = c3;
 
   // Timer
   const total = Math.floor(game.gameTime / 1000);
