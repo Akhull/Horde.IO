@@ -64,10 +64,11 @@ MUST pull from `medieval-rts` and keep this language; new pickups reuse the `orb
       Gold-XP-Balken, "MAX" am Deckel. Shipped 8f69a57 + Balance-Trim 61046b6.
 - [ ] **Power-up variety pass** — vision reveal. *(lifesteal + regen + steady/knockback-resist shipped, see changelog.)*
 - [ ] **More combat juice (follow-ups to king-kill cinematic)** — leicht zu schichten, gleiches additive-FX-Muster:
-      (a) **Level-up-Shockwave** für den König (kingProgression-Stufe ↑) — eigener farb-/größenkleinerer Ring,
-      damit auch das Mit-Wachsen knallt; (b) **Champion-Beschwörung** könnte denselben Ring bekommen
-      (derzeit nur sparkleBurst); (c) **Sieg-/Niederlage-Finale-Moment**: ein epischer Slow-mo + Gold-/Rot-
-      Vollbild beim allerletzten Königstod (Endgame-Punktuation), bevor der Game-Over-Fade greift.
+      (a) ✅ **Level-up-Shockwave** für den König (kingProgression-Stufe ↑) — Gold-Ring + Stern-Funke am König
+      (kein Flash/Shake, lokal), kleiner als der Kill-Ring. Shipped c506c71. (b) **Champion-Beschwörung** könnte
+      jetzt `kingLevelUpShockwave` (oder eine Variante) statt nur `sparkleBurst` bekommen — der Ring-Helper
+      existiert bereits, leicht wiederverwendbar; (c) **Sieg-/Niederlage-Finale-Moment**: ein epischer Slow-mo +
+      Gold-/Rot-Vollbild beim allerletzten Königstod (Endgame-Punktuation), bevor der Game-Over-Fade greift.
 
 ### P3 — epics (split before taking; some need a NEEDS DECISION)
 - [ ] **New game mode** beyond battle royale (Horde Defense vs. waves / King-of-the-Hill). → see NEEDS DECISION.
@@ -84,6 +85,23 @@ MUST pull from `medieval-rts` and keep this language; new pickups reuse the `orb
 
 ## Changelog (append-only, newest first)
 <!-- Director appends: `- YYYY-MM-DD — feat: <slice> — verified <how> — <commit>` -->
+- 2026-06-26 — feat: KÖNIG-LEVEL-UP-SCHOCKWELLE (Combat-Juice fürs Mit-Wachsen des Königs). Der König levelt aus
+  Seelen (HP/Schaden/Größe), aber sein eigener Stufen-Aufstieg las sich nur als kleiner Pop + Gold-Partikel-Burst –
+  unterwältigend für einen echten Wachstums-Meilenstein. Jetzt knallt er wie der Königstöter-Finisher, nur lokaler/
+  kleiner: ein expandierender Gold-Schockwellen-Ring (powerup-Textur, ADD-Blend, 30→200px, alpha 0.9→0, 420ms) +
+  ein heller Gold-weißer Stern-Funke (sparkle, 10→96px, rotierend, 360ms) am König. BEWUSST KEIN Screen-Flash und
+  KEIN Shake (anders als der Kill-Finisher) – ein persönlicher Wachstums-Beat, kein screen-weites Ereignis; und
+  bewusst kleiner als der Kill-Ring (200 vs 360px), damit ein Kill der größere Moment bleibt. Rein ADDITIVE FX,
+  LOCKED-Stil gewahrt (nur geladene Texturen powerup/sparkle, DEPTH-Konstanten, Engine-Tweens; kein Tint auf
+  Units), KEIN Balance/AI/HP/Schaden berührt. ARCHITEKTUR: neue Methode GameScene.kingLevelUpShockwave(x,y)
+  (spiegelt die Ring+Funke-Schichten von kingKillCinematic, ohne Flash/Shake), gerufen aus Unit.levelUpKing am
+  bestehenden Burst-Pfad → ALLE drei Schichten (Pop + Burst + Ring) feuern zusammen. Symmetrisch Spieler+KI
+  (levelUpKing tat das schon), isOnScreen-Guard hält Offscreen-Level-ups billig. Neuer FEEDBACK.kingLevelUp-
+  Config-Block (alle Tunables). — verified typecheck + 58 vitest + lint(0) + build grün; LIVE Playwright+__horde
+  (System-Chrome, scene „Game"): gainKingXp(50) → König L1→L4 (hp 384), drei gestapelte Schockwellen klar sichtbar
+  als gold expandierende Ringe + Stern-Funke + „KÖNIG STUFE N!"-Text um den (nun dominanten) König, FX nach <500ms
+  sauber abgeräumt (after-Shot leer → kein Leak), FPS stabil 132–143, voller Runden-Loop bis „Sieg!" intakt,
+  0 Konsolenfehler — c506c71.
 - 2026-06-26 — feat: KÖNIG-TÖTER-CINEMATIC (Combat-Juice für den größten Beat der Runde). Mandat „mach das Spiel
   geiler" → der spannendste Moment (ein rivalisierender König fällt) war visuell unterwältigend: nur ein kleiner
   roter Partikel-Puff + ein 160ms-Mini-Shake (der 60ms-Hit-Stop + Kill-Feed waren schon da). Jetzt ein
