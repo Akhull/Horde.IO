@@ -17,7 +17,7 @@ MUST pull from `medieval-rts` and keep this language; new pickups reuse the `orb
 ## Current state (as of seed, commit 4d34913)
 3 unit types (king / vassal L1–L3 / archer) · 2 abilities (dash, shield) · **6 power-ups (speed, shield, damage, armor, lifesteal, regen)** ·
 3 buildings (barn, house, tower) · 3 souls (green/blue/purple) · **3 factions cosmetic-only** ·
-2 obstacles (forest, water) · 1 mode (battle royale) · 4 difficulties · 3 AI personalities.
+3 terrain types (forest, water, **swamp = passable slow-terrain**) · 1 mode (battle royale) · 4 difficulties · 3 AI personalities.
 
 ---
 
@@ -56,13 +56,23 @@ MUST pull from `medieval-rts` and keep this language; new pickups reuse the `orb
       ~8% worldgen-Rate, Minimap-Gold-Punkte, Sprite medievalStructure_02 (befestigtes Torhaus). Balance-
       Review: gesund (green=1 König-XP, L6-Camping=13.5 min unpraktikabel, Safe-Zone brennt äußere Fontänen
       weg). Shipped 7d7d867.
-- [ ] **New obstacle: slow terrain** (swamp) — passable but halves speed; first non-binary terrain.
+- [x] **New obstacle: slow terrain** (swamp) — begehbares, aber tempo-halbierendes Terrain → erstes
+      nicht-binäres Terrain & echte Routen-Entscheidung (Abkürzung durchs Morast vs. außenrum). Swamp-Entity
+      (getöntes Boden-TileSprite, DEPTH.swamp -85, NICHT in der Obstacle-Kollision → passierbar); 8 Flächen aus
+      worldgen.generateSwamps; Effekt als read-time Unit.terrainSpeedFactor (allokationsfreier Grid-Lookup) am
+      einzigen Bewegungs-Schritt → mutiert keinen Basiswert, stapelt multiplikativ mit Speed-Orb/Steady,
+      symmetrisch Spieler+KI. Asset medievalTile_14 + Oliv-Tint 0x9aa86a (Bog). Minimap-Oliv-Punkte. Shipped d7bea91.
 - [x] **King progression** — der König levelt aus JEDER eingesammelten Seele (nicht nur Gold), max L6.
       `KING_PROGRESSION` (gameConfig): xpPerSoul green/blue/purple/gold 1/2/3/5, Kurve xpToNext [_,6,10,16,24,34]
       (90 grün-äquiv. bis L6), pro Stufe +28 maxHp (sofort geheilt) + +7% Schaden (L6 +35%, read-time in
       meleeDamage) + +5% Größe (gedeckelt +30%). Symmetrisch Spieler+KI (kein Snowball). HUD: "Stufe N" +
       Gold-XP-Balken, "MAX" am Deckel. Shipped 8f69a57 + Balance-Trim 61046b6.
 - [ ] **Power-up variety pass** — vision reveal. *(lifesteal + regen + steady/knockback-resist shipped, see changelog.)*
+- [ ] **Swamp polish/juice (follow-up)** — der Sumpf bremst, gibt aber kein Feedback: (a) ein kurzer Schlamm-
+      Spritzer/Funke + ggf. „splash"-Sound beim BETRETEN (Kanten-Übergang erkennen), (b) optional sich bewegende
+      Schilf-/Seerosen-Overlays (asset-librarian nannte medievalEnvironment_21/12) für einen klareren Morast-Look,
+      (c) ggf. eine zweite Terrain-Variante (z. B. Eis = schnell aber rutschig) auf demselben terrainSpeedFactor-
+      Mechanismus, sobald der Slow-Pfad sich bewährt. Reiner additive-/Daten-Layer, niedrigriskant.
 - [ ] **More combat juice (follow-ups to king-kill cinematic)** — leicht zu schichten, gleiches additive-FX-Muster:
       (a) ✅ **Level-up-Shockwave** für den König (kingProgression-Stufe ↑) — Gold-Ring + Stern-Funke am König
       (kein Flash/Shake, lokal), kleiner als der Kill-Ring. Shipped c506c71. (b) **Champion-Beschwörung** könnte
@@ -85,6 +95,28 @@ MUST pull from `medieval-rts` and keep this language; new pickups reuse the `orb
 
 ## Changelog (append-only, newest first)
 <!-- Director appends: `- YYYY-MM-DD — feat: <slice> — verified <how> — <commit>` -->
+- 2026-06-26 — feat: SUMPF-VERLANGSAMUNGS-TERRAIN (das erste NICHT-binäre Terrain). Bisher war Terrain binär:
+  Gras (frei) oder Wald/Wasser (harte, undurchdringliche Wand). Es fehlte taktische Tiefe im Gelände. Der Sumpf
+  ist BEGEHBAR, halbiert aber das Tempo jeder Einheit, deren Zentrum drinsteht → echte Routen-Entscheidung
+  (Abkürzung durchs Morast vs. den langen Weg außenrum), für Spieler UND KI gleichermaßen. VERTIKALER SLICE:
+  (1) types.ts ObstacleType += "swamp"; (2) neue Swamp-Entity (entities/Swamp.ts, gekacheltes Boden-Sprite,
+  DEPTH.swamp -85 zwischen groundPatch und obstacle, unter den Einheiten; bewusst NICHT in
+  resolveUnitObstacleCollisions → kein Heraus-Drücken, voll passierbar); (3) worldgen.generateSwamps (8 Flächen
+  280-620px, im Grid registriert), gerufen direkt nach generateObstacles; (4) Effekt als read-time
+  Unit.terrainSpeedFactor(scene) — allokationsfreier Grid-Lookup (Null-Box um das Zentrum + Punkt-in-Rechteck
+  gegen Swamp-Instanzen, geteilter terrainScratch-Puffer wie collision.ts; short-circuit bei swamps.length===0),
+  eingezogen am EINZIGEN Bewegungs-Schritt (speed * moveSpeedFactor * terrainSpeedFactor) → mutiert KEINEN
+  Basiswert, stapelt sauber MULTIPLIKATIV mit Speed-Orb (×1.5) und Steady (×1.1); (5) Minimap zeichnet Sümpfe in
+  muted Oliv (hud.ts, unter den Hindernissen). BALANCE: slowFactor 0.5 ist symmetrisch (beide Seiten bremsen) →
+  fair; ein geboosteter König im Sumpf ist trotzdem langsamer (gewollte Spannung). ASSET (asset-librarian): kein
+  dedizierter Sumpf-Tile im LOCKED medieval-rts-Pack → medievalTile_14 (Dirt) mit olivgrün-braunem Multiply-Tint
+  0x9aa86a, liest klar als Bog/Morast, distinkt von Gras und Wasser (Terrain-Tile-Tint ist erlaubt; die
+  „never tint units"-Regel betrifft nur Einheiten-Chips). Neuer SWAMP-Config-Block (alle Tunables). — verified
+  typecheck + 58 vitest + lint(0) + build grün; LIVE Playwright+__horde (System-Chrome, scene „Game"): 8 Sümpfe
+  korrekt gespawnt (Typ/Größe), GEMESSENER Tempo-Vergleich über die Registry-Joystick-Eingabe = König legt außen
+  113px, im Sumpf 56px zurück → Ratio exakt 0.50 (inSwamp-Flag bestätigt), gleiche Basis-speed 2.538 in beiden
+  Läufen (kein Basiswert-Drift), Sumpf liest visuell als distinkte olivbraune Morastfläche neben Gras/Wald,
+  Minimap-Oliv sichtbar, voller Runden-Loop bis „Sieg!" intakt, 165 FPS, 0 Konsolenfehler — d7bea91.
 - 2026-06-26 — feat: KÖNIG-LEVEL-UP-SCHOCKWELLE (Combat-Juice fürs Mit-Wachsen des Königs). Der König levelt aus
   Seelen (HP/Schaden/Größe), aber sein eigener Stufen-Aufstieg las sich nur als kleiner Pop + Gold-Partikel-Burst –
   unterwältigend für einen echten Wachstums-Meilenstein. Jetzt knallt er wie der Königstöter-Finisher, nur lokaler/
