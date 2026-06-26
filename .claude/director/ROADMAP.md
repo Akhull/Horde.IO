@@ -30,8 +30,10 @@ MUST pull from `medieval-rts` and keep this language; new pickups reuse the `orb
 - [x] **Damage-boost power-up** (`"damage"`) — temporary x1.5 attack multiplier (6 s), mirrors the speed-boost
       lifecycle (timer + multiplier, tick-to-decay in `updateKing`, applied in `meleeDamage` + archer arrow path,
       ON TOP of `factionDamageMod`). Red-orange orb; spawn split is now even 3-way speed/shield/damage. Shipped 78a0495.
-- [ ] **HUD: vassal count + kill feed** — surface info the sim already computes (vassal count, kill events) in
-      `HUDScene`. Low effort, high readability win. *(phaser-dev.)*
+- [x] **HUD: vassal count + kill feed** — beides im DOM-HUD vorhanden & live verifiziert: Gefolge-Zähler
+      (Stufe1/2/Schützen + Gold-Champion-/Lila-Elite-Badges) und der Kill-Feed (`bus.emit("kingKilled")` →
+      gestapelte "X-König gefallen — N übrig"-Einträge unter der Minimap). Live-Pass: 3 erzwungene Königstode →
+      3 Feed-Einträge + Header-Update korrekt. (Kill-Feed war aus einer Vorsession bereits implementiert.)
 - [x] **Armor power-up** (`"armor"`) — defensive counterpart to the damage boost. Temporary −40% incoming-damage
       (`armorMultiplier 0.6`, 6 s), mirrors the boost lifecycle (`armorTimer` + `armorMult`, idempotent
       `applyArmorBoost`, tick-to-decay in `updateKing`). Applied in `takeDamage` (combat) and `applySafeZoneDamage`
@@ -43,7 +45,11 @@ MUST pull from `medieval-rts` and keep this language; new pickups reuse the `orb
 - [ ] **New building type** — e.g. Barracks (periodically spawns a neutral unit) or Cathedral (small heal aura).
       Adds map-objective variety beyond "wall of HP that drops a soul".
 - [ ] **New obstacle: slow terrain** (swamp) — passable but halves speed; first non-binary terrain.
-- [ ] **King progression** — king levels from souls (size/damage/speed buff, capped), distinct from the vassal horde.
+- [x] **King progression** — der König levelt aus JEDER eingesammelten Seele (nicht nur Gold), max L6.
+      `KING_PROGRESSION` (gameConfig): xpPerSoul green/blue/purple/gold 1/2/3/5, Kurve xpToNext [_,6,10,16,24,34]
+      (90 grün-äquiv. bis L6), pro Stufe +28 maxHp (sofort geheilt) + +7% Schaden (L6 +35%, read-time in
+      meleeDamage) + +5% Größe (gedeckelt +30%). Symmetrisch Spieler+KI (kein Snowball). HUD: "Stufe N" +
+      Gold-XP-Balken, "MAX" am Deckel. Shipped 8f69a57 + Balance-Trim 61046b6.
 - [ ] **Power-up variety pass** — vision reveal. *(lifesteal + regen + steady/knockback-resist shipped, see changelog.)*
 
 ### P3 — epics (split before taking; some need a NEEDS DECISION)
@@ -61,6 +67,27 @@ MUST pull from `medieval-rts` and keep this language; new pickups reuse the `orb
 
 ## Changelog (append-only, newest first)
 <!-- Director appends: `- YYYY-MM-DD — feat: <slice> — verified <how> — <commit>` -->
+- 2026-06-26 — feat: KÖNIG-PROGRESSION (das mechanische Gegenstück zur dichten Horde). Der König wuchs nie
+  selbst, obwohl er Seelen für die Armee sammelte. Jetzt levelt der KÖNIG aus JEDER Seele, die sein Team
+  erntet (nicht nur Gold), max L6: KING_PROGRESSION (gameConfig) xpPerSoul green/blue/purple/gold 1/2/3/5,
+  Kurve xpToNext [_,6,10,16,24,34] (90 grün-äquiv. bis L6 → echter End-Game-Meilenstein), pro Stufe +28 maxHp
+  (beim Level-up sofort dazugeheilt), +7% Nahkampfschaden (read-time in meleeDamage, NUR König, oben auf
+  Fraktions-Mod+Boost; L6-Deckel +35%), +5% Größe (gedeckelt +30% für Lesbarkeit). Symmetrisch Spieler+KI
+  (kein Snowball). Unit: kingLevel/kingXp + gainKingXp (while-Loop für Mehrfach-Level-ups) + levelUpKing
+  (Größe aus Basiswert neu berechnet, Hitbox/barRef nachgezogen, goldener Pop+Burst, Schwebetext nur Spieler-
+  Team). gameplay.handleSouls: XP an den König des Sammlers nach Seltenheit. HUD: "Stufe N"-Label + Gold-XP-
+  Balken unter der Königs-Reihe, "Stufe N · MAX" am Deckel. — verified typecheck + 41 vitest + lint(0) + build
+  grün; LIVE Playwright+__horde: organisch kingXp=2 nach 3s (Hook feuert echt), +20 XP→L3 (hp 300→356,
+  size 116→128), +200 XP→L6/MAX (hp 440, size 145=+25% gedeckelt), HUD-Balken + "KÖNIG STUFE N!"-Gold-Pop +
+  größerer dominanter König sichtbar, 165 FPS, 0 Konsolenfehler. Balance-Review trimmte den L6-Schadensdeckel
+  +40%→+35% (damageMultPerLevel 0.08→0.07), damit das finale 1v1 nicht durch doppelt gestapelten HP+Schaden-
+  Vorsprung vorentschieden wirkt und der auf Hardcore zusätzlich mit aiDamage stapelnde KI-Königsschaden
+  fairer bleibt — 8f69a57 + 61046b6.
+- 2026-06-26 — chore/verify: Kill-Feed (P1) als bereits geshippt verifiziert & abgehakt. Der Kill-Feed war aus
+  einer Vorsession im DOM-HUD verdrahtet (bus.emit("kingKilled") in GameScene.removeDeadUnits → gestapelte
+  "X-König gefallen — N übrig"-Einträge unter der Minimap), die Roadmap führte ihn aber noch als TODO. Live-
+  Pass: 3 erzwungene Königstode → 3 korrekte Feed-Einträge + Header-Update "8 Könige übrig". Kein neuer Code,
+  nur Roadmap-Korrektur — (verifiziert in dieser Iteration).
 - 2026-06-26 — feat: DICHTE HORDE-FORMATION (Kern-Fun-Fix aus dem Live-QA). Befund per
   Playwright-Pass: die Armee des Spieler-Königs las sich als dünner, verstreuter Halo in einer
   lockeren Diagonale statt als die dichte, wachsende Masse, die ein .io-Horde-Spiel trägt.
