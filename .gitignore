@@ -28,3 +28,5 @@ build/
 # Playwright-MCP-Artefakte (Screenshots/Snapshots aus Live-Verifikation)
 .playwright-mcp/
 iso-spike-*.png
+/*.png
+.claude/ralph-loop.local.md

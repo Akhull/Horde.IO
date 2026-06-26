@@ -15,7 +15,8 @@ const MAP = 720, N = MAP + 1; // große Insel (16-Spieler-Battle-Royale)
 const ELEV = 150;           // Screen-Y-Lift (markante Berge)
 const NORM_K = 26;          // Höhen->Slope-Skala für die Beleuchtung
 const WATER = 0.38, MOUNTAIN = 0.80; // höhere Block-Schwelle -> weniger gesperrte Fläche, mehr Pässe
-const PLAYERS = 16, HORDE = 520, BUILDINGS = 520, TREES = 2200, BANDS = 170;
+const STEEP = 0.05;                  // Hang steiler als das -> unbegehbar (Klippe/Steilhang blockt wie Wasser)
+const PLAYERS = 16, HORDE = 520, BUILDINGS = 520, TREES = 2200;
 const ASSET = "/assets/kenney/medieval-rts/PNG/Retina";
 
 function hash(x: number, y: number): number {
@@ -55,7 +56,6 @@ function rampRGB(h: number, out: { r: number; g: number; b: number }): void {
 }
 
 const H = new Float32Array(N * N);
-const RFLOW = new Float32Array(N * N * 2); // Fließrichtung der Flusszellen (aus der Drainage)
 const HG = (i: number, j: number): number => H[Math.max(0, Math.min(N - 1, i)) * N + Math.max(0, Math.min(N - 1, j))];
 function baseHeight(i: number, j: number): number {
   const n = fbm(i * 0.014 + 7, j * 0.014 + 7, 5);
@@ -69,10 +69,9 @@ function baseHeight(i: number, j: number): number {
 }
 function buildHeight(terrace: boolean): void {
   for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) H[i * N + j] = baseHeight(i, j);
-  erode(180000); // hydraulische Erosion: Wassertropfen graben dendritische Täler bergab ->
-  // natürliche Fluss-/Drainage-Netze direkt aus der Heightmap (kein Carving-Hack, keine Pfützen).
+  erode(180000); // hydraulische Erosion: Wassertropfen graben dendritische Täler/Schluchten bergab ->
+  // natürliches Relief direkt aus der Heightmap (KEINE gecarvten Fake-Flüsse mehr; nur echte Senken=Seen).
   for (let k = 0; k < N * N; k++) H[k] = Math.max(0, Math.min(1, H[k]));
-  carveRivers(MAP * 0.5); // verzweigte Flüsse aus der Drainage -> münden bergab ins Meer
   if (terrace) for (let k = 0; k < N * N; k++) H[k] = Math.floor(H[k] * 13) / 13; // Voxel-Stufen
 }
 // Droplet-basierte hydraulische Erosion (Sebastian-Lague-Muster): jeder Tropfen folgt dem
@@ -116,76 +115,14 @@ function erode(drops: number): void {
     }
   }
 }
-// Flüsse aus der DRAINAGE: D8-Fließrichtung pro Zelle -> Flow-Accumulation (wie viel Wasser
-// durchfließt) in Höhen-Reihenfolge aufsummieren -> Zellen mit viel Durchfluss = Flüsse, aufs
-// Wasserniveau gesenkt. Ergibt verzweigte Netze, die bergab ins Meer münden (keine separate Logik,
-// sondern direkt aus dem Gelände abgeleitet). Setzt zugleich die Fließrichtung (RFLOW).
-function carveRivers(threshold: number): void {
-  const total = N * N;
-  // 1) PRIORITY-FLOOD: Senken füllen, sodass JEDE Zelle monoton zum Rand/Meer entwässert
-  //    (sonst bleibt die Drainage in erosions-bedingten Mulden stecken -> keine Flüsse).
-  const filled = Float32Array.from(H);
-  const closed = new Uint8Array(total);
-  const hH: number[] = [], hK: number[] = [];
-  const push = (val: number, k: number): void => {
-    hH.push(val); hK.push(k); let c = hH.length - 1;
-    while (c > 0) { const p = (c - 1) >> 1; if (hH[p] <= hH[c]) break; const th = hH[p]; hH[p] = hH[c]; hH[c] = th; const tk = hK[p]; hK[p] = hK[c]; hK[c] = tk; c = p; }
-  };
-  const pop = (): number => {
-    const rk = hK[0], n = hH.length - 1; hH[0] = hH[n]; hK[0] = hK[n]; hH.pop(); hK.pop();
-    let c = 0; const len = hH.length;
-    for (;;) { let s = c; const l = 2 * c + 1, r = 2 * c + 2; if (l < len && hH[l] < hH[s]) s = l; if (r < len && hH[r] < hH[s]) s = r; if (s === c) break; const th = hH[s]; hH[s] = hH[c]; hH[c] = th; const tk = hK[s]; hK[s] = hK[c]; hK[c] = tk; c = s; }
-    return rk;
-  };
-  for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) if (i === 0 || j === 0 || i === N - 1 || j === N - 1) { const k = i * N + j; closed[k] = 1; push(filled[k], k); }
-  while (hH.length) {
-    const c = pop(), ci = (c / N) | 0, cj = c % N;
-    for (let di = -1; di <= 1; di++) for (let dj = -1; dj <= 1; dj++) {
-      if (!di && !dj) continue; const ni = ci + di, nj = cj + dj;
-      if (ni < 0 || nj < 0 || ni >= N || nj >= N) continue; const nk = ni * N + nj;
-      if (closed[nk]) continue; closed[nk] = 1;
-      if (filled[nk] < filled[c]) filled[nk] = filled[c]; // auf Spill-Niveau anheben
-      push(filled[nk], nk);
-    }
-  }
-  // 2) D8-Fließrichtung auf dem gefüllten Relief + Flow-Accumulation (Höhe absteigend)
-  const down = new Int32Array(total).fill(-1), dirI = new Int8Array(total), dirJ = new Int8Array(total);
-  for (let i = 1; i < N - 1; i++) for (let j = 1; j < N - 1; j++) {
-    const c = i * N + j; let best = filled[c], bd = -1, bi = 0, bj = 0;
-    for (let di = -1; di <= 1; di++) for (let dj = -1; dj <= 1; dj++) {
-      if (!di && !dj) continue; const nk = (i + di) * N + (j + dj);
-      if (filled[nk] < best) { best = filled[nk]; bd = nk; bi = di; bj = dj; }
-    }
-    down[c] = bd; dirI[c] = bi; dirJ[c] = bj;
-  }
-  const order = Array.from({ length: total }, (_, k) => k).sort((a, b) => filled[b] - filled[a]);
-  const acc = new Float32Array(total).fill(1);
-  for (let o = 0; o < total; o++) { const c = order[o], d = down[c]; if (d >= 0) acc[d] += acc[c]; }
-  // 3) Flüsse: Zellen mit viel Durchfluss auf Land -> Wasser. Breite skaliert mit dem Durchfluss
-  //    (große Ströme breiter), Nachbarn mit-gesenkt -> sichtbare Flussbreite. Fließrichtung gesetzt.
-  for (let c = 0; c < total; c++) {
-    if (H[c] < WATER || H[c] >= MOUNTAIN || acc[c] <= threshold) continue;
-    const rad = acc[c] > threshold * 6 ? 2 : 1;            // breiter bei mehr Durchfluss
-    const ci = (c / N) | 0, cj = c % N;
-    for (let di = -rad; di <= rad; di++) for (let dj = -rad; dj <= rad; dj++) {
-      const ni = ci + di, nj = cj + dj;
-      if (ni < 0 || nj < 0 || ni >= N || nj >= N) continue;
-      const nk = ni * N + nj;
-      if (H[nk] >= MOUNTAIN) continue;
-      const drop = di === 0 && dj === 0 ? 0.04 : 0.02;
-      H[nk] = Math.min(H[nk], WATER - drop);
-    }
-    const inv = 1 / (Math.hypot(dirI[c], dirJ[c]) || 1);
-    RFLOW[c * 2] = dirI[c] * inv; RFLOW[c * 2 + 1] = dirJ[c] * inv;
-  }
-}
 function sampleH(fx: number, fy: number): number {
   const x = Math.max(0, Math.min(MAP - 0.001, fx)), y = Math.max(0, Math.min(MAP - 0.001, fy));
   const i = Math.floor(x), j = Math.floor(y), tx = x - i, ty = y - j;
   const a = H[i * N + j], b = H[(i + 1) * N + j], c = H[i * N + (j + 1)], d = H[(i + 1) * N + (j + 1)];
   return (a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + d * tx) * ty;
 }
-const passable = (fx: number, fy: number): boolean => { const h = sampleH(fx, fy); return h >= WATER && h <= MOUNTAIN; };
+// begehbar = nicht Wasser, nicht Hochgebirge UND nicht zu steil (Steilhang/Klippe blockt wie Wasser).
+const passable = (fx: number, fy: number): boolean => { const h = sampleH(fx, fy); return h >= WATER && h <= MOUNTAIN && slopeAt(fx, fy) < STEEP; };
 // Hangneigung (für „flach genug zum Bauen"): Summe der Höhendifferenzen ringsum.
 function slopeAt(gx: number, gy: number): number {
   const e = 1.5;
@@ -197,7 +134,7 @@ function forestMask(gx: number, gy: number): number { return fbm(gx * 0.02 + 200
 let terrainShader: Shader;
 function buildTerrainMesh(): Mesh {
   const pos = new Float32Array(N * N * 2), col = new Float32Array(N * N * 3);
-  const nrm = new Float32Array(N * N * 3), wld = new Float32Array(N * N * 2), hgt = new Float32Array(N * N), flow = new Float32Array(N * N * 2);
+  const nrm = new Float32Array(N * N * 3), wld = new Float32Array(N * N * 2), hgt = new Float32Array(N * N);
   const tmp = { r: 0, g: 0, b: 0 };
   for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
     const k = i * N + j, h = H[k], p = worldToIso(i, j);
@@ -208,9 +145,6 @@ function buildTerrainMesh(): Mesh {
     const inv = 1 / Math.hypot(nx, ny, nz);
     nrm[3 * k] = nx * inv; nrm[3 * k + 1] = ny * inv; nrm[3 * k + 2] = nz * inv;
     wld[2 * k] = i; wld[2 * k + 1] = j; hgt[k] = h;
-    const rf0 = RFLOW[2 * k], rf1 = RFLOW[2 * k + 1]; // Flusszellen: Richtung aus der Drainage, sonst bergab
-    if (rf0 !== 0 || rf1 !== 0) { flow[2 * k] = rf0; flow[2 * k + 1] = rf1; }
-    else { flow[2 * k] = -(HG(i + 1, j) - HG(i - 1, j)) * 12; flow[2 * k + 1] = -(HG(i, j + 1) - HG(i, j - 1)) * 12; }
   }
   const idx: number[] = [];
   for (let d = 0; d < 2 * MAP; d++)
@@ -227,23 +161,22 @@ function buildTerrainMesh(): Mesh {
       aNormal: { buffer: buf(nrm, "nrm"), format: "float32x3", stride: 12, offset: 0 },
       aWorld: { buffer: buf(wld, "wld"), format: "float32x2", stride: 8, offset: 0 },
       aHeight: { buffer: buf(hgt, "hgt"), format: "float32", stride: 4, offset: 0 },
-      aFlow: { buffer: buf(flow, "flow"), format: "float32x2", stride: 8, offset: 0 },
     },
     indexBuffer: new Buffer({ data: new Uint32Array(idx), label: "idx", usage: BufferUsage.INDEX | BufferUsage.COPY_DST }),
   });
   const glProgram = new GlProgram({
     vertex: `
-      attribute vec2 aPosition; attribute vec3 aColor; attribute vec3 aNormal; attribute vec2 aWorld; attribute float aHeight; attribute vec2 aFlow;
-      varying vec3 vColor; varying vec3 vNormal; varying vec2 vWorld; varying float vHeight; varying vec2 vFlow;
+      attribute vec2 aPosition; attribute vec3 aColor; attribute vec3 aNormal; attribute vec2 aWorld; attribute float aHeight;
+      varying vec3 vColor; varying vec3 vNormal; varying vec2 vWorld; varying float vHeight;
       uniform mat3 uProjectionMatrix; uniform mat3 uWorldTransformMatrix; uniform mat3 uTransformMatrix;
       void main() {
         gl_Position = vec4((uProjectionMatrix*uWorldTransformMatrix*uTransformMatrix*vec3(aPosition,1.0)).xy, 0.0, 1.0);
-        vColor = aColor; vNormal = aNormal; vWorld = aWorld; vHeight = aHeight; vFlow = aFlow;
+        vColor = aColor; vNormal = aNormal; vWorld = aWorld; vHeight = aHeight;
       }`,
     fragment: `
       precision mediump float;
-      varying vec3 vColor; varying vec3 vNormal; varying vec2 vWorld; varying float vHeight; varying vec2 vFlow;
-      uniform float uTime; uniform vec3 uLight; uniform float uStyle; // 0 real | 1 pixel | 2 voxel | 3 cel
+      varying vec3 vColor; varying vec3 vNormal; varying vec2 vWorld; varying float vHeight;
+      uniform float uTime; uniform vec3 uLight; uniform vec3 uView; uniform float uStyle; // 0 real | 1 pixel | 2 voxel | 3 cel
       float h2(vec2 p){ p=fract(p*vec2(123.34,456.21)); p+=dot(p,p+45.32); return fract(p.x*p.y); }
       float vn(vec2 p){ vec2 i=floor(p),f=fract(p); float a=h2(i),b=h2(i+vec2(1.,0.)),c=h2(i+vec2(0.,1.)),d=h2(i+vec2(1.,1.)); vec2 u=f*f*(3.-2.*f); return mix(mix(a,b,u.x),mix(c,d,u.x),u.y); }
       vec3 biome(float hh){
@@ -259,20 +192,45 @@ function buildTerrainMesh(): Mesh {
       void main() {
         vec3 nB = normalize(vNormal);
         float diff = clamp(dot(nB, normalize(uLight)), 0.0, 1.0);
-        // ---- WASSER (Tiefe + ruhige Glitzer-Wellen + Flussströmung + Tide-Brandung) ----
+        // ---- WASSER: 3 GERSTNER-Wellen, ANALYTISCHE Normalen + Schlick-Fresnel + Blinn-Phong-Sonnenglanz.
+        //      Bewährt: GPU Gems Ch.1 (Finch), Sea of Thieves (SIGGRAPH 2018), Wind Waker, Unreal Water.
+        //      Physikalisches Wellen-Normalfeld -> jede Farbänderung kommt aus Fresnel/Specular, kein
+        //      Noise, keine erfundene Helligkeits-Sinus-Hack. 3 langwellige Sinus = bandbegrenzt = keine
+        //      Ölspur. + Toon-Tiefenbänder (pixelartig) + Ufer-Schaum. Null neue Texturen. ----
         if (vHeight < 0.382) {
-          float depth = clamp((0.382 - vHeight) / 0.10, 0.0, 1.0);        // 0 Ufer ... 1 tief
-          vec3 col = mix(vec3(0.22,0.52,0.74), vec3(0.03,0.12,0.30), depth);
-          // kleine Glitzer-Wellen aus Noise (KEIN durchlaufendes Band)
-          col += 0.06 * smoothstep(0.66, 1.0, vn(vWorld * 1.1 + vec2(uTime * 0.12, -uTime * 0.09)));
-          // Flussströmung: nur wo Fließrichtung vorhanden (Flüsse sichtbar fließend, Seen still)
-          float fmag = clamp(length(vFlow), 0.0, 1.0);
-          if (fmag > 0.02) col += 0.07 * sin(dot(vWorld, normalize(vFlow)) * 1.8 - uTime * (3.0 + fmag * 6.0));
-          // Brandungs-Saum direkt an der Küste, sanft pulsierend (rein/raus)
-          float tide = 0.5 + 0.5 * sin(uTime * 0.8);
-          float foam = smoothstep(0.05, 0.0, 0.382 - vHeight) * (0.4 + 0.6 * tide);
-          col = mix(col, vec3(0.90, 0.96, 1.0), clamp(foam, 0.0, 0.85));
-          if (uStyle > 0.5 && uStyle < 2.5) col = floor(col * 10.0 + 0.5) / 10.0;
+          float depth = clamp((0.382 - vHeight) / 0.12, 0.0, 1.0);        // 0 Ufer ... 1 tief
+          // Tiefen-Körperfarbe als 3 weiche Toon-Bänder (liest pixelig, killt Schimmer)
+          vec3 cShallow = vec3(0.34, 0.66, 0.71);                         // Küsten-Türkis
+          vec3 cMid     = vec3(0.11, 0.42, 0.58);                         // mittleres Meer
+          vec3 cDeep    = vec3(0.04, 0.17, 0.38);                         // tiefes Navy
+          vec3 bodyCol = mix(cShallow, cMid, smoothstep(0.18, 0.42, depth));
+               bodyCol = mix(bodyCol,  cDeep, smoothstep(0.55, 0.82, depth));
+          // 3 Gerstner-Wellen: Richtung, Wellenlänge L (Zellen), Amplitude A, Speed S, Steilheit Q.
+          // Lange, inkommensurable L (34/21/13 ~ Fibonacci) -> keine sichtbare Kachelung. Wir brauchen
+          // nur die NORMALE (Silhouette ist top-down unsichtbar): analytische Ableitung der Summe.
+          vec2 d0 = normalize(vec2(0.80, 0.60)), d1 = normalize(vec2(-0.60, 0.80)), d2 = normalize(vec2(0.20, -0.98));
+          vec3 Lw = vec3(34.0, 21.0, 13.0), Aw = vec3(0.55, 0.32, 0.16), Sw = vec3(2.6, 3.1, 3.9), Qw = vec3(0.65, 0.55, 0.45);
+          float nx = 0.0, ny = 0.0, nz = 1.0, crest = 0.0;
+          { float w = 6.2831853 / Lw.x; float th = w*dot(d0, vWorld) + uTime*(Sw.x*w);
+            float c = cos(th), s = sin(th), WA = w*Aw.x; nx -= d0.x*WA*c; ny -= d0.y*WA*c; nz -= Qw.x*WA*s; crest += s; }
+          { float w = 6.2831853 / Lw.y; float th = w*dot(d1, vWorld) + uTime*(Sw.y*w);
+            float c = cos(th), s = sin(th), WA = w*Aw.y; nx -= d1.x*WA*c; ny -= d1.y*WA*c; nz -= Qw.y*WA*s; crest += s; }
+          { float w = 6.2831853 / Lw.z; float th = w*dot(d2, vWorld) + uTime*(Sw.z*w);
+            float c = cos(th), s = sin(th), WA = w*Aw.z; nx -= d2.x*WA*c; ny -= d2.y*WA*c; nz -= Qw.z*WA*s; crest += s; }
+          float openSea = smoothstep(0.0, 0.35, depth);                   // Wellen am Ufer flach -> Sandlinie ruhig
+          vec3 Nw = normalize(vec3(nx*openSea, ny*openSea, max(nz, 0.18)));
+          vec3 V = normalize(uView), Ld = normalize(uLight), Hl = normalize(Ld + V);
+          // Schlick-Fresnel: Himmel-Glanz bei flachem Winkel (Wasser F0 ~0.02)
+          float fres = 0.02 + 0.98 * pow(1.0 - clamp(dot(Nw, V), 0.0, 1.0), 5.0);
+          vec3 col = mix(bodyCol, vec3(0.55, 0.74, 0.90), fres * 0.55);
+          col *= 0.86 + 0.14 * (0.5 + 0.5 * dot(Nw, Ld));                 // sehr weiche Schwell-Schattierung
+          float spec = pow(max(dot(Nw, Hl), 0.0), 96.0);                  // Sonnenglanz, wandert auf den Kämmen
+          col += vec3(1.0, 0.97, 0.88) * spec * (0.55 * openSea);
+          col += smoothstep(2.2, 2.9, crest) * 0.05 * openSea;            // sparsames Funkeln auf schärfsten Kämmen
+          float shore = smoothstep(0.016, 0.0, 0.382 - vHeight);          // Schaum an der Wasserlinie
+          float lap = 0.5 + 0.5 * sin(uTime * 1.0 + (vWorld.x + vWorld.y) * 0.25);
+          col = mix(col, vec3(0.86, 0.93, 0.96), shore * (0.4 + 0.6 * lap) * 0.6);
+          if (uStyle > 0.5 && uStyle < 2.5) { col = floor(col * 8.0 + 0.5) / 8.0; spec = step(0.5, spec); }
           gl_FragColor = vec4(col, 1.0); return;
         }
         // ---- LAND ----
@@ -296,20 +254,22 @@ function buildTerrainMesh(): Mesh {
             lc = pow(b, vec3(0.85)) * shade;
           }
         }
-        // STRAND-UEBERSCHWAPPEN: untere Strandzone wird periodisch nass + Schaumkante (Tide hoch/runter)
+        // STRAND-UEBERSCHWAPPEN: duenner nasser Sandsaum + Schaumkante, Phase raeumlich entkoppelt
+        // (variiert mit Position) -> Wellen lappen lokal an Land, KEIN synchron durchlaufendes Band.
         float above = vHeight - 0.382;
-        float tideU = 0.010 + 0.012 * (0.5 + 0.5 * sin(uTime * 0.8));
-        float wet = smoothstep(tideU, 0.0, above);
-        lc = mix(lc, lc * vec3(0.55, 0.60, 0.72), wet * 0.55);
-        float foamL = smoothstep(tideU, tideU * 0.4, above) * (1.0 - smoothstep(tideU * 0.4, 0.0, above));
-        lc = mix(lc, vec3(0.92, 0.96, 1.0), clamp(foamL, 0.0, 1.0) * 0.6);
+        float phase = sin(uTime * 1.1 + vWorld.x * 0.11 + vWorld.y * 0.08);  // gleiche Welle wie im Wasser
+        float reach = 0.012 + 0.006 * phase;                                 // wie weit die Welle hochlaeuft
+        float wet = smoothstep(reach, 0.0, above);
+        lc = mix(lc, lc * vec3(0.60, 0.64, 0.72), wet * 0.5);
+        float foamL = smoothstep(reach, reach * 0.45, above) * (1.0 - smoothstep(reach * 0.45, 0.0, above));
+        lc = mix(lc, vec3(0.90, 0.95, 0.98), clamp(foamL, 0.0, 1.0) * 0.55);
         if (uStyle > 0.5 && uStyle < 2.5) lc = floor(lc * 12.0 + 0.5) / 12.0;
         gl_FragColor = vec4(lc, 1.0);
       }`,
   });
   terrainShader = new Shader({
     glProgram,
-    resources: { terr: { uTime: { value: 0, type: "f32" }, uLight: { value: new Float32Array([-0.5, -0.62, 0.6]), type: "vec3<f32>" }, uStyle: { value: 0, type: "f32" } } },
+    resources: { terr: { uTime: { value: 0, type: "f32" }, uLight: { value: new Float32Array([-0.5, -0.62, 0.6]), type: "vec3<f32>" }, uView: { value: new Float32Array([0.15, 0.20, 0.97]), type: "vec3<f32>" }, uStyle: { value: 0, type: "f32" } } },
   });
   return new Mesh({ geometry, shader: terrainShader });
 }
@@ -362,22 +322,27 @@ async function main(): Promise<void> {
   world.addChild(buildTerrainMesh());
   terrainShader.resources.terr.uniforms.uStyle = styleId;
 
-  const bandParent = new Container();
-  bandParent.sortableChildren = true;
-  world.addChild(bandParent);
-  const bands: Container[] = [];
-  const bandSize = (2 * MAP) / BANDS;
-  for (let i = 0; i < BANDS; i++) { const c = new Container(); c.zIndex = i; bands.push(c); bandParent.addChild(c); }
-  const bandOf = (gx: number, gy: number): number => Math.max(0, Math.min(BANDS - 1, Math.floor((gx + gy) / bandSize)));
+  // GLOBALE Z-REGEL via SCREEN-Y-BUCKETS: jedes Asset kommt in den Eimer seiner Fuss-screen-Y.
+  // Eimer liegen in FIXER Reihenfolge (oben im Bild=hinten ... unten=vorne) -> korrekte Tiefe OHNE
+  // per-frame Vollsortierung (sortableChildren auf 8000+ Sprites = 3 FPS Batch-Rebuild). Batches stabil.
+  // Gilt fuer ALLE Inhalte ueber place()/spawn() -> auch kuenftige Assets automatisch korrekt.
+  const NB = 1100;
+  const layer = new Container();
+  world.addChild(layer);
+  const buckets: Container[] = [];
+  for (let i = 0; i < NB; i++) { const c = new Container(); buckets.push(c); layer.addChild(c); }
+  const Y_MIN = -ELEV - 40, Y_SPAN = 2 * MAP * HH + ELEV + 120;
+  const bucketOf = (screenY: number): number => Math.max(0, Math.min(NB - 1, ((screenY - Y_MIN) / Y_SPAN * NB) | 0));
   function placeOnLand(): { gx: number; gy: number } {
-    for (let i = 0; i < 60; i++) {
+    for (let i = 0; i < 80; i++) {
       const gx = 6 + Math.random() * (MAP - 12), gy = 6 + Math.random() * (MAP - 12), h = sampleH(gx, gy);
-      if (h >= WATER + 0.03 && h <= MOUNTAIN - 0.02) return { gx, gy };
+      if (h >= WATER + 0.03 && h <= MOUNTAIN - 0.02 && slopeAt(gx, gy) < STEEP) return { gx, gy };
     }
     return { gx: MAP / 2, gy: MAP / 2 };
   }
   function place(spr: Sprite, gx: number, gy: number): void {
-    const p = worldToIso(gx, gy); spr.x = p.x; spr.y = p.y - elevLift(sampleH(gx, gy)); bands[bandOf(gx, gy)].addChild(spr);
+    const p = worldToIso(gx, gy), sy = p.y - elevLift(sampleH(gx, gy));
+    spr.x = p.x; spr.y = sy; buckets[bucketOf(sy)].addChild(spr);
   }
 
   // WÄLDER: Bäume clustern in Wald-Zonen (forestMask) auf Gras -> echte Waldflächen statt random.
@@ -411,7 +376,7 @@ async function main(): Promise<void> {
     s.on("pointerdown", (e) => {
       e.stopPropagation();
       const orb = new Sprite(orbTex); orb.anchor.set(0.5); orb.x = s.x; orb.y = s.y - 12; orb.tint = 0xffd24a; orb.scale.set(0.5);
-      (s.parent ?? bandParent).addChild(orb); orbs.push({ spr: orb, life: 1 }); s.destroy(); buildingsLeft--;
+      buckets[NB - 1].addChild(orb); orbs.push({ spr: orb, life: 1 }); s.destroy(); buildingsLeft--; // FX immer vorne
     });
     place(s, gx, gy); buildingsLeft++;
   };
@@ -436,13 +401,14 @@ async function main(): Promise<void> {
   }
 
   const factions = [{ u: tex.humanU, k: tex.humanK }, { u: tex.elfU, k: tex.elfK }, { u: tex.orcU, k: tex.orcK }];
-  interface U { gx: number; gy: number; vx: number; vy: number; spr: Sprite; band: number; }
+  interface U { gx: number; gy: number; vx: number; vy: number; spr: Sprite; bk: number; }
   const units: U[] = [];
   function spawn(gx: number, gy: number, t: Texture, scale: number): void {
     const spr = new Sprite(t); spr.anchor.set(0.5, 0.82); spr.scale.set(scale);
+    const p = worldToIso(gx, gy), sy = p.y - elevLift(sampleH(gx, gy)); spr.x = p.x; spr.y = sy;
+    const bk = bucketOf(sy); buckets[bk].addChild(spr);
     const ang = Math.random() * Math.PI * 2, sp = 0.006 + Math.random() * 0.014;
-    const u: U = { gx, gy, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp, spr, band: bandOf(gx, gy) };
-    bands[u.band].addChild(spr); units.push(u);
+    units.push({ gx, gy, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp, spr, bk });
   }
   for (let pi = 0; pi < PLAYERS; pi++) {
     const f = factions[pi % 3], c = placeOnLand();
@@ -500,10 +466,10 @@ async function main(): Promise<void> {
       const nx = u.gx + u.vx * dt, ny = u.gy + u.vy * dt;
       if (!passable(nx, u.gy)) u.vx = -u.vx; else u.gx = nx;
       if (!passable(u.gx, ny)) u.vy = -u.vy; else u.gy = ny;
-      const p = worldToIso(u.gx, u.gy);
-      u.spr.x = p.x; u.spr.y = p.y - elevLift(sampleH(u.gx, u.gy));
-      const nb = bandOf(u.gx, u.gy);
-      if (nb !== u.band) { bands[nb].addChild(u.spr); u.band = nb; }
+      const p = worldToIso(u.gx, u.gy), sy = p.y - elevLift(sampleH(u.gx, u.gy));
+      u.spr.x = p.x; u.spr.y = sy;
+      const bk = bucketOf(sy);
+      if (bk !== u.bk) { buckets[bk].addChild(u.spr); u.bk = bk; } // Eimerwechsel = neue Tiefe (global)
     }
     for (let i = orbs.length - 1; i >= 0; i--) {
       const o = orbs[i]; o.life -= 0.012 * dt; o.spr.y -= 0.6 * dt; o.spr.alpha = Math.max(0, o.life);
