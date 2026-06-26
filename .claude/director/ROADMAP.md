@@ -40,6 +40,13 @@ MUST pull from `medieval-rts` and keep this language; new pickups reuse the `orb
       (zone, via public `armorDamageFactor` getter). Stacks MULTIPLICATIVELY with the shield's zone-halving
       (0.5 × 0.6 = 0.3) — two distinct defensive layers, no double-dip. Steel blue-grey orb; spawn split now even
       4-way speed/shield/damage/armor. Shipped 4f10237.
+- [x] **Combat juice: king-kill cinematic** — der größte Beat der Runde (ein rivalisierender König fällt) war
+      visuell mau (kleiner roter Puff + Mini-Shake). Jetzt ein geschichteter „Königstöter"-Finisher: Gold-
+      Schockwellen-Ring + Gold-Stern-Flash + helle Gold-Explosion + kurzer screen-fixer Gold-Flash + EIN
+      phasen-skalierter Shake. Rein additive FX (kein Balance/AI/HP/Schaden berührt), nutzt geladene Texturen
+      (powerup/sparkle) + DEPTH + Tweens (LOCKED-Stil). `FEEDBACK.kingKill`-Block hält alle Tunables; Shake
+      skaliert mit `battlePhase()` (früh ruhig, Finale episch — respektiert shake-free-early), Flash stärker
+      bei `nearPlayer`; nur on-screen, alles selbst-zerstörend (kein Leak). Shipped a8875a0.
 
 ### P2 — valuable, may need a small split
 - [x] **New building type: Barracks (Kaserne)** — zerstörbares Gebäude, das SOLANGE ES LEBT alle 9 s eine
@@ -56,6 +63,11 @@ MUST pull from `medieval-rts` and keep this language; new pickups reuse the `orb
       meleeDamage) + +5% Größe (gedeckelt +30%). Symmetrisch Spieler+KI (kein Snowball). HUD: "Stufe N" +
       Gold-XP-Balken, "MAX" am Deckel. Shipped 8f69a57 + Balance-Trim 61046b6.
 - [ ] **Power-up variety pass** — vision reveal. *(lifesteal + regen + steady/knockback-resist shipped, see changelog.)*
+- [ ] **More combat juice (follow-ups to king-kill cinematic)** — leicht zu schichten, gleiches additive-FX-Muster:
+      (a) **Level-up-Shockwave** für den König (kingProgression-Stufe ↑) — eigener farb-/größenkleinerer Ring,
+      damit auch das Mit-Wachsen knallt; (b) **Champion-Beschwörung** könnte denselben Ring bekommen
+      (derzeit nur sparkleBurst); (c) **Sieg-/Niederlage-Finale-Moment**: ein epischer Slow-mo + Gold-/Rot-
+      Vollbild beim allerletzten Königstod (Endgame-Punktuation), bevor der Game-Over-Fade greift.
 
 ### P3 — epics (split before taking; some need a NEEDS DECISION)
 - [ ] **New game mode** beyond battle royale (Horde Defense vs. waves / King-of-the-Hill). → see NEEDS DECISION.
@@ -72,6 +84,27 @@ MUST pull from `medieval-rts` and keep this language; new pickups reuse the `orb
 
 ## Changelog (append-only, newest first)
 <!-- Director appends: `- YYYY-MM-DD — feat: <slice> — verified <how> — <commit>` -->
+- 2026-06-26 — feat: KÖNIG-TÖTER-CINEMATIC (Combat-Juice für den größten Beat der Runde). Mandat „mach das Spiel
+  geiler" → der spannendste Moment (ein rivalisierender König fällt) war visuell unterwältigend: nur ein kleiner
+  roter Partikel-Puff + ein 160ms-Mini-Shake (der 60ms-Hit-Stop + Kill-Feed waren schon da). Jetzt ein
+  geschichteter „Königstöter"-Finisher, rein ADDITIVE FX (kein Balance/AI/HP/Schaden angefasst, LOCKED-Stil
+  gewahrt: nur geladene Texturen powerup/sparkle, DEPTH-Konstanten, Engine-Tweens): (a) expandierender Gold-
+  Schockwellen-Ring (powerup, ADD-Blend, 40→360px, alpha 0.9→0), (b) Gold-Stern-Flash (sparkle, 10→150px,
+  rotierend, ausblendend), (c) helle Gold-Partikel-Explosion (34 Partikel, größer/schneller als der rote
+  Standard-Kern, der in removeDeadUnits bleibt → roter Kern + Gold-Schale), (d) kurzer screen-fixer Gold-Flash
+  (eigenes ADD-Rechteck, NICHT die rote Schaden-Vignette gekapert; stärker bei nearPlayer), (e) EIN einzelner
+  Shake statt Doppel-Shake. ARCHITEKTUR: onKingKilled bekam x/y/nearPlayer durchgereicht (removeDeadUnits
+  berechnet nearPlayer = König-Tod < 600px vom Spielerkönig); neue Methode kingKillCinematic(x,y,nearPlayer)
+  feuert nur on-screen (isOnScreen), offscreen-Tode behalten billig Hit-Stop+Kill-Feed. Shake-Intensität =
+  shakeBase + shakeEpicBonus*battlePhase() → früh dezent, finales Duell episch (respektiert die shake-free-
+  early-Entscheidung). Alle transienten Objekte zerstören sich in onComplete (kein Leak). Neuer
+  FEEDBACK.kingKill-Config-Block (alle Tunables); das nun tote FEEDBACK.kingDeathShake entfernt (einzige
+  Nutzung war der gelöschte removeDeadUnits-Shake, repo-weiter grep = 0 Treffer). — verified typecheck + 58
+  vitest + lint(0) + build grün; LIVE Playwright+__horde (System-Chrome, scene „Game"): erzwungener Königstod
+  neben dem Spieler → Gold-Burst+Schockwelle+Shake klar sichtbar als Explosion, Kill-Feed „ELFEN-KÖNIG GEFALLEN
+  — 10 ÜBRIG", König-Zähler 10→9, FX nach ~1s sauber abgeräumt (kein Leak), voller Runden-Loop bis „SIEG!"
+  intakt (auch der Multi-Cinematic-Burst beim Killen aller Könige bricht den Game-Over-Flow nicht), 126–165 FPS,
+  0 Konsolenfehler — a8875a0.
 - 2026-06-26 — feat: KASERNE (Barracks) — neuer Gebäudetyp als Rekruten-Fontäne/Karten-Objektiv. Die Horde ist
   jetzt dicht und der König levelt aus Seelen → es fehlte ein Grund, sich aktiv zu bewegen. Die Kaserne stößt
   solange sie lebt alle 9 s (BARRACKS.spawnInterval) eine grüne Rekruten-Seele in spawnRadius 90 aus (fließt
