@@ -125,6 +125,12 @@ export class GameScene extends Phaser.Scene {
   private safeMaskGfx!: Phaser.GameObjects.Graphics;
   private ground!: Phaser.GameObjects.TileSprite;
 
+  // Animierter Farbgrad-Post-FX (Tag/Nacht-Stimmung + Sättigung), scene-weit über die Kamera.
+  // Boden, Props UND Einheiten dimmen GEMEINSAM – kein "dunkles Gras, helle Bäume"-Problem wie
+  // beim alten reinen Boden-Tint. Das DOM-HUD liegt außerhalb der Phaser-Kamera, bleibt also
+  // immer voll lesbar. undefined im Canvas-Fallback (kein WebGL) -> updateTime tönt dann den Boden.
+  private dayNightFx?: Phaser.FX.ColorMatrix;
+
   // Schaden-Feedback: roter Vignette-Flash (Treffer + Gefahrenzone) und Schadenszahl-Deckel.
   private vignette!: Phaser.GameObjects.Image;
   private hitVignette = 0;
@@ -189,9 +195,10 @@ export class GameScene extends Phaser.Scene {
     //   3) Vignette: dunkelt die Bildränder ab → Tiefe + Fokus auf den König in der Mitte.
     const cam = this.cameras.main;
     if (cam.postFX) {
-      const grade = cam.postFX.addColorMatrix();
-      grade.saturate(0.16);
-      grade.brightness(1.03, true);
+      // Farbgrad zuerst (Sättigung + Tag/Nacht-Helligkeit, pro Frame in updateTime getrieben),
+      // dann Bloom (greift die gegradeten Glanzlichter auf), Vignette zuletzt (rahmt alles ab).
+      this.dayNightFx = cam.postFX.addColorMatrix();
+      this.applyDayNight();
       cam.postFX.addBloom(0xffffff, 1, 1, 1, 0.55, 4);
       cam.postFX.addVignette(0.5, 0.5, 0.82, 0.4);
     }
@@ -644,14 +651,32 @@ export class GameScene extends Phaser.Scene {
 
   private updateTime(dt: number): void {
     this.timeOfDay = (this.timeOfDay + dt / 60000) % 1;
-    // Sanftes "Atmen" des Bodens als lebendige Tageslicht-Ambiente. Bewusst SUBTIL
-    // (0.85–1.0 statt früher 0.5–1.0): der Tint greift nur am Gras-Boden, nicht an
-    // Props/Gebäuden/Einheiten – ein starker Hub würde das Gras sichtbar von der hellen
-    // Deko entkoppeln ("dunkles Gras, helle Bäume"). timeOfDay startet bei 0.5, damit
-    // jede Partie auf vollem Tageslicht beginnt (heller erster Eindruck).
-    const brightness = 0.85 + 0.15 * Math.abs(Math.sin(this.timeOfDay * Math.PI));
-    const v = Math.round(255 * brightness);
-    this.ground.setTint(Phaser.Display.Color.GetColor(v, v, v));
+    // Tag/Nacht-"Atmen" jetzt scene-weit über den Post-FX-Farbgrad (applyDayNight) statt nur
+    // am Boden – so dimmen Gras, Props und Einheiten GEMEINSAM, ohne sie zu entkoppeln. Im
+    // Canvas-Fallback (kein WebGL, kein dayNightFx) bleibt der bewährte reine Boden-Tint.
+    if (this.dayNightFx) {
+      this.applyDayNight();
+    } else {
+      const v = Math.round(255 * (0.85 + 0.15 * this.noonFactor()));
+      this.ground.setTint(Phaser.Display.Color.GetColor(v, v, v));
+    }
+  }
+
+  // 0 = Nacht (Kurven-Tief), 1 = Mittag (hellster Punkt). timeOfDay startet bei 0.5 -> sin=1,
+  // jede Partie beginnt also auf vollem Tageslicht (heller erster Eindruck).
+  private noonFactor(): number {
+    return Math.abs(Math.sin(this.timeOfDay * Math.PI));
+  }
+
+  // Treibt den scene-weiten Farbgrad aus der Tageszeit: mittags voll hell + lebendig gesättigt,
+  // zur "Dämmerung" sanft abgedunkelt + leicht entsättigt (kühlere, ruhigere Stimmung). Bewusst
+  // gedeckelt (0.9–1.0 Helligkeit), damit das Feld im Battle-Royale jederzeit klar lesbar bleibt.
+  private applyDayNight(): void {
+    const fx = this.dayNightFx;
+    if (!fx) return;
+    const noon = this.noonFactor();
+    fx.brightness(0.9 + 0.1 * noon); // überschreibt die Matrix mit der Basis-Helligkeit ...
+    fx.saturate(0.05 + 0.15 * noon, true); // ... und multipliziert die Sättigung darauf.
   }
 
   private updateFormations(dt: number): void {

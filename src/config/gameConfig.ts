@@ -391,12 +391,16 @@ export const FACTION_STATS: Record<Faction, { hp: number; speed: number; damage:
 // Counts sind bewusst hoch, aber alles statisch (kein Per-Frame-Update) und unter den
 // ~487 Gebäuden/121 Einheiten, die die Engine schon mühelos rendert.
 export const DECOR = {
-  props: 1100, // gestreute Einzel-Props über die offene Welt (~14 im Sichtfeld)
-  patches: 90, // Boden-Variations-Flecken ("Lichtungen/Felder")
+  props: 2000, // gestreute Einzel-Props über die offene Welt (~25 im Sichtfeld) – dichter
+  // gestreut als zuvor (1100), damit das offene Feld lebendig statt leer wirkt. Props sind
+  // kollisionsfrei und batchen pro Textur, die höhere Zahl ist also optisch dicht, aber billig.
+  patches: 160, // Boden-Variations-Flecken ("Lichtungen/Felder") – mehr Tupfer brechen die
+  // monotone Gras-Kachelung spürbar stärker auf.
   minScale: 0.8, // zufällige Größenvariation pro Prop (unten) ...
   maxScale: 1.25, // ... für ein natürlich-unregelmäßiges Streubild
-  patchAlpha: 0.55, // Deckkraft der Boden-Flecken: bewusst niedrig, damit die harte
-  // Rechteck-Kante in der Gras-Fläche aufweicht und der Fleck als abgenutzter Boden wirkt
+  patchAlpha: 0.6, // Deckkraft der Boden-Flecken: etwas präsenter als zuvor (0.55), damit die
+  // Variation deutlicher liest – immer noch niedrig genug, dass die harte Rechteck-Kante
+  // in der Gras-Fläche aufweicht und der Fleck als abgenutzter Boden wirkt
   patchMinSize: 200, // Kantenlänge der kleinsten Boden-Fläche (px)
   patchMaxSize: 460, // Kantenlänge der grössten Boden-Fläche (px) – kleiner = weniger Billboard-Wirkung
 } as const;
