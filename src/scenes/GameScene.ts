@@ -86,7 +86,7 @@ export class GameScene extends Phaser.Scene {
   audio!: SoundManager;
 
   gameTime = 0;
-  private timeOfDay = 0;
+  private timeOfDay = 0.5;
   private gameOver = false;
   private recentCombatEvents = 0;
   private combatDecayTimer = 0;
@@ -150,7 +150,7 @@ export class GameScene extends Phaser.Scene {
     this.playerKing = null;
     this.particles = [];
     this.gameTime = 0;
-    this.timeOfDay = 0;
+    this.timeOfDay = 0.5; // bei 0.5 ist die Tageslicht-Kurve am hellsten -> Partie startet hell
     this.gameOver = false;
     this.recentCombatEvents = 0;
     this.combatDecayTimer = 0;
@@ -516,7 +516,12 @@ export class GameScene extends Phaser.Scene {
 
   private updateTime(dt: number): void {
     this.timeOfDay = (this.timeOfDay + dt / 60000) % 1;
-    const brightness = 0.5 + 0.5 * Math.abs(Math.sin(this.timeOfDay * Math.PI));
+    // Sanftes "Atmen" des Bodens als lebendige Tageslicht-Ambiente. Bewusst SUBTIL
+    // (0.85–1.0 statt früher 0.5–1.0): der Tint greift nur am Gras-Boden, nicht an
+    // Props/Gebäuden/Einheiten – ein starker Hub würde das Gras sichtbar von der hellen
+    // Deko entkoppeln ("dunkles Gras, helle Bäume"). timeOfDay startet bei 0.5, damit
+    // jede Partie auf vollem Tageslicht beginnt (heller erster Eindruck).
+    const brightness = 0.85 + 0.15 * Math.abs(Math.sin(this.timeOfDay * Math.PI));
     const v = Math.round(255 * brightness);
     this.ground.setTint(Phaser.Display.Color.GetColor(v, v, v));
   }
