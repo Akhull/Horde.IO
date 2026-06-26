@@ -61,6 +61,28 @@ MUST pull from `medieval-rts` and keep this language; new pickups reuse the `orb
 
 ## Changelog (append-only, newest first)
 <!-- Director appends: `- YYYY-MM-DD — feat: <slice> — verified <how> — <commit>` -->
+- 2026-06-26 — feat: DICHTE HORDE-FORMATION (Kern-Fun-Fix aus dem Live-QA). Befund per
+  Playwright-Pass: die Armee des Spieler-Königs las sich als dünner, verstreuter Halo in einer
+  lockeren Diagonale statt als die dichte, wachsende Masse, die ein .io-Horde-Spiel trägt.
+  Ursache: recalcFormationOffset (systems/AI.ts) platzierte Vasallen auf einem RING bei
+  100..(100+n*5)px um den König (hohle Mitte). Fix: minDistanceFromKing 100→50,
+  minDistanceBetween 60→40, formationRadius 100+n*5 → 60+n*3 → kompakter Klumpen ums Zentrum
+  (mittlere Vasallen-Distanz zum König bei ~10 Vasallen von ~130 Ring auf ~73px gesunken).
+  40px Vasallen-Abstand bleibt klar über dem Separations-Floor 30px (collision.ts) → dicht,
+  aber kein gegenseitiges Wegdrücken/Zittern. — verified typecheck + 41 vitest + lint(0 err) +
+  vite build grün; LIVE Playwright+__horde (Chrome): Schwarm ballt sich sichtbar um den
+  dominanten König, 165 FPS, 0 Konsolenfehler — 526d456.
+- 2026-06-26 — polish: shake-free early game. earlyKings 6→3 (gesamte Partie bis zum finalen
+  Duell = Phase 0) + baselineShakePx 1.4→0 (Phase 0 komplett ruhig, tötet das frühere
+  Dauer-Vibrieren) + epicShakePx 4.5→3.5 ("leicht shaken" fürs Finale). Neuer Regressionstest
+  sichert baselineShakePx===0 in der Auslieferung (cameraFeel.test 19→20 Tests). In-Flight-
+  Arbeit der Vorsession sauber abgeschlossen & committet. — verified typecheck + 41 vitest +
+  lint + build grün — 47dfff9.
+- 2026-06-26 — chore: ECS-vs-OOP-Benchmark-Tooling (tools/bench/) als Beleg committet —
+  deterministischer Microbenchmark bestätigt die Projektentscheidung (Miniplex-Migration lohnt
+  NICHT, nur ~1.06–1.21x, broad-phase dominiert). Dazu eslint.config.js um eine tools/**-Sektion
+  (Node-Globals, relaxte unused-vars) erweitert → `npm run lint` ist erstmals über das GANZE
+  Repo grün (zuvor warfen bench + build-asset-catalog.mjs no-undef/no-unused-vars). — a51f40d.
 - 2026-06-26 — polish: brighter, consistent daylight. updateTime tönte NUR den Gras-Boden und
   pulste 0.5–1.0 ab timeOfDay=0 (dunkelster Frame) → jede Partie startete auf dunklem Gras, und
   mit der neuen hellen Deko darauf las sich das Gras-only-Dimmen als "dunkles Gras / helle Bäume"-
