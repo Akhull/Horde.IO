@@ -1,7 +1,7 @@
 import { Unit } from "../entities/Unit";
 import { Soul } from "../entities/Soul";
 import { spawnVassal, spawnChampion } from "./worldgen";
-import { FEEDBACK, LEGENDARY, KING_PROGRESSION } from "../config/gameConfig";
+import { LEGENDARY, KING_PROGRESSION } from "../config/gameConfig";
 import type { SoulType } from "../types";
 import type { GameScene } from "../scenes/GameScene";
 
@@ -32,22 +32,28 @@ export function removeDeadUnits(scene: GameScene): void {
     const u = scene.units[i];
     if (u.hp <= 0) {
       if (u === scene.playerKing) continue;
-      // Todes-Effekt: Partikel-Ausbruch; bei Königen zusätzlich Kamera-Shake (wenn sichtbar).
+      // Todes-Effekt: roter Partikel-Kern für JEDE Einheit. Der König-Shake liegt NICHT mehr hier,
+      // sondern besitzt jetzt komplett der Königstöter-Finisher (onKingKilled -> kingKillCinematic),
+      // damit es keine zwei überlappenden Shakes gibt. Der rote Kern bleibt – er bildet zusammen
+      // mit der Gold-Schale des Finishers einen geschichteten Explosions-Look.
       const count = u.unitType === "king" ? 26 : u.unitType === "champion" ? 18 : u.unitType === "archer" ? 8 : 12;
       scene.spawnVisualEffect(u.centerX, u.centerY, { r: 150, g: 20, b: 20 }, count, 360, 3, 1.4);
-      if (u.unitType === "king" && scene.isOnScreen(u.centerX, u.centerY)) {
-        scene.screenShake(160, FEEDBACK.kingDeathShake);
-      }
       spawnSoulFromUnit(scene, u);
       scene.grid.removeEntity(u);
       u.dead = true;
       u.destroyView();
       scene.units.splice(i, 1);
-      // König gefallen: GameScene informieren (Hit-Stop + Kill-Feed). Vasallen-Tode
+      // König gefallen: GameScene informieren (Hit-Stop + Kill-Feed + Finisher-FX). Vasallen-Tode
       // werden bewusst NICHT gemeldet, um Kill-Feed/Wucht nicht zu überfluten.
       if (u.unitType === "king") {
         const kingsLeft = scene.units.filter((k) => k.unitType === "king").length;
-        scene.onKingKilled(u.faction, kingsLeft);
+        // nearPlayer = der Königstod geschah nahe (<600px) am eigenen König -> der Spieler war
+        // ins Geschehen verwickelt und soll einen stärkeren Screen-Flash sehen. Der echte Killer
+        // ist aus removeDeadUnits nicht zuverlässig bestimmbar (Tod aus vielen Quellen), daher
+        // dient die Nähe als billiger, treffsicherer "Wow-für-den-Spieler"-Indikator.
+        const pk = scene.playerKing;
+        const nearPlayer = pk != null && Math.hypot(u.centerX - pk.centerX, u.centerY - pk.centerY) < 600;
+        scene.onKingKilled(u.faction, kingsLeft, u.centerX, u.centerY, nearPlayer);
       }
     }
   }

@@ -175,10 +175,29 @@ export const FEEDBACK = {
   kingKnockbackFactor: 0.25, // Könige werden weniger zurückgestoßen (schwerer)
   shakeOnPlayerHit: 0.006, // Kamera-Shake-Intensität, wenn der Spielerkönig getroffen wird
   shakeDuration: 110, // ms
-  kingDeathShake: 0.006, // Shake bei sichtbarem Königstod
   damageNumbers: true, // Schadenszahlen für sichtbare Treffer anzeigen
   maxDamageNumbers: 16, // gleichzeitig aktive Schadenszahlen (Performance-Deckel)
   vignettePeak: 0.55, // Spitzen-Alpha des roten Schaden-Vignette-Flashs
+  // Königstöter-Finisher: das Eliminieren eines rivalisierenden Königs ist der GRÖSSTE Moment
+  // einer Runde – diese rein additive FX (Schockwelle + Gold-Funke + Explosion + Screen-Flash +
+  // Shake) macht ihn cineastisch. Skaliert mit der Match-Phase (battlePhase=0 früh/ruhig ->
+  // battlePhase=1 finales Duell/episch), damit frühe Tode dezent bleiben und das Endduell knallt.
+  // nearPlayer (Tod nahe am Spielerkönig) verstärkt zusätzlich den Screen-Flash, weil der Spieler
+  // dann selbst am Geschehen beteiligt war. Ändert KEINE Gameplay-/Balance-Werte.
+  kingKill: {
+    ringColor: 0xffe08a, // warmes Gold der Schockwelle
+    ringMaxSize: 360, // px Durchmesser, auf den die Schockwelle aufreißt
+    ringDuration: 460, // ms
+    starSize: 150, // px, auf den der Gold-Funke hochskaliert
+    starDuration: 420, // ms
+    particleCount: 34, // Partikel der Gold-Explosion
+    flashColor: 0xffe6a0, // Gold-Screen-Flash
+    flashAlpha: 0.32, // Spitzen-Alpha (×0.45 wenn nicht nah am Spieler)
+    flashDuration: 200, // ms
+    shakeDuration: 220, // ms
+    shakeBase: 0.004, // Grund-Shake (subtil, auch mid-game)
+    shakeEpicBonus: 0.012, // +bis hierhin im finalen Duell (battlePhase=1)
+  },
 } as const;
 
 // Kamera-Follow: die Kamera ZIEHT dem König geglättet NACH (lerp), statt pro Frame hart auf

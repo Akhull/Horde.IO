@@ -292,12 +292,79 @@ export class GameScene extends Phaser.Scene {
   }
 
   // Wird von gameplay.removeDeadUnits beim Tod eines KÖNIGS gerufen (nicht für Vasallen).
-  // Löst den Hit-Stop ("Wucht"-Freeze) aus und gibt das Kill-Feed-Event an das HUD weiter.
-  // Kommunikationsweg HUD <- Game: Phaser-Scene-Event "kingKilled" auf dieser Szene.
-  onKingKilled(faction: Faction, kingsLeft: number): void {
+  // Löst den Hit-Stop ("Wucht"-Freeze) aus, gibt das Kill-Feed-Event ans HUD weiter und zündet
+  // den cineastischen Königstöter-Finisher am Todesort. Kommunikationsweg HUD <- Game: Phaser-
+  // Scene-Event "kingKilled" auf dieser Szene.
+  // x/y = Zentrum des gefallenen Königs; nearPlayer = Tod nahe am Spielerkönig (verstärkt den Flash).
+  onKingKilled(faction: Faction, kingsLeft: number, x: number, y: number, nearPlayer: boolean): void {
     // Sehr kurzer Zeit-Freeze (60ms) – subtil, schadet der Logik nicht (Loop returnt früh).
     this.hitStopTimer = HIT_STOP_MS;
     bus.emit("kingKilled", { faction, kingsLeft });
+    // Hit-Stop + Kill-Feed passieren IMMER (auch offscreen); die schweren FX nur wenn sichtbar.
+    this.kingKillCinematic(x, y, nearPlayer);
+  }
+
+  // Königstöter-Finisher: rein additive "Wow"-FX am Todesort eines rivalisierenden Königs –
+  // der größte Beat der Runde. Geschichtet: Schockwellen-Ring + Gold-Funke + Gold-Explosion +
+  // Gold-Screen-Flash + ein einzelner Shake (skaliert mit der Match-Phase). Nur on-screen, sonst
+  // billig übersprungen (Offscreen-Tode behalten Hit-Stop + Kill-Feed, brauchen aber keine Optik).
+  kingKillCinematic(x: number, y: number, nearPlayer: boolean): void {
+    if (!this.isOnScreen(x, y)) return;
+    const cfg = FEEDBACK.kingKill;
+
+    // a) Schockwellen-Ring: expandierende Gold-Konkussion (powerup-Textur, ADD-Blend).
+    const ring = this.add.image(x, y, "powerup");
+    ring.setBlendMode(Phaser.BlendModes.ADD).setTint(cfg.ringColor).setDepth(DEPTH.fx);
+    ring.setDisplaySize(40, 40).setAlpha(0.9);
+    this.tweens.add({
+      targets: ring,
+      displayWidth: cfg.ringMaxSize,
+      displayHeight: cfg.ringMaxSize,
+      alpha: 0,
+      duration: cfg.ringDuration,
+      ease: "Cubic.easeOut",
+      onComplete: () => ring.destroy(),
+    });
+
+    // b) Gold-weißer Stern-Flash (sparkle-Textur, ADD-Blend) – heller Kern-Funke (vgl. sparkleBurst).
+    const star = this.add.image(x, y, "sparkle");
+    star.setBlendMode(Phaser.BlendModes.ADD).setTint(cfg.ringColor).setDepth(DEPTH.fx);
+    star.setDisplaySize(10, 10).setAlpha(1);
+    this.tweens.add({
+      targets: star,
+      displayWidth: cfg.starSize,
+      displayHeight: cfg.starSize,
+      angle: 35,
+      alpha: 0,
+      duration: cfg.starDuration,
+      ease: "Cubic.easeOut",
+      onComplete: () => star.destroy(),
+    });
+
+    // c) Große Gold-Explosion – heller/größer/schneller als der rote Standard-Kern aus
+    // removeDeadUnits, damit der Königstod klar als Explosion liest (rote Kern-Schicht bleibt dort).
+    this.spawnVisualEffect(x, y, { r: 255, g: 230, b: 150 }, cfg.particleCount, 520, 4, 2.2);
+
+    // d) Voll-Screen-Gold-Flash (eigenes screen-fixes Rechteck, ADD-Blend) – NICHT die rote
+    // Schaden-Vignette kapern. Stärker, wenn der Tod nahe am Spieler war.
+    const flash = this.add
+      .rectangle(0, 0, this.scale.width, this.scale.height, cfg.flashColor)
+      .setOrigin(0, 0)
+      .setScrollFactor(0)
+      .setDepth(DEPTH.floatingText + 5)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setAlpha(cfg.flashAlpha * (nearPlayer ? 1 : 0.45));
+    this.tweens.add({
+      targets: flash,
+      alpha: 0,
+      duration: cfg.flashDuration,
+      onComplete: () => flash.destroy(),
+    });
+
+    // e) Ein einzelner Shake, dessen Intensität mit der Match-Phase wächst: früh dezent, im
+    // finalen Duell episch – respektiert die "früh shake-frei"-Entscheidung (kleine Basis).
+    const intensity = cfg.shakeBase + cfg.shakeEpicBonus * this.battlePhase();
+    this.screenShake(cfg.shakeDuration, intensity);
   }
 
   spawnProjectile(x: number, y: number, target: ProjectileTarget, damage: number, team: number, attacker?: ProjectileAttacker): void {
