@@ -232,6 +232,15 @@ M7  Steam-Release-Vorbereitung
 
 ## 9. Fortschritts-Log (mp/main, neueste zuerst)
 
+- **2026-06-26 — S4-P0 ✅ Pixi-Iso-Spike: GO.** Standalone PixiJS-v8-Demo (`iso-spike.html` +
+  `tools/iso-spike/main.ts`): 45°-Iso-Terrain (fBm-Heightmap, Wasser→Schnee + Klippen) + 4000
+  tiefensortierte Units, **~196 FPS** (noch ohne ParticleContainer → Headroom für 8000). Erstes
+  echtes Sichtbares der Maxed-Out-Richtung. Verdikt: `docs/PIXI-SPIKE-RESULTS.md`. Spiel-Build
+  unberührt. Aufruf: http://localhost:5173/iso-spike.html
+- **2026-06-26 — S1-P3 ✅ restliche Sim-`Math.random` geseedet.** collision/combat/gameplay, Unit
+  (AI/idle/soulGreed), Building-Timer, Projektil-Streuung, AI-Formation, GameScene Player/Faktion —
+  alle über `scene.rng`; FX/Footsteps/decor bleiben lokal. Plus sichtbares Seed-Feature (`?seed=N`
+  + `SEED`-Anzeige im Overlay). Gates grün.
 - **2026-06-26 — S1-P2 (Teil 2) ✅ worldgen deterministisch.** Alle `Math.random`-Stellen in
   `src/systems/worldgen.ts` (Obstacles/Building-Cluster/Power-Ups/Vasall/Champion) durch
   `scene.rng` ersetzt → Welt-Layout reproduzierbar aus dem Seed. Bewusst minimal (kein
