@@ -232,6 +232,12 @@ M7  Steam-Release-Vorbereitung
 
 ## 9. Fortschritts-Log (mp/main, neueste zuerst)
 
+- **2026-06-26 — S1-P2 (Teil 2) ✅ worldgen deterministisch.** Alle `Math.random`-Stellen in
+  `src/systems/worldgen.ts` (Obstacles/Building-Cluster/Power-Ups/Vasall/Champion) durch
+  `scene.rng` ersetzt → Welt-Layout reproduzierbar aus dem Seed. Bewusst minimal (kein
+  Planner-Refactor/Phaser-Stub), da S8-Heightmap den Generator ohnehin ersetzt — der Seed-Seam
+  (`scene.rng`) bleibt und wird von S8 weitergenutzt; volle Test-Abdeckung kommt mit dem
+  rein/testbar designten S8. Gates grün: typecheck + 65 vitest + build.
 - **2026-06-26 — Richtung: Maxed-Out (Art/Welt/Perspektive/Combat) entschieden.** `docs/MAXED-DIRECTION.md`.
   4 Festlegungen: **Iso/Dimetric 2.5D** (reine Client-Projektion des Cartesian-Sims) · **Vektor/Skeletal→Offline-Bake→Pixel-Atlanten** (Horde gebacken, Kings Runtime-Skeletal; Kenney-Lock nur für SP-`main`) · **deterministische Heightmap-Worldgen** (autoritative Terrain-Daten) · **datengetriebenes `ABILITY_DEFS`-System** (geteilt + fraktionsspezifisch, nur über Seams). Neuer Strom **S8 Worldgen**; S4/S5/S6 erweitert. Verortung M5/M6 — blockiert das laufende S1-Fundament nicht.
 - **2026-06-26 — S1-P2 (Teil 1) ✅ SafeZone deterministisch.** `SafeZone` bekommt einen

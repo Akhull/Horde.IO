@@ -9,16 +9,16 @@ import type { GameScene } from "../scenes/GameScene";
 
 // Erzeugt einen Vasallen oder Bogenschützen nahe dem Anführer (20% Bogenschütze).
 export function spawnVassal(scene: GameScene, leader: Unit): Unit {
-  const x = leader.x + (Math.random() - 0.5) * 50;
-  const y = leader.y + (Math.random() - 0.5) * 50;
-  const type = Math.random() < 0.2 ? "archer" : "vassal";
+  const x = leader.x + (scene.rng.next() - 0.5) * 50;
+  const y = leader.y + (scene.rng.next() - 0.5) * 50;
+  const type = scene.rng.next() < 0.2 ? "archer" : "vassal";
   return new Unit(scene, x, y, leader.faction, type, 1, leader);
 }
 
 // Beschwört einen Champion (legendäre Spezialeinheit) nahe dem König – aus einem Gold-Orb.
 export function spawnChampion(scene: GameScene, king: Unit): Unit {
-  const x = king.x + (Math.random() - 0.5) * 60;
-  const y = king.y + (Math.random() - 0.5) * 60;
+  const x = king.x + (scene.rng.next() - 0.5) * 60;
+  const y = king.y + (scene.rng.next() - 0.5) * 60;
   return new Unit(scene, x, y, king.faction, "champion", 1, king);
 }
 
@@ -32,11 +32,11 @@ function isAreaClear(x: number, y: number, w: number, h: number, obstacles: { x:
 // 20 Hindernisse: 70% Wald, sonst Wasser.
 export function generateObstacles(scene: GameScene): void {
   for (let i = 0; i < 20; i++) {
-    const w = 200 + Math.random() * 600;
-    const h = 200 + Math.random() * 600;
-    const x = Math.random() * (CONFIG.worldWidth - w);
-    const y = Math.random() * (CONFIG.worldHeight - h);
-    const obs = Math.random() < 0.7 ? new Forest(scene, x, y, w, h) : new Obstacle(scene, x, y, w, h);
+    const w = 200 + scene.rng.next() * 600;
+    const h = 200 + scene.rng.next() * 600;
+    const x = scene.rng.next() * (CONFIG.worldWidth - w);
+    const y = scene.rng.next() * (CONFIG.worldHeight - h);
+    const obs = scene.rng.next() < 0.7 ? new Forest(scene, x, y, w, h) : new Obstacle(scene, x, y, w, h);
     scene.obstacles.push(obs);
     scene.grid.addEntity(obs);
   }
@@ -45,10 +45,10 @@ export function generateObstacles(scene: GameScene): void {
 // 80 Gebäudecluster mit je 10–20 Gebäuden.
 export function generateBuildingClusters(scene: GameScene): void {
   for (let i = 0; i < 80; i++) {
-    const centerX = Math.random() * (CONFIG.worldWidth - 800) + 400;
-    const centerY = Math.random() * (CONFIG.worldHeight - 800) + 400;
+    const centerX = scene.rng.next() * (CONFIG.worldWidth - 800) + 400;
+    const centerY = scene.rng.next() * (CONFIG.worldHeight - 800) + 400;
     if (!isAreaClear(centerX - 50, centerY - 50, 100, 100, scene.obstacles)) continue;
-    const numBuildings = Math.floor(Math.random() * 11) + 10;
+    const numBuildings = Math.floor(scene.rng.next() * 11) + 10;
     const cluster: Building[] = [];
     for (let j = 0; j < numBuildings; j++) {
       let valid = false;
@@ -56,8 +56,8 @@ export function generateBuildingClusters(scene: GameScene): void {
       let x = 0;
       let y = 0;
       while (!valid && attempt < 10) {
-        const angle = Math.random() * Math.PI * 2;
-        const radius = Math.random() * 150;
+        const angle = scene.rng.next() * Math.PI * 2;
+        const radius = scene.rng.next() * 150;
         x = centerX + Math.cos(angle) * radius;
         y = centerY + Math.sin(angle) * radius;
         valid = true;
@@ -71,7 +71,7 @@ export function generateBuildingClusters(scene: GameScene): void {
         attempt++;
       }
       if (valid) {
-        const r = Math.random();
+        const r = scene.rng.next();
         // "barracks" ist bewusst SELTEN (~8%): es ist der starke Rekruten-Brunnen-Objektiv,
         // ein Dauer-Magnet für die Horden – häufig wäre er ein Selbstläufer statt Streitpunkt.
         const type: BuildingType = r < 0.45 ? "barn" : r < 0.72 ? "house" : r < 0.92 ? "tower" : "barracks";
@@ -87,11 +87,11 @@ export function generateBuildingClusters(scene: GameScene): void {
 // Verstreut Power-Ups über die Welt (im Original war nur die Aufsammel-Logik vorhanden).
 export function generatePowerUps(scene: GameScene): void {
   for (let i = 0; i < 25; i++) {
-    const x = Math.random() * CONFIG.worldWidth;
-    const y = Math.random() * CONFIG.worldHeight;
+    const x = scene.rng.next() * CONFIG.worldWidth;
+    const y = scene.rng.next() * CONFIG.worldHeight;
     // Sieben gleich wahrscheinliche Power-Up-Typen: Tempo, Schild, Schaden, Rüstung,
     // Lifesteal, Regen, Steady (je ~1/7 -> Schwellen in 1/7-Schritten).
-    const r = Math.random();
+    const r = scene.rng.next();
     const type: PowerUpType =
       r < 1 / 7
         ? "speed"
