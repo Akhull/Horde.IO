@@ -20,10 +20,14 @@ export interface TargetInfo {
 // Verteilt Einheiten in einer lockeren Formation um ihren Anführer.
 // Port von recalcFormationOffset (utils.js).
 export function recalcFormationOffset(unit: Unit, units: Unit[], leader: Unit): Vec2 {
-  const minDistanceFromKing = 100;
-  const minDistanceBetween = 60;
+  // Dichter Schwarm-Feel: Vasallen sollen sich als kompakte Masse um den König
+  // ballen, nicht als dünner Halo. Werte bewusst niedrig gehalten, aber der
+  // Abstand bleibt klar über dem Separations-Sollwert von 30px (collision.ts),
+  // damit die Einheiten sich nicht gegenseitig wegdrücken und zittern.
+  const minDistanceFromKing = 50; // König-Hitbox ~26 + Vasall-Hitbox ~13 = ~39 Min., +Luft
+  const minDistanceBetween = 40; // > 30 Separations-Floor -> dicht, aber stabil
   const alliedUnits = units.filter((u) => u.leader === leader && u.unitType !== "king");
-  const formationRadius = 100 + alliedUnits.length * 5;
+  const formationRadius = 60 + alliedUnits.length * 3; // sanftes Wachstum -> bleibt ein Klumpen
   const minRadius = Math.max(30, minDistanceFromKing);
 
   let candidate: Vec2;
