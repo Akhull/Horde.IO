@@ -50,6 +50,15 @@ export const UNIT_STATS = {
   champion: { hp: 200, speed: 1.35 * 0.95 * 1.88, size: 40 * 1.5, damage: 35 },
 } as const;
 
+// Power-Up-Stärken zentral, statt als Literale in Unit/PowerUp verstreut.
+// Spiegelt bewusst den Tempo-Boost (x1.5 / 6 s, siehe PowerUp-Default-Dauer):
+// ein gleich starker, gleich langer OFFENSIV-Boost als Gegenstück zum Tempo.
+// damageMultiplier wirkt OBEN AUF den Fraktions-Schadensmodifikator (meleeDamage)
+// und auf den Pfeilschaden – kurzzeitig deutlich härtere Schläge.
+export const POWERUP = {
+  damageMultiplier: 1.5, // Nahkampf- UND Pfeilschaden während des Boosts
+} as const;
+
 // Legendäre Spezialeinheiten pro Fraktion (aus Gold-Orbs beschworen).
 // Jede Rasse bekommt eine EINZIGARTIGE Mechanik passend zu ihrem Flavor-Text –
 // so wird die Rassenwahl erstmals wirklich relevant (über die ±10% FACTION_STATS hinaus):

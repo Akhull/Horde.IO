@@ -1,6 +1,6 @@
 import Phaser from "phaser";
 import { Entity } from "./Entity";
-import { CONFIG, UNIT_STATS, DEPTH, FEEDBACK, AI, FACTION_STATS, LEGENDARY } from "../config/gameConfig";
+import { CONFIG, UNIT_STATS, DEPTH, FEEDBACK, AI, FACTION_STATS, LEGENDARY, POWERUP } from "../config/gameConfig";
 import type { AIPersonality } from "../config/gameConfig";
 import type { Faction, UnitType } from "../types";
 import type { Vec2 } from "../systems/AI";
@@ -42,6 +42,14 @@ export class Unit extends Entity {
   // speedBoostTimer > 0 ist, gilt der x1.5-Boost; erneutes Aufsammeln verlängert
   // nur die Dauer (kein erneutes Multiplizieren -> kein Speed-Stacking/Leak).
   speedBoostTimer = 0;
+  // Schadens-Power-Up: gleiche Zeitlogik wie der Tempo-Boost. Solange
+  // damageBoostTimer > 0 ist, multipliziert damageBoostMult den ausgeteilten
+  // Nahkampf- UND Pfeilschaden; erneutes Aufsammeln verlängert nur die Dauer.
+  // Anders als beim Tempo (das speed direkt skaliert) wird hier ein Multiplikator
+  // im Schadenspfad gelesen – meleeDamage/Pfeilschaden werden pro Treffer neu
+  // berechnet, ein laufender Faktor genügt also (kein Stacking-Leak möglich).
+  damageBoostTimer = 0;
+  private damageBoostMult = 1;
   dashReadyFlashTimer = 0;
   shieldReadyFlashTimer = 0;
   idleTarget: Vec2 | null = null;
@@ -263,7 +271,8 @@ export class Unit extends Entity {
         : this.unitType === "champion"
           ? UNIT_STATS.champion.damage
           : UNIT_STATS.vassal.damageByLevel[this.level] ?? 20;
-    return base * this.factionDamageMod;
+    // Schadens-Boost (Power-Up) wirkt OBEN AUF den Fraktions-Modifikator.
+    return base * this.factionDamageMod * this.damageBoostMult;
   }
 
   // Schwierigkeits-Skalierung des AUSGETEILTEN Schadens: nur KI-Einheiten (Team
@@ -280,6 +289,15 @@ export class Unit extends Entity {
   applySpeedBoost(duration: number): void {
     if (this.speedBoostTimer <= 0) this.speed *= 1.5;
     this.speedBoostTimer = Math.max(this.speedBoostTimer, duration);
+  }
+
+  // Schadens-Power-Up aufnehmen (Spieler- ODER KI-König). Idempotent gegen
+  // Stacking wie der Tempo-Boost: der Multiplikator wird nur beim ersten Aufnehmen
+  // gesetzt, weitere Aufnahmen verlängern nur den Timer. tickDamageBoost setzt
+  // den Faktor beim Ablauf sauber auf 1 zurück.
+  applyDamageBoost(duration: number): void {
+    if (this.damageBoostTimer <= 0) this.damageBoostMult = POWERUP.damageMultiplier;
+    this.damageBoostTimer = Math.max(this.damageBoostTimer, duration);
   }
 
   // Schild-Power-Up aufnehmen (Spieler- ODER KI-König). Verlängert ein aktives
@@ -299,6 +317,17 @@ export class Unit extends Entity {
     if (this.speedBoostTimer <= 0) {
       this.speedBoostTimer = 0;
       this.speed /= 1.5;
+    }
+  }
+
+  // Zählt den Schadens-Boost herunter und setzt den Multiplikator beim Ablauf
+  // exakt einmal auf 1 zurück (analog zu tickSpeedBoost).
+  private tickDamageBoost(deltaTime: number): void {
+    if (this.damageBoostTimer <= 0) return;
+    this.damageBoostTimer -= deltaTime;
+    if (this.damageBoostTimer <= 0) {
+      this.damageBoostTimer = 0;
+      this.damageBoostMult = 1;
     }
   }
 
@@ -582,7 +611,8 @@ export class Unit extends Entity {
         // Pfeilschaden ebenfalls mit dem Fraktions-Modifikator (Orc-Pfeile +10%).
         // Erzschütze nutzt seinen eigenen, höheren Pfeilschaden (LEGENDARY-Override).
         const baseDmg = this.unitType === "champion" ? LEGENDARY[this.faction].rangedDamage ?? UNIT_STATS.archer.damage : UNIT_STATS.archer.damage;
-        scene.spawnProjectile(this.centerX, this.centerY, target, this.scaledDamage(baseDmg * this.factionDamageMod, scene), this.team);
+        // Schadens-Boost wirkt auch auf Pfeilschaden (OBEN AUF den Fraktions-Modifikator).
+        scene.spawnProjectile(this.centerX, this.centerY, target, this.scaledDamage(baseDmg * this.factionDamageMod * this.damageBoostMult, scene), this.team);
         scene.audio.playSpatial("arrow_shot", this.x, this.y, 1.0);
         scene.notifyCombatEvent();
         this.lastAttackTimer = 0;
@@ -607,6 +637,7 @@ export class Unit extends Entity {
     // Tempo-Boost und Schild gelten für Spieler- UND KI-König und werden hier
     // zentral getickt (sonst liefe ein KI-Schild aus dem Power-Up nie ab).
     this.tickSpeedBoost(deltaTime);
+    this.tickDamageBoost(deltaTime);
     this.tickShield(deltaTime);
     if (this === scene.playerKing) {
       this.updatePlayerKing(deltaTime, step, scene);

@@ -140,6 +140,10 @@ export function handlePowerUps(scene: GameScene): void {
     if (p.effectType === "speed") {
       taker.applySpeedBoost(p.duration);
       scene.spawnVisualEffect(p.centerX, p.centerY, { r: 255, g: 215, b: 0 }, 15, 400, 3, 1.2);
+    } else if (p.effectType === "damage") {
+      // Schadens-Boost: rot-oranger Funkenausbruch passend zur Orb-Farbe.
+      taker.applyDamageBoost(p.duration);
+      scene.spawnVisualEffect(p.centerX, p.centerY, { r: 255, g: 87, b: 34 }, 15, 400, 3, 1.2);
     } else {
       taker.applyShieldPowerUp(p.duration);
       scene.spawnVisualEffect(p.centerX, p.centerY, { r: 0, g: 191, b: 255 }, 15, 400, 3, 1.2);
