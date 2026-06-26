@@ -8,10 +8,10 @@
 //
 // Aufruf: http://localhost:5173/iso-spike.html  (Drag=Pan, Rad=Zoom, Klick Gebäude=looten)
 
-import { Application, Container, Sprite, Texture, Assets, Geometry, Buffer, BufferUsage, Mesh, Shader, GlProgram, Graphics } from "pixi.js";
+import { Application, Container, Sprite, Texture, Assets, Geometry, Buffer, BufferUsage, Mesh, Shader, GlProgram, Graphics, RenderTexture, Matrix } from "pixi.js";
 
 const TILE_W = 32, TILE_H = 16, HW = TILE_W / 2, HH = TILE_H / 2;
-const MAP = 600, N = MAP + 1; // 4x größer (16-Spieler-Battle-Royale)
+const MAP = 720, N = MAP + 1; // große Insel (16-Spieler-Battle-Royale)
 const ELEV = 150;           // Screen-Y-Lift (markante Berge)
 const NORM_K = 26;          // Höhen->Slope-Skala für die Beleuchtung
 const WATER = 0.38, MOUNTAIN = 0.80; // höhere Block-Schwelle -> weniger gesperrte Fläche, mehr Pässe
@@ -55,6 +55,7 @@ function rampRGB(h: number, out: { r: number; g: number; b: number }): void {
 }
 
 const H = new Float32Array(N * N);
+const RFLOW = new Float32Array(N * N * 2); // Fließrichtung der Flusszellen (aus der Drainage)
 const HG = (i: number, j: number): number => H[Math.max(0, Math.min(N - 1, i)) * N + Math.max(0, Math.min(N - 1, j))];
 function baseHeight(i: number, j: number): number {
   const n = fbm(i * 0.014 + 7, j * 0.014 + 7, 5);
@@ -62,7 +63,7 @@ function baseHeight(i: number, j: number): number {
   const dx = (i / MAP) * 2 - 1, dy = (j / MAP) * 2 - 1;
   const dist = Math.sqrt(dx * dx + dy * dy);
   // Ozean-Ring NUR am Rand (dist>0.72); Inneres bleibt FLACH -> kein zentraler Berg-Dom mehr.
-  const edge = 1 - Math.max(0, Math.min(1, (dist - 0.72) / 0.28));
+  const edge = 1 - Math.max(0, Math.min(1, (dist - 0.82) / 0.18)); // dünnerer Ozean-Rand -> mehr Land
   const h = (n * 0.6 + ridge * ridge * 0.34) * edge + edge * 0.16 - 0.03;
   return Math.max(0, Math.min(1, h));
 }
@@ -71,6 +72,7 @@ function buildHeight(terrace: boolean): void {
   erode(180000); // hydraulische Erosion: Wassertropfen graben dendritische Täler bergab ->
   // natürliche Fluss-/Drainage-Netze direkt aus der Heightmap (kein Carving-Hack, keine Pfützen).
   for (let k = 0; k < N * N; k++) H[k] = Math.max(0, Math.min(1, H[k]));
+  carveRivers(MAP * 1.4); // verzweigte Flüsse aus der Drainage -> münden bergab ins Meer
   if (terrace) for (let k = 0; k < N * N; k++) H[k] = Math.floor(H[k] * 13) / 13; // Voxel-Stufen
 }
 // Droplet-basierte hydraulische Erosion (Sebastian-Lague-Muster): jeder Tropfen folgt dem
@@ -114,6 +116,34 @@ function erode(drops: number): void {
     }
   }
 }
+// Flüsse aus der DRAINAGE: D8-Fließrichtung pro Zelle -> Flow-Accumulation (wie viel Wasser
+// durchfließt) in Höhen-Reihenfolge aufsummieren -> Zellen mit viel Durchfluss = Flüsse, aufs
+// Wasserniveau gesenkt. Ergibt verzweigte Netze, die bergab ins Meer münden (keine separate Logik,
+// sondern direkt aus dem Gelände abgeleitet). Setzt zugleich die Fließrichtung (RFLOW).
+function carveRivers(threshold: number): void {
+  const total = N * N;
+  const down = new Int32Array(total).fill(-1);
+  const dirI = new Int8Array(total), dirJ = new Int8Array(total);
+  for (let i = 1; i < N - 1; i++) for (let j = 1; j < N - 1; j++) {
+    const c = i * N + j; let best = H[c], bd = -1, bi = 0, bj = 0;
+    for (let di = -1; di <= 1; di++) for (let dj = -1; dj <= 1; dj++) {
+      if (!di && !dj) continue;
+      const nidx = (i + di) * N + (j + dj);
+      if (H[nidx] < best) { best = H[nidx]; bd = nidx; bi = di; bj = dj; }
+    }
+    down[c] = bd; dirI[c] = bi; dirJ[c] = bj;
+  }
+  const order = Array.from({ length: total }, (_, k) => k).sort((a, b) => H[b] - H[a]);
+  const acc = new Float32Array(total).fill(1);
+  for (let o = 0; o < total; o++) { const c = order[o], d = down[c]; if (d >= 0) acc[d] += acc[c]; }
+  for (let c = 0; c < total; c++) {
+    if (H[c] >= WATER && H[c] < MOUNTAIN && acc[c] > threshold) {
+      H[c] = Math.min(H[c], WATER - 0.03);             // Flusszelle -> Wasser
+      const inv = 1 / (Math.hypot(dirI[c], dirJ[c]) || 1);
+      RFLOW[c * 2] = dirI[c] * inv; RFLOW[c * 2 + 1] = dirJ[c] * inv;
+    }
+  }
+}
 function sampleH(fx: number, fy: number): number {
   const x = Math.max(0, Math.min(MAP - 0.001, fx)), y = Math.max(0, Math.min(MAP - 0.001, fy));
   const i = Math.floor(x), j = Math.floor(y), tx = x - i, ty = y - j;
@@ -143,7 +173,9 @@ function buildTerrainMesh(): Mesh {
     const inv = 1 / Math.hypot(nx, ny, nz);
     nrm[3 * k] = nx * inv; nrm[3 * k + 1] = ny * inv; nrm[3 * k + 2] = nz * inv;
     wld[2 * k] = i; wld[2 * k + 1] = j; hgt[k] = h;
-    flow[2 * k] = -(HG(i + 1, j) - HG(i - 1, j)) * 12; flow[2 * k + 1] = -(HG(i, j + 1) - HG(i, j - 1)) * 12; // Fließrichtung = bergab
+    const rf0 = RFLOW[2 * k], rf1 = RFLOW[2 * k + 1]; // Flusszellen: Richtung aus der Drainage, sonst bergab
+    if (rf0 !== 0 || rf1 !== 0) { flow[2 * k] = rf0; flow[2 * k + 1] = rf1; }
+    else { flow[2 * k] = -(HG(i + 1, j) - HG(i - 1, j)) * 12; flow[2 * k + 1] = -(HG(i, j + 1) - HG(i, j - 1)) * 12; }
   }
   const idx: number[] = [];
   for (let d = 0; d < 2 * MAP; d++)
@@ -192,42 +224,52 @@ function buildTerrainMesh(): Mesh {
       void main() {
         vec3 nB = normalize(vNormal);
         float diff = clamp(dot(nB, normalize(uLight)), 0.0, 1.0);
-        // ---- WASSER (Tiefe + Brandung am Ufer + Flussrichtung) ----
+        // ---- WASSER (Tiefe + ruhige Glitzer-Wellen + Flussströmung + Tide-Brandung) ----
         if (vHeight < 0.382) {
-          float shoreT = clamp((vHeight - 0.33) / 0.052, 0.0, 1.0);     // 0 tief ... 1 Ufer
-          vec3 col = mix(vec3(0.05,0.16,0.38), vec3(0.16,0.45,0.70), shoreT);
-          // Strömung: Rippeln entlang der Fließrichtung vFlow (Seen still, Flüsse sichtbar fließend)
+          float depth = clamp((0.382 - vHeight) / 0.10, 0.0, 1.0);        // 0 Ufer ... 1 tief
+          vec3 col = mix(vec3(0.22,0.52,0.74), vec3(0.03,0.12,0.30), depth);
+          // kleine Glitzer-Wellen aus Noise (KEIN durchlaufendes Band)
+          col += 0.06 * smoothstep(0.66, 1.0, vn(vWorld * 1.1 + vec2(uTime * 0.12, -uTime * 0.09)));
+          // Flussströmung: nur wo Fließrichtung vorhanden (Flüsse sichtbar fließend, Seen still)
           float fmag = clamp(length(vFlow), 0.0, 1.0);
-          vec2 fdir = fmag > 0.001 ? normalize(vFlow) : vec2(0.7, 0.7);
-          float flowR = sin(dot(vWorld, fdir) * 2.4 - uTime * (1.5 + fmag * 6.0));
-          col += 0.05 * flowR * (0.5 + fmag);
-          // Brandung: weiße Wellen, die zum Ufer laufen
-          float wave = sin((vWorld.x + vWorld.y) * 0.8 - uTime * 2.4);
-          float foam = smoothstep(0.78, 1.0, shoreT) * smoothstep(0.0, 0.6, wave);
-          col = mix(col, vec3(0.85,0.93,1.0), foam * 0.7);
-          if (uStyle > 0.5 && uStyle < 2.5) col = floor(col * 8.0 + 0.5) / 8.0; // pixel/voxel quantisieren
+          if (fmag > 0.02) col += 0.07 * sin(dot(vWorld, normalize(vFlow)) * 1.8 - uTime * (3.0 + fmag * 6.0));
+          // Brandungs-Saum direkt an der Küste, sanft pulsierend (rein/raus)
+          float tide = 0.5 + 0.5 * sin(uTime * 0.8);
+          float foam = smoothstep(0.05, 0.0, 0.382 - vHeight) * (0.4 + 0.6 * tide);
+          col = mix(col, vec3(0.90, 0.96, 1.0), clamp(foam, 0.0, 0.85));
+          if (uStyle > 0.5 && uStyle < 2.5) col = floor(col * 10.0 + 0.5) / 10.0;
           gl_FragColor = vec4(col, 1.0); return;
         }
         // ---- LAND ----
+        vec3 lc;
         if (uStyle < 0.5) { // realistisch
           float shade = 0.42 + 0.78*diff;
           float grain = 0.8 + 0.42*(vn(vWorld*1.6)*0.55 + vn(vWorld*6.0)*0.3);
-          gl_FragColor = vec4(vColor*shade*grain, 1.0); return;
+          lc = vColor*shade*grain;
+        } else {
+          vec3 b = biome(vHeight);
+          if (uStyle < 1.5) { // pixel: saubere Biome + Dithering + Toon
+            float shade = 0.66 + 0.34*floor(diff*3.0+0.5)/3.0;
+            float dth = h2(floor(vWorld*1.0));
+            b *= dth > 0.62 ? 1.08 : (dth < 0.30 ? 0.90 : 1.0);
+            lc = b*shade;
+          } else if (uStyle < 2.5) { // voxel: Block-Look (Tops hell, Waende dunkel)
+            float shade = (0.5 + 0.5*clamp(nB.z,0.0,1.0)) * (0.82 + 0.22*step(0.5, diff));
+            lc = floor(b*shade*5.0+0.5)/5.0;
+          } else { // cel: illustriert, sattere Farben
+            float shade = diff > 0.55 ? 1.0 : (diff > 0.25 ? 0.82 : 0.64);
+            lc = pow(b, vec3(0.85)) * shade;
+          }
         }
-        vec3 b = biome(vHeight);
-        if (uStyle < 1.5) { // pixel: saubere Biome + Dithering + Toon
-          float shade = 0.66 + 0.34*floor(diff*3.0+0.5)/3.0;
-          float dth = h2(floor(vWorld*1.0));
-          b *= dth > 0.62 ? 1.08 : (dth < 0.30 ? 0.90 : 1.0);
-          gl_FragColor = vec4(b*shade, 1.0); return;
-        }
-        if (uStyle < 2.5) { // voxel: Block-Look (Tops hell, Waende dunkel) + harte Quantisierung
-          float shade = (0.5 + 0.5*clamp(nB.z,0.0,1.0)) * (0.82 + 0.22*step(0.5, diff));
-          gl_FragColor = vec4(floor(b*shade*5.0+0.5)/5.0, 1.0); return;
-        }
-        // cel: illustriert -> 3 Toon-Baender, sattere Farben
-        float shade = diff > 0.55 ? 1.0 : (diff > 0.25 ? 0.82 : 0.64);
-        gl_FragColor = vec4(pow(b, vec3(0.85)) * shade, 1.0); return;
+        // STRAND-UEBERSCHWAPPEN: untere Strandzone wird periodisch nass + Schaumkante (Tide hoch/runter)
+        float above = vHeight - 0.382;
+        float tideU = 0.010 + 0.012 * (0.5 + 0.5 * sin(uTime * 0.8));
+        float wet = smoothstep(tideU, 0.0, above);
+        lc = mix(lc, lc * vec3(0.55, 0.60, 0.72), wet * 0.55);
+        float foamL = smoothstep(tideU, tideU * 0.4, above) * (1.0 - smoothstep(tideU * 0.4, 0.0, above));
+        lc = mix(lc, vec3(0.92, 0.96, 1.0), clamp(foamL, 0.0, 1.0) * 0.6);
+        if (uStyle > 0.5 && uStyle < 2.5) lc = floor(lc * 12.0 + 0.5) / 12.0;
+        gl_FragColor = vec4(lc, 1.0);
       }`,
   });
   terrainShader = new Shader({
@@ -241,9 +283,10 @@ async function main(): Promise<void> {
   const params = new URLSearchParams(location.search);
   const style = params.get("style") ?? "real"; // real | pixel | voxel | cel
   const zoom = parseFloat(params.get("zoom") ?? "0.4");
-  const styleMap: Record<string, number> = { real: 0, pixel: 1, voxel: 2, cel: 3 };
+  const styleMap: Record<string, number> = { real: 0, pixel: 1, voxel: 2, cel: 3, bake: 1 };
   const styleId = styleMap[style] ?? 0;
-  const lowRes = style === "pixel" || style === "voxel"; // niedrige Aufloesung -> Pixel-Look
+  const pixelateBake = style === "bake";                 // Welt-Raum-Pixelate-Bake (sticky pixel grid)
+  const lowRes = style === "pixel" || style === "voxel"; // CSS-Screen-Space-Pixelation (Vergleich)
   const terrace = style === "voxel";                     // Hoehen in Stufen -> Voxel/Block-Terrassen
   const hud = document.getElementById("hud")!;
   hud.textContent = "Lade…";
@@ -271,7 +314,7 @@ async function main(): Promise<void> {
   };
   const tex: Record<string, Texture> = {};
   for (const [k, url] of Object.entries(M)) tex[k] = await Assets.load(url);
-  if (lowRes) for (const tt of Object.values(tex)) tt.source.scaleMode = "nearest";
+  if (lowRes || pixelateBake) for (const tt of Object.values(tex)) tt.source.scaleMode = "nearest";
 
   hud.textContent = "Baue Welt…";
   buildHeight(terrace);
@@ -372,6 +415,29 @@ async function main(): Promise<void> {
     for (let i = 0; i < HORDE; i++) spawn(c.gx + (Math.random() - 0.5) * 12, c.gy + (Math.random() - 0.5) * 12, f.u, 0.38);
   }
 
+  // --- Welt-Raum-Pixelate-Bake: Welt in eine kleine RenderTexture (÷ block, nearest) backen und
+  // als Sprite IM world-Container (Kamera-Ebene) zeigen -> Pixelraster klebt an Map-Koords, pant/
+  // zoomt 1:1 mit der Map (kein Screen-Space-"Schwimmen"). LAST child -> verdeckt das Original.
+  let bakeRt: RenderTexture | null = null, bakeSprite: Sprite | null = null;
+  const bakeMatrix = new Matrix();
+  let bakeThrottle = false;
+  if (pixelateBake) {
+    const block = 6;
+    const minX = -MAP * HW - 8, maxX = MAP * HW + 8;
+    const minY = -ELEV - 160, maxY = 2 * MAP * HH + 160;
+    const w = Math.ceil((maxX - minX) / block), h = Math.ceil((maxY - minY) / block);
+    bakeRt = RenderTexture.create({ width: w, height: h, antialias: false });
+    bakeRt.source.scaleMode = "nearest";
+    bakeSprite = new Sprite(bakeRt);
+    bakeSprite.eventMode = "none";
+    bakeSprite.x = minX; bakeSprite.y = minY;
+    bakeSprite.width = maxX - minX; bakeSprite.height = maxY - minY;
+    bakeSprite.visible = false;
+    world.addChild(bakeSprite); // LAST child von world -> deckt das Original im Hauptpass ab
+    const inv = 1 / block;
+    bakeMatrix.identity(); bakeMatrix.translate(-minX, -minY); bakeMatrix.scale(inv, inv);
+  }
+
   let dragging = false, lastX = 0, lastY = 0;
   app.canvas.style.touchAction = "none";
   app.canvas.addEventListener("pointerdown", (e) => { dragging = true; lastX = e.clientX; lastY = e.clientY; });
@@ -392,6 +458,7 @@ async function main(): Promise<void> {
   let acc = 0, time = 0;
   app.ticker.add((t) => {
     const dt = t.deltaTime;
+    if (pixelateBake) { world.x = Math.round(world.x); world.y = Math.round(world.y); } // Integer-Pixel -> kein Zittern
     time += t.deltaMS / 1000;
     terrainShader.resources.terr.uniforms.uTime = time;
     for (const u of units) {
@@ -406,6 +473,18 @@ async function main(): Promise<void> {
     for (let i = orbs.length - 1; i >= 0; i--) {
       const o = orbs[i]; o.life -= 0.012 * dt; o.spr.y -= 0.6 * dt; o.spr.alpha = Math.max(0, o.life);
       if (o.life <= 0) { o.spr.destroy(); orbs.splice(i, 1); }
+    }
+    // Welt-Raum-Pixelate-Bake: Kamera kurz neutralisieren, ganze Map in die RT backen, wiederherstellen.
+    if (pixelateBake && bakeRt && bakeSprite) {
+      bakeThrottle = !bakeThrottle;
+      if (bakeThrottle || units.length < 4000) {       // 30-Hz-Throttle bei Last
+        bakeSprite.visible = false;
+        const sx = world.x, sy = world.y, zx = world.scale.x, zy = world.scale.y;
+        world.x = 0; world.y = 0; world.scale.set(1);
+        app.renderer.render({ container: world, target: bakeRt, transform: bakeMatrix, clear: true });
+        world.x = sx; world.y = sy; world.scale.set(zx, zy);
+        bakeSprite.visible = true;
+      }
     }
     acc += t.deltaMS;
     if (acc > 250) { acc = 0; hud.textContent = `Horde.IO — Iso Spike v4 · ${units.length} Units · ${PLAYERS} Horden · ${buildingsLeft} Gebäude · ${app.ticker.FPS.toFixed(0)} FPS · Hillshade+Wasser-Anim · Klick=looten`; }
