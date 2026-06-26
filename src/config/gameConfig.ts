@@ -69,15 +69,18 @@ export const UNIT_STATS = {
 // Gewühl länger am Leben – ein drittes, distinktes Offensiv-Profil neben dmg/armor.
 // regenPerSecond ist PASSIVE SUSTAIN (gleiche 6-s-Dauer): der Träger regeneriert
 // HP pro Sekunde, GEKLEMMT auf sein fraktions-skaliertes maxHp (kein Überheilen).
-// 12 hp/s × 6 s = ~72 HP – ~24% eines Königs-HP-Pools (300). Im Gegensatz zum
+// 10 hp/s × 6 s = ~60 HP – ~20% eines Königs-HP-Pools (300). Im Gegensatz zum
 // Lifesteal (nur beim Zuschlagen, 0.35× ausgeteilter Schaden) heilt regen IMMER,
 // auch beim Fliehen/Wandern – das defensive, passive Gegenstück, das einen
 // angeschlagenen König wieder kampffähig macht, ohne ihn unsterblich zu machen.
+// 10 statt 12 hp/s bewusst: bricht die Sustain/Schaden-PARITÄT, wenn regen +
+// Lifesteal + Armor zusammentreffen (sonst Endlos-Patt bei symmetrischem Kampf).
+// Netto-Schaden bleibt positiv (~26.8 dps Sustain vs. ~28.8 dps eingehend → −2 dps).
 export const POWERUP = {
   damageMultiplier: 1.5, // Nahkampf- UND Pfeilschaden während des Boosts
   armorMultiplier: 0.6, // eingehender Schaden während des Armor-Boosts (−40%)
   lifestealFactor: 0.35, // geheilter Anteil des ausgeteilten Schadens (Lifesteal)
-  regenPerSecond: 12, // passiv regenerierte HP pro Sekunde während des Regen-Boosts
+  regenPerSecond: 10, // passiv regenerierte HP pro Sekunde während des Regen-Boosts
 } as const;
 
 // Legendäre Spezialeinheiten pro Fraktion (aus Gold-Orbs beschworen).
