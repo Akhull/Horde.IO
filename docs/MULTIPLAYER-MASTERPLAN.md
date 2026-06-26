@@ -232,6 +232,12 @@ M7  Steam-Release-Vorbereitung
 
 ## 9. Fortschritts-Log (mp/main, neueste zuerst)
 
+- **2026-06-26 — Iso-Spike v2 ✅ (größer + realistischer).** Insel-Heightmap (fBm + Rand-Bias),
+  **kontinuierliche** Höhen-Farbrampe statt harter Biome-Stufen (kein „Quadrat"-Look mehr),
+  **Wasser unbegehbar** (Units bleiben auf Land), 140×140-Welt, **12 Horden / 6732 Units** über
+  Tiefen-Bänder (sortierfrei), **echte Kenney-CC0-Sprites** (Units/Gebäude/Bäume), **anklickbare,
+  zerstörbare Loot-Gebäude** (Klick → Gold-Orb). **120 FPS** (vsync-Cap, Headroom). Nächste Render-
+  Schritte: echte Pixel-Art-Iso-Atlanten (Bake-Pipeline, M6) + Anbindung an die Headless-`World`.
 - **2026-06-26 — S4-P0 ✅ Pixi-Iso-Spike: GO.** Standalone PixiJS-v8-Demo (`iso-spike.html` +
   `tools/iso-spike/main.ts`): 45°-Iso-Terrain (fBm-Heightmap, Wasser→Schnee + Klippen) + 4000
   tiefensortierte Units, **~196 FPS** (noch ohne ParticleContainer → Headroom für 8000). Erstes

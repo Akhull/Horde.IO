@@ -27,4 +27,4 @@ build/
 
 # Playwright-MCP-Artefakte (Screenshots/Snapshots aus Live-Verifikation)
 .playwright-mcp/
-iso-spike-verify.png
+iso-spike-*.png
