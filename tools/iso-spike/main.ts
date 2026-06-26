@@ -72,7 +72,7 @@ function buildHeight(terrace: boolean): void {
   erode(180000); // hydraulische Erosion: Wassertropfen graben dendritische Täler bergab ->
   // natürliche Fluss-/Drainage-Netze direkt aus der Heightmap (kein Carving-Hack, keine Pfützen).
   for (let k = 0; k < N * N; k++) H[k] = Math.max(0, Math.min(1, H[k]));
-  carveRivers(MAP * 1.4); // verzweigte Flüsse aus der Drainage -> münden bergab ins Meer
+  carveRivers(MAP * 0.5); // verzweigte Flüsse aus der Drainage -> münden bergab ins Meer
   if (terrace) for (let k = 0; k < N * N; k++) H[k] = Math.floor(H[k] * 13) / 13; // Voxel-Stufen
 }
 // Droplet-basierte hydraulische Erosion (Sebastian-Lague-Muster): jeder Tropfen folgt dem
@@ -122,26 +122,61 @@ function erode(drops: number): void {
 // sondern direkt aus dem Gelände abgeleitet). Setzt zugleich die Fließrichtung (RFLOW).
 function carveRivers(threshold: number): void {
   const total = N * N;
-  const down = new Int32Array(total).fill(-1);
-  const dirI = new Int8Array(total), dirJ = new Int8Array(total);
-  for (let i = 1; i < N - 1; i++) for (let j = 1; j < N - 1; j++) {
-    const c = i * N + j; let best = H[c], bd = -1, bi = 0, bj = 0;
+  // 1) PRIORITY-FLOOD: Senken füllen, sodass JEDE Zelle monoton zum Rand/Meer entwässert
+  //    (sonst bleibt die Drainage in erosions-bedingten Mulden stecken -> keine Flüsse).
+  const filled = Float32Array.from(H);
+  const closed = new Uint8Array(total);
+  const hH: number[] = [], hK: number[] = [];
+  const push = (val: number, k: number): void => {
+    hH.push(val); hK.push(k); let c = hH.length - 1;
+    while (c > 0) { const p = (c - 1) >> 1; if (hH[p] <= hH[c]) break; const th = hH[p]; hH[p] = hH[c]; hH[c] = th; const tk = hK[p]; hK[p] = hK[c]; hK[c] = tk; c = p; }
+  };
+  const pop = (): number => {
+    const rk = hK[0], n = hH.length - 1; hH[0] = hH[n]; hK[0] = hK[n]; hH.pop(); hK.pop();
+    let c = 0; const len = hH.length;
+    for (;;) { let s = c; const l = 2 * c + 1, r = 2 * c + 2; if (l < len && hH[l] < hH[s]) s = l; if (r < len && hH[r] < hH[s]) s = r; if (s === c) break; const th = hH[s]; hH[s] = hH[c]; hH[c] = th; const tk = hK[s]; hK[s] = hK[c]; hK[c] = tk; c = s; }
+    return rk;
+  };
+  for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) if (i === 0 || j === 0 || i === N - 1 || j === N - 1) { const k = i * N + j; closed[k] = 1; push(filled[k], k); }
+  while (hH.length) {
+    const c = pop(), ci = (c / N) | 0, cj = c % N;
     for (let di = -1; di <= 1; di++) for (let dj = -1; dj <= 1; dj++) {
-      if (!di && !dj) continue;
-      const nidx = (i + di) * N + (j + dj);
-      if (H[nidx] < best) { best = H[nidx]; bd = nidx; bi = di; bj = dj; }
+      if (!di && !dj) continue; const ni = ci + di, nj = cj + dj;
+      if (ni < 0 || nj < 0 || ni >= N || nj >= N) continue; const nk = ni * N + nj;
+      if (closed[nk]) continue; closed[nk] = 1;
+      if (filled[nk] < filled[c]) filled[nk] = filled[c]; // auf Spill-Niveau anheben
+      push(filled[nk], nk);
+    }
+  }
+  // 2) D8-Fließrichtung auf dem gefüllten Relief + Flow-Accumulation (Höhe absteigend)
+  const down = new Int32Array(total).fill(-1), dirI = new Int8Array(total), dirJ = new Int8Array(total);
+  for (let i = 1; i < N - 1; i++) for (let j = 1; j < N - 1; j++) {
+    const c = i * N + j; let best = filled[c], bd = -1, bi = 0, bj = 0;
+    for (let di = -1; di <= 1; di++) for (let dj = -1; dj <= 1; dj++) {
+      if (!di && !dj) continue; const nk = (i + di) * N + (j + dj);
+      if (filled[nk] < best) { best = filled[nk]; bd = nk; bi = di; bj = dj; }
     }
     down[c] = bd; dirI[c] = bi; dirJ[c] = bj;
   }
-  const order = Array.from({ length: total }, (_, k) => k).sort((a, b) => H[b] - H[a]);
+  const order = Array.from({ length: total }, (_, k) => k).sort((a, b) => filled[b] - filled[a]);
   const acc = new Float32Array(total).fill(1);
   for (let o = 0; o < total; o++) { const c = order[o], d = down[c]; if (d >= 0) acc[d] += acc[c]; }
+  // 3) Flüsse: Zellen mit viel Durchfluss auf Land -> Wasser. Breite skaliert mit dem Durchfluss
+  //    (große Ströme breiter), Nachbarn mit-gesenkt -> sichtbare Flussbreite. Fließrichtung gesetzt.
   for (let c = 0; c < total; c++) {
-    if (H[c] >= WATER && H[c] < MOUNTAIN && acc[c] > threshold) {
-      H[c] = Math.min(H[c], WATER - 0.03);             // Flusszelle -> Wasser
-      const inv = 1 / (Math.hypot(dirI[c], dirJ[c]) || 1);
-      RFLOW[c * 2] = dirI[c] * inv; RFLOW[c * 2 + 1] = dirJ[c] * inv;
+    if (H[c] < WATER || H[c] >= MOUNTAIN || acc[c] <= threshold) continue;
+    const rad = acc[c] > threshold * 6 ? 2 : 1;            // breiter bei mehr Durchfluss
+    const ci = (c / N) | 0, cj = c % N;
+    for (let di = -rad; di <= rad; di++) for (let dj = -rad; dj <= rad; dj++) {
+      const ni = ci + di, nj = cj + dj;
+      if (ni < 0 || nj < 0 || ni >= N || nj >= N) continue;
+      const nk = ni * N + nj;
+      if (H[nk] >= MOUNTAIN) continue;
+      const drop = di === 0 && dj === 0 ? 0.04 : 0.02;
+      H[nk] = Math.min(H[nk], WATER - drop);
     }
+    const inv = 1 / (Math.hypot(dirI[c], dirJ[c]) || 1);
+    RFLOW[c * 2] = dirI[c] * inv; RFLOW[c * 2 + 1] = dirJ[c] * inv;
   }
 }
 function sampleH(fx: number, fy: number): number {
