@@ -43,8 +43,8 @@ export function updateBarracks(scene: GameScene, deltaTime: number): void {
 
     // Zufälliger Punkt im Spawn-Radius um das Kaserne-Zentrum (Winkel+Radius wie in worldgen),
     // damit die Seele nicht exakt im Sprite, sondern davor/daneben erscheint.
-    const angle = Math.random() * Math.PI * 2;
-    const radius = Math.random() * BARRACKS.spawnRadius;
+    const angle = scene.rng.next() * Math.PI * 2;
+    const radius = scene.rng.next() * BARRACKS.spawnRadius;
     const sx = b.centerX + Math.cos(angle) * radius;
     const sy = b.centerY + Math.sin(angle) * radius;
 

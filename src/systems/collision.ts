@@ -22,8 +22,8 @@ export function resolveUnitUnitCollisions(scene: GameScene): void {
       let dy = b.centerY - a.centerY;
       let dist = Math.sqrt(dx * dx + dy * dy);
       if (dist === 0) {
-        dx = (Math.random() - 0.5) * 0.1;
-        dy = (Math.random() - 0.5) * 0.1;
+        dx = (scene.rng.next() - 0.5) * 0.1;
+        dy = (scene.rng.next() - 0.5) * 0.1;
         dist = Math.sqrt(dx * dx + dy * dy);
       }
       const overlap = a.width / 2 + b.width / 2 - dist;

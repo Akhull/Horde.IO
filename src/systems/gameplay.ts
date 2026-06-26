@@ -11,7 +11,7 @@ const GOLD_UPGRADE_CHANCE = 0.12;
 
 // Erzeugt beim Tod einer Einheit ggf. eine Seele (Vasallen nur zu 50%).
 export function spawnSoulFromUnit(scene: GameScene, unit: Unit): void {
-  if (unit.unitType === "vassal" && Math.random() < 0.5) return;
+  if (unit.unitType === "vassal" && scene.rng.next() < 0.5) return;
   let soulType: SoulType;
   // König- und Champion-Tode sind die großen Belohnungen -> garantiert Gold.
   if (unit.unitType === "king" || unit.unitType === "champion") soulType = "gold";
@@ -19,7 +19,7 @@ export function spawnSoulFromUnit(scene: GameScene, unit: Unit): void {
   else if (unit.level === 2) soulType = "blue";
   else soulType = "purple";
   // Seltene Aufwertung lila -> gold, damit Gold auch ohne Königstod farmbar bleibt.
-  if (soulType === "purple" && Math.random() < GOLD_UPGRADE_CHANCE) soulType = "gold";
+  if (soulType === "purple" && scene.rng.next() < GOLD_UPGRADE_CHANCE) soulType = "gold";
   const soul = new Soul(scene, unit.x, unit.y, soulType);
   scene.souls.push(soul);
   scene.grid.addEntity(soul);
@@ -283,7 +283,7 @@ export function handleBuildings(scene: GameScene): void {
     if (b.hp > 0) continue;
     let soulType: SoulType = b.buildingType === "barn" ? "green" : b.buildingType === "house" ? "blue" : "purple";
     // Türme (lila) können selten einen legendären Gold-Orb fallen lassen.
-    if (soulType === "purple" && Math.random() < GOLD_UPGRADE_CHANCE) soulType = "gold";
+    if (soulType === "purple" && scene.rng.next() < GOLD_UPGRADE_CHANCE) soulType = "gold";
     const soul = new Soul(scene, b.x, b.y, soulType);
     scene.souls.push(soul);
     scene.grid.addEntity(soul);
