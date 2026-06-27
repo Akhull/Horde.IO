@@ -622,8 +622,8 @@ async function main(): Promise<void> {
   const ex = new Float32Array(CAP), ey = new Float32Array(CAP);         // Welt gx/gy (Sim-Stand nach letztem Tick)
   const prevX = new Float32Array(CAP), prevY = new Float32Array(CAP);   // gx/gy vor dem letzten Tick (Render-Interpolation)
   const screenX = new Float32Array(CAP), footY = new Float32Array(CAP); // iso-Render-Pos (footY = Sort-Key)
-  const ehp = new Float32Array(CAP), emaxhp = new Float32Array(CAP), ecd = new Float32Array(CAP), eflash = new Float32Array(CAP);
-  const efac = new Uint8Array(CAP), etype = new Uint8Array(CAP), eking = new Uint8Array(CAP), eranged = new Uint8Array(CAP), ealive = new Uint8Array(CAP);
+  const ehp = new Float32Array(CAP), emaxhp = new Float32Array(CAP), ecd = new Float32Array(CAP), eflash = new Float32Array(CAP), eatk = new Float32Array(CAP);
+  const efac = new Uint8Array(CAP), etype = new Uint8Array(CAP), eking = new Uint8Array(CAP), eranged = new Uint8Array(CAP), ealive = new Uint8Array(CAP), evis = new Uint8Array(CAP);
   const etarget = new Int32Array(CAP);
   let nEnt = 0;                                                         // höchster je belegter Index +1
   const freeStack = new Int32Array(CAP); let freeTop = 0;               // O(1) Tod/Spawn (keine .filter-Kompaktierung)
@@ -651,14 +651,16 @@ async function main(): Promise<void> {
   const puffTex = makePuffTexture(app);
   interface Puff { spr: Sprite; life: number; }
   const puffs: Puff[] = [];
+  const PUFF_CAP = 500;                                                 // Massensterben: Poof-Storm deckeln (sonst Tausende Sprite-News/Tick)
   const addPuff = (gx: number, gy: number, tint: number, sc = 0.5): void => {
+    if (puffs.length >= PUFF_CAP) return;
     const spr = new Sprite(puffTex); spr.anchor.set(0.5); spr.tint = tint; spr.scale.set(sc);
     const p = worldToIso(gx, gy); spr.x = p.x; spr.y = p.y - elevLift(sampleH(gx, gy)) - 6;
     fxLayer.addChild(spr); puffs.push({ spr, life: 1 });
   };
   const spawnE = (gx: number, gy: number, f: number, ty: number): number => {
     const i = freeTop > 0 ? freeStack[--freeTop] : nEnt++;
-    ex[i] = gx; ey[i] = gy; prevX[i] = gx; prevY[i] = gy; ehp[i] = T_hp[ty]; emaxhp[i] = T_hp[ty]; ecd[i] = Math.random() * T_cd[ty]; eflash[i] = 0;
+    ex[i] = gx; ey[i] = gy; prevX[i] = gx; prevY[i] = gy; ehp[i] = T_hp[ty]; emaxhp[i] = T_hp[ty]; ecd[i] = Math.random() * T_cd[ty]; eflash[i] = 0; eatk[i] = 0;
     efac[i] = f; etype[i] = ty; eking[i] = ty === 4 ? 1 : 0; eranged[i] = T_range[ty] > 20 ? 1 : 0; ealive[i] = 1; etarget[i] = -1;
     const p = worldToIso(gx, gy); screenX[i] = p.x; footY[i] = p.y - elevLift(sampleH(gx, gy));
     return i;
@@ -668,7 +670,7 @@ async function main(): Promise<void> {
   const findEnemy = (i: number): number => {
     const cx = clampCell(ex[i]), cy = clampCell(ey[i]), uf = efac[i], xi = ex[i], yi = ey[i];
     for (let R = 1; R <= 2; R++) {
-      let best = -1, bestD = 1e9;
+      let best = -1, bestD = 1e9, scan = 0;
       for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) {
         if (R === 2 && dx > -2 && dx < 2 && dy > -2 && dy < 2) continue; // inneres 3x3 in R=2 überspringen (schon gescannt)
         const nx = cx + dx, ny = cy + dy; if (nx < 0 || ny < 0 || nx >= GW || ny >= GW) continue;
@@ -676,6 +678,7 @@ async function main(): Promise<void> {
           if (!ealive[j] || efac[j] === uf) continue;
           const ddx = ex[j] - xi, ddy = ey[j] - yi, d = ddx * ddx + ddy * ddy;
           if (d < bestD) { bestD = d; best = j; }
+          if (++scan >= 64) { dy = R + 1; dx = R + 1; break; }           // Scan-Budget gegen Mega-dichte Zellen ("nah genug" reicht)
         }
       }
       if (best >= 0) return best;
@@ -776,11 +779,12 @@ async function main(): Promise<void> {
   const KSORT = 2048, invSpan = KSORT / Y_SPAN;
   const sortCnt = new Int32Array(KSORT + 1), sortOrder = new Int32Array(CAP);
   const renderUnits = (): number => {
+    // Sichtbarkeit (evis) kommt aus projectInterp -> hier nur noch sortieren + Slots schreiben.
     sortCnt.fill(0);
     let n = 0;
-    for (let i = 0; i < nEnt; i++) { if (!ealive[i]) continue; let b = ((footY[i] - Y_MIN) * invSpan) | 0; b = b < 0 ? 0 : b >= KSORT ? KSORT - 1 : b; sortCnt[b]++; n++; }
+    for (let i = 0; i < nEnt; i++) { if (!evis[i]) continue; let b = ((footY[i] - Y_MIN) * invSpan) | 0; b = b < 0 ? 0 : b >= KSORT ? KSORT - 1 : b; sortCnt[b]++; n++; }
     let a = 0; for (let b = 0; b < KSORT; b++) { const c = sortCnt[b]; sortCnt[b] = a; a += c; }
-    for (let i = 0; i < nEnt; i++) { if (!ealive[i]) continue; let b = ((footY[i] - Y_MIN) * invSpan) | 0; b = b < 0 ? 0 : b >= KSORT ? KSORT - 1 : b; sortOrder[sortCnt[b]++] = i; }
+    for (let i = 0; i < nEnt; i++) { if (!evis[i]) continue; let b = ((footY[i] - Y_MIN) * invSpan) | 0; b = b < 0 ? 0 : b >= KSORT ? KSORT - 1 : b; sortOrder[sortCnt[b]++] = i; }
     for (let k = 0; k < n; k++) {
       const u = sortOrder[k], p = pool[k], sc = T_scale[etype[u]];
       p.x = screenX[u]; p.y = footY[u]; p.scaleX = sc; p.scaleY = sc;
@@ -827,7 +831,7 @@ async function main(): Promise<void> {
         if (eranged[i] && d < 16) { mvx = -dx / d * sp; mvy = -dy / d * sp; }            // Bogenschütze kitet
         else if (d <= T_range[ty]) {
           ecd[i] -= DT_FIX;
-          if (ecd[i] <= 0) { ecd[i] = T_cd[ty]; if (eranged[i]) fireArrow(i, tg); else { ehp[tg] -= T_atk[ty]; eflash[tg] = 6; if (ehp[tg] <= 0) killE(tg); } }
+          if (ecd[i] <= 0) { ecd[i] = T_cd[ty]; if (eranged[i]) fireArrow(i, tg); else { eatk[i] = 5; ehp[tg] -= T_atk[ty]; eflash[tg] = 6; if (ehp[tg] <= 0) killE(tg); } }
         } else { mvx = dx / d * sp; mvy = dy / d * sp; }                                  // hinlaufen
       } else { const dx = MAP / 2 - ex[i], dy = MAP / 2 - ey[i], d = Math.sqrt(dx * dx + dy * dy) || 1; mvx = dx / d * sp * 0.6; mvy = dy / d * sp * 0.6; }
       // Sturm: außerhalb der Zone -> rein fliehen (überschreibt Kampf) + Dauerschaden
@@ -849,14 +853,25 @@ async function main(): Promise<void> {
         if (n > 0) { mvx += px / n * sp * 0.7; mvy += py / n * sp * 0.7; } }
       if (mvx !== 0 || mvy !== 0) { const nx = ex[i] + mvx * DT_FIX, ny = ey[i] + mvy * DT_FIX; if (passable(nx, ey[i])) ex[i] = nx; if (passable(ex[i], ny)) ey[i] = ny; }
       if (eflash[i] > 0) eflash[i] -= DT_FIX;
+      if (eatk[i] > 0) eatk[i] -= DT_FIX;
     }
   };
-  // Render-Projektion: interpolierte gx/gy (prevX->ex) -> iso screenX/footY (pro Bildschirm-Frame).
+  // Render-Projektion + FRUSTUM-CULL: interpolierte gx/gy -> iso screenX/footY, aber nur für SICHTBARE
+  // Units (evis). Off-screen-Units überspringen das teure sampleH -> Projektion kostet O(sichtbar), nicht
+  // O(gesamt). Plus billiges "Leben": Marsch-Hüpfer bei Bewegung + Pop beim Zuschlagen (kein Atlas-Frame).
   const projectInterp = (a: number): void => {
+    const sc0 = world.scale.x, mP = 80;
+    const vx0 = (-mP - world.x) / sc0, vx1 = (app.screen.width + mP - world.x) / sc0;
+    const vy0 = (-mP - world.y) / sc0, vy1 = (app.screen.height + mP - world.y) / sc0 + ELEV; // +ELEV: Höhen-Lift hebt y
     for (let i = 0; i < nEnt; i++) {
-      if (!ealive[i]) continue;
+      if (!ealive[i]) { evis[i] = 0; continue; }
       const ix = prevX[i] + (ex[i] - prevX[i]) * a, iy = prevY[i] + (ey[i] - prevY[i]) * a;
-      const p = worldToIso(ix, iy); screenX[i] = p.x; footY[i] = p.y - elevLift(sampleH(ix, iy));
+      const sx = (ix - iy) * HW, isoY = (ix + iy) * HH;                                        // billige iso-Pos (kein sampleH)
+      if (sx < vx0 || sx > vx1 || isoY < vy0 || isoY > vy1) { evis[i] = 0; continue; }         // off-screen -> kein sampleH
+      let fy = isoY - elevLift(sampleH(ix, iy));
+      if (Math.abs(ex[i] - prevX[i]) + Math.abs(ey[i] - prevY[i]) > 0.05) fy -= Math.abs(Math.sin(time * 9 + i)) * 1.6; // Marsch-Hüpfer
+      if (eatk[i] > 0) fy -= 2.2;                                                                                       // Zuschlag-Pop
+      screenX[i] = sx; footY[i] = fy; evis[i] = 1;
     }
   };
 
@@ -908,7 +923,7 @@ async function main(): Promise<void> {
     const drawn = renderUnits();
     sortMs = performance.now() - tSort;
     for (const kf of kingFX) {
-      const i = kf.i, on = ealive[i] === 1;
+      const i = kf.i, on = ealive[i] === 1 && evis[i] === 1; // off-screen Könige: FX aus (Pos wäre stale)
       kf.banner.visible = on; kf.bg.visible = on; kf.fill.visible = on;
       if (!on) continue;
       kf.banner.x = screenX[i]; kf.banner.y = footY[i] - 50;
