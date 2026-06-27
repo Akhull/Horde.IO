@@ -8,7 +8,7 @@
 //
 // Aufruf: http://localhost:5173/iso-spike.html  (Drag=Pan, Rad=Zoom, Klick Gebäude=looten)
 
-import { Application, Container, Sprite, Texture, Assets, Geometry, Buffer, BufferUsage, Mesh, Shader, GlProgram, Graphics, RenderTexture } from "pixi.js";
+import { Application, Container, Sprite, Texture, Assets, Geometry, Buffer, BufferUsage, Mesh, Shader, GlProgram, Graphics, RenderTexture, Rectangle, ParticleContainer, Particle } from "pixi.js";
 
 const TILE_W = 32, TILE_H = 16, HW = TILE_W / 2, HH = TILE_H / 2;
 const MAP = 720, N = MAP + 1; // große Insel (16-Spieler-Battle-Royale)
@@ -426,7 +426,8 @@ function drawKing(p: Pen, P: Palette): void {
   for (let y = 8; y <= 18; y++) p.r(UW - 5, y, P.metal[2]); p.r(UW - 5, 7, GOLD);        // Zepter
 }
 const DRAW: Record<string, (p: Pen, P: Palette) => void> = { warrior: drawWarrior, archer: drawArcher, spearman: drawSpearman, brute: drawBrute, king: drawKing };
-function makeUnitTex(faction: string, type: string): Texture {
+// Eine Zelle (Fraktion x Typ) als roher (RGB|0)[]-Puffer inkl. Outline + Boden-Schatten.
+function renderUnitCell(faction: string, type: string): (RGB | 0)[] {
   const P = PAL[faction], buf: (RGB | 0)[] = new Array(UW * UH).fill(0);
   DRAW[type](makePen(buf), P);
   const filled = (i: number): boolean => i >= 0 && i < buf.length && buf[i] !== 0;
@@ -437,17 +438,31 @@ function makeUnitTex(faction: string, type: string): Texture {
   }
   const sh: [number, number, number][] = [[UCX - 3, 26, 6], [UCX - 2, 27, 4]];           // Boden-Schatten
   for (const [sx, sy, sw] of sh) for (let x = sx; x < sx + sw; x++) { const i = sy * UW + x; if (out[i] === 0) out[i] = shade(0x161a22, 0.15); }
-  const cv = document.createElement("canvas"); cv.width = UW; cv.height = UH;
-  const ctx = cv.getContext("2d")!; ctx.imageSmoothingEnabled = false;
-  const img = ctx.createImageData(UW, UH), d = img.data;
-  for (let i = 0; i < out.length; i++) { const c = out[i]; if (c === 0) continue; const o = i * 4; d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = 255; }
-  ctx.putImageData(img, 0, 0);
-  const tex = Texture.from(cv); tex.source.scaleMode = "nearest"; return tex;
-}
-function buildUnitTextures(): Record<string, Texture> {
-  const out: Record<string, Texture> = {};
-  for (const f of ["human", "elf", "orc"]) for (const t of ["warrior", "archer", "spearman", "brute", "king"]) out[`${f}_${t}`] = makeUnitTex(f, t);
   return out;
+}
+// ATLAS: alle 15 Zellen (3 Fraktionen x 5 Typen) auf EINE TextureSource backen -> ParticleContainer
+// kann ALLE Units in EINEM Draw-Call zeichnen. frame[fac*5+type] -> Sub-Texture. frameId = fac*5+ty.
+const FAC_ORDER = ["human", "elf", "orc"] as const;
+const TY_ORDER = ["warrior", "archer", "spearman", "brute", "king"] as const;
+function buildUnitAtlas(): Texture[] {
+  const COLS = FAC_ORDER.length * TY_ORDER.length, AW = COLS * UW;
+  const cv = document.createElement("canvas"); cv.width = AW; cv.height = UH;
+  const ctx = cv.getContext("2d")!; ctx.imageSmoothingEnabled = false;
+  const img = ctx.createImageData(AW, UH), d = img.data;
+  let col = 0;
+  for (const f of FAC_ORDER) for (const t of TY_ORDER) {
+    const cell = renderUnitCell(f, t), ox = col * UW;
+    for (let y = 0; y < UH; y++) for (let x = 0; x < UW; x++) {
+      const c = cell[y * UW + x]; if (c === 0) continue;
+      const o = (y * AW + ox + x) * 4; d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = 255;
+    }
+    col++;
+  }
+  ctx.putImageData(img, 0, 0);
+  const src = Texture.from(cv).source; src.scaleMode = "nearest";
+  const frames: Texture[] = [];
+  for (let i = 0; i < COLS; i++) frames.push(new Texture({ source: src, frame: new Rectangle(i * UW, 0, UW, UH) }));
+  return frames; // index = fac*5 + type
 }
 
 async function main(): Promise<void> {
@@ -578,88 +593,137 @@ async function main(): Promise<void> {
     }
   }
 
-  // GAMEPLAY: Horden-Kampf mit Unit-TYPEN. Jede Unit: Fraktion (0-2) + Typ (0-4) mit eigenem
-  // HP/Angriff/Reichweite/Tempo/Cooldown. Verhalten: Gegner suchen -> ran bzw. Fernkampf -> Schaden ->
-  // sterben. Typen: 0 Krieger 1 Bogenschütze(Fern,Pfeile) 2 Speer(Reichweite) 3 Brute(zäh,langsam) 4 König.
-  interface U { gx: number; gy: number; spr: Sprite; bk: number; f: number; ty: number; hp: number; maxHp: number; atk: number; range: number; cd: number; cdMax: number; speed: number; flash: number; tint: number; king: boolean; dead: boolean; target: U | null; banner: Sprite | null; hpbar: Graphics | null; }
-  let units: U[] = [];
+  // ===== MAX-UNIT-ENGINE: SoA-Sim + ParticleContainer (1 Draw-Call) + O(n) Counting-Sort =====
+  // Statt Per-Unit-Sprite in 1100 Buckets (pro Frame addChild-Reparenting + Per-König-Graphics.clear):
+  // flache Typed-Arrays (kein Objekt/GC pro Unit) + EIN ParticleContainer mit gepoolten Draw-Slots
+  // (Array NIE umsortiert; Tiefe = WELCHE Unit in Slot k geschrieben wird). Ziel: Zehntausende Units bei
+  // hoher FPS -> Spiel wird auf große Armeen gebalanced. Voller Plan: docs/ENGINE-MAXUNITS-PLAN.md.
+  // Typen: 0 Krieger 1 Bogenschütze(Fern,Pfeile) 2 Speer(Reichweite) 3 Brute(zäh,langsam) 4 König.
   const T = [
     { hp: 50, atk: 6, range: 5, cd: 26, speed: 0.22, scale: 1.5 },    // 0 Krieger (Nahkampf)
-    { hp: 30, atk: 8, range: 64, cd: 50, speed: 0.20, scale: 1.45 },  // 1 Bogenschütze (Fernkampf/Pfeile)
+    { hp: 30, atk: 8, range: 32, cd: 50, speed: 0.20, scale: 1.45 },  // 1 Bogenschütze (Fernkampf/Pfeile; an 5x5-Suchradius angeglichen)
     { hp: 58, atk: 8, range: 11, cd: 32, speed: 0.20, scale: 1.6 },   // 2 Speerträger (Reichweite)
     { hp: 135, atk: 16, range: 6, cd: 44, speed: 0.13, scale: 2.1 },  // 3 Brute (zäh, langsam)
     { hp: 340, atk: 20, range: 6, cd: 30, speed: 0.14, scale: 2.7 },  // 4 König (Anführer)
   ];
-  const FAC = ["human", "elf", "orc"] as const, TYNAME = ["warrior", "archer", "spearman", "brute", "king"] as const;
-  const UNIT_TEX = buildUnitTextures();                                  // 15 EIGENE Pixel-Art-Texturen (Fraktion x Typ)
-  const TYPE_TINT = [0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff];  // Fraktionsfarbe in die Textur gebacken -> kein Tint
-  const unitTex = (f: number, ty: number): Texture => UNIT_TEX[`${FAC[f]}_${TYNAME[ty]}`];
-  function spawn(gx: number, gy: number, f: number, ty: number): void {
-    const st = T[ty], tint = TYPE_TINT[ty];
-    const spr = new Sprite(unitTex(f, ty)); spr.anchor.set(0.5, 0.82); spr.scale.set(st.scale); spr.tint = tint;
-    const p = worldToIso(gx, gy), sy = p.y - elevLift(sampleH(gx, gy)); spr.x = p.x; spr.y = sy;
-    const bk = bucketOf(sy); buckets[bk].addChild(spr);
-    units.push({ gx, gy, spr, bk, f, ty, hp: st.hp, maxHp: st.hp, atk: st.atk, range: st.range, cd: Math.random() * st.cd, cdMax: st.cd, speed: st.speed, flash: 0, tint, king: ty === 4, dead: false, target: null, banner: null, hpbar: null });
-  }
-  // Spatial-Grid (verkettete Liste pro Zelle) -> schnelle Gegnersuche bei 8000+ Units (kein O(n^2)).
-  const CELL = 18, GW = Math.ceil(MAP / CELL) + 1;
-  const gridHead = new Int32Array(GW * GW), gridNext = new Int32Array(PLAYERS * (HORDE + 1)); // auf Max dimensioniert (Respawn)
-  const cellIdx = (gx: number, gy: number): number => Math.max(0, Math.min(GW - 1, (gy / CELL) | 0)) * GW + Math.max(0, Math.min(GW - 1, (gx / CELL) | 0));
-  // Todes-Effekt: fraktionsfarbener Staub-Poof, wenn eine Unit fällt -> Schlachtfeld "raucht".
+  const T_hp = Float32Array.from(T, (s) => s.hp), T_atk = Float32Array.from(T, (s) => s.atk);
+  const T_range = Float32Array.from(T, (s) => s.range), T_cd = Float32Array.from(T, (s) => s.cd);
+  const T_speed = Float32Array.from(T, (s) => s.speed), T_scale = Float32Array.from(T, (s) => s.scale);
   const FACTION_COL = [0x9fb8ff, 0x8fe39a, 0xe2795a]; // Menschen blau · Elfen grün · Orks rot
-  const bannerTex = FACTION_COL.map((c) => makeBannerTexture(app, c)); // Fraktions-Banner an Königen
+
+  // Unit-Anzahl per ?units=N skalierbar (Benchmark) — Default = 16 Horden wie bisher.
+  const reqUnits = Math.max(PLAYERS * 4, parseInt(params.get("units") ?? "", 10) || PLAYERS * (HORDE + 1));
+  const CAP = reqUnits + 64;                                            // SoA-Kapazität inkl. Headroom
+  // — SoA-Felder (Index i = Entity-ID). Kein Objekt-Pointer mehr (target = Int32-ID), kein GC. —
+  const ex = new Float32Array(CAP), ey = new Float32Array(CAP);         // Welt gx/gy
+  const screenX = new Float32Array(CAP), footY = new Float32Array(CAP); // iso-Render-Pos (footY = Sort-Key)
+  const ehp = new Float32Array(CAP), emaxhp = new Float32Array(CAP), ecd = new Float32Array(CAP), eflash = new Float32Array(CAP);
+  const efac = new Uint8Array(CAP), etype = new Uint8Array(CAP), eking = new Uint8Array(CAP), eranged = new Uint8Array(CAP), ealive = new Uint8Array(CAP);
+  const etarget = new Int32Array(CAP);
+  let nEnt = 0;                                                         // höchster je belegter Index +1
+  const freeStack = new Int32Array(CAP); let freeTop = 0;               // O(1) Tod/Spawn (keine .filter-Kompaktierung)
+
+  // ATLAS-Frames + ParticleContainer-Pool. dynamicProperties: position(x,y) + vertex(scale/anchor) +
+  // uvs(welches Frame) + color(tint/alpha) ändern sich pro Slot/Frame (Slot-Inhalt = jeweils andere Unit).
+  const FRAMES = buildUnitAtlas();
+  const frameOf = (f: number, ty: number): number => f * 5 + ty;
+  const unitsPC = new ParticleContainer({ dynamicProperties: { position: true, vertex: true, uvs: true, color: true, rotation: false } });
+  unitsPC.eventMode = "none"; world.addChild(unitsPC);
+  const pool: Particle[] = new Array(CAP);
+  for (let k = 0; k < CAP; k++) { const p = new Particle({ texture: FRAMES[0], anchorX: 0.5, anchorY: 0.82 }); p.alpha = 0; pool[k] = p; unitsPC.addParticle(p); }
+
+  // FX-Layer (Poofs/Pfeile) ÜBER den Units; Banner/HP-Balken (≤16 Könige) ganz oben.
+  const fxLayer = new Container(); fxLayer.eventMode = "none"; world.addChild(fxLayer);
+  const arrowsLayer = new Container(); arrowsLayer.eventMode = "none"; world.addChild(arrowsLayer);
+  const bannersLayer = new Container(); bannersLayer.eventMode = "none"; world.addChild(bannersLayer);
+
+  // Spatial-Grid (verkettete Liste pro Zelle, flache Typed-Arrays) -> O(n) Gegnersuche/Separation.
+  const CELL = 18, GW = Math.ceil(MAP / CELL) + 1;
+  const gridHead = new Int32Array(GW * GW), gridNext = new Int32Array(CAP);
+  const clampCell = (v: number): number => { const c = (v / CELL) | 0; return c < 0 ? 0 : c >= GW ? GW - 1 : c; };
+
+  const bannerTex = FACTION_COL.map((c) => makeBannerTexture(app, c));  // Fraktions-Banner an Königen
+  const puffTex = makePuffTexture(app);
   interface Puff { spr: Sprite; life: number; }
   const puffs: Puff[] = [];
-  const puffTex = makePuffTexture(app);
-  const addPuff = (gx: number, gy: number, tint: number): void => {
-    const spr = new Sprite(puffTex); spr.anchor.set(0.5); spr.tint = tint; spr.scale.set(0.5);
+  const addPuff = (gx: number, gy: number, tint: number, sc = 0.5): void => {
+    const spr = new Sprite(puffTex); spr.anchor.set(0.5); spr.tint = tint; spr.scale.set(sc);
     const p = worldToIso(gx, gy); spr.x = p.x; spr.y = p.y - elevLift(sampleH(gx, gy)) - 6;
-    buckets[NB - 1].addChild(spr); puffs.push({ spr, life: 1 });
+    fxLayer.addChild(spr); puffs.push({ spr, life: 1 });
   };
-  const kill = (v: U): void => { v.dead = true; addPuff(v.gx, v.gy, FACTION_COL[v.f]); v.spr.destroy(); if (v.banner) { v.banner.destroy(); v.banner = null; } if (v.hpbar) { v.hpbar.destroy(); v.hpbar = null; } };
-  const findEnemy = (u: U): U | null => {
-    const cx = Math.max(0, Math.min(GW - 1, (u.gx / CELL) | 0)), cy = Math.max(0, Math.min(GW - 1, (u.gy / CELL) | 0));
-    let best: U | null = null, bestD = 1e9;
+  const spawnE = (gx: number, gy: number, f: number, ty: number): number => {
+    const i = freeTop > 0 ? freeStack[--freeTop] : nEnt++;
+    ex[i] = gx; ey[i] = gy; ehp[i] = T_hp[ty]; emaxhp[i] = T_hp[ty]; ecd[i] = Math.random() * T_cd[ty]; eflash[i] = 0;
+    efac[i] = f; etype[i] = ty; eking[i] = ty === 4 ? 1 : 0; eranged[i] = T_range[ty] > 20 ? 1 : 0; ealive[i] = 1; etarget[i] = -1;
+    const p = worldToIso(gx, gy); screenX[i] = p.x; footY[i] = p.y - elevLift(sampleH(gx, gy));
+    return i;
+  };
+  const killE = (i: number): void => { if (!ealive[i]) return; ealive[i] = 0; etarget[i] = -1; addPuff(ex[i], ey[i], FACTION_COL[efac[i]]); freeStack[freeTop++] = i; };
+  const findEnemy = (i: number): number => {
+    const cx = clampCell(ex[i]), cy = clampCell(ey[i]), uf = efac[i];
+    let best = -1, bestD = 1e9;
     for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
       const nx = cx + dx, ny = cy + dy; if (nx < 0 || ny < 0 || nx >= GW || ny >= GW) continue;
       for (let j = gridHead[ny * GW + nx]; j !== -1; j = gridNext[j]) {
-        const v = units[j]; if (v.dead || v.f === u.f) continue;
-        const ddx = v.gx - u.gx, ddy = v.gy - u.gy, d = ddx * ddx + ddy * ddy;
-        if (d < bestD) { bestD = d; best = v; }
+        if (!ealive[j] || efac[j] === uf) continue;
+        const ddx = ex[j] - ex[i], ddy = ey[j] - ey[i], d = ddx * ddx + ddy * ddy;
+        if (d < bestD) { bestD = d; best = j; }
       }
     }
     return best;
   };
-  // BATTLE-ROYALE-STURMZONE: sicherer Kreis schrumpft in Phasen; außerhalb Dauerschaden -> Units
-  // fliehen rein, Nachzügler sterben -> erzwingt den Zusammenstoß (kein Minuten-Warten).
+  // KÖNIG-FX: Banner + HP-Balken als gepoolte Sprites (kein Per-Frame Graphics.clear mehr).
+  interface KingFX { i: number; banner: Sprite; bg: Sprite; fill: Sprite; }
+  const kingFX: KingFX[] = [];
+  const addKingFX = (i: number, f: number): void => {
+    const banner = new Sprite(bannerTex[f]); banner.anchor.set(0.12, 1); banner.scale.set(1.4); bannersLayer.addChild(banner);
+    const bg = new Sprite(Texture.WHITE); bg.anchor.set(0, 0.5); bg.tint = 0x101418; bg.width = 22; bg.height = 4; bannersLayer.addChild(bg);
+    const fill = new Sprite(Texture.WHITE); fill.anchor.set(0, 0.5); fill.height = 4; bannersLayer.addChild(fill);
+    kingFX.push({ i, banner, bg, fill });
+  };
+  // BATTLE-ROYALE-STURMZONE: sicherer Kreis schrumpft in Phasen; außerhalb Dauerschaden.
   let zoneX = MAP / 2, zoneY = MAP / 2, zoneR = 320, zoneTarget = 320, zoneTimer = 0;
-  const zoneG = new Graphics(); zoneG.eventMode = "none"; world.addChild(zoneG); // über Terrain+Units
+  const zoneG = new Graphics(); zoneG.eventMode = "none"; world.addChild(zoneG); // ganz oben
   const drawZone = (): void => {
     const pts: number[] = [];
     for (let a = 0; a <= 72; a++) { const th = (a / 72) * Math.PI * 2; const p = worldToIso(zoneX + Math.cos(th) * zoneR, zoneY + Math.sin(th) * zoneR); pts.push(p.x, p.y); }
     zoneG.clear().poly(pts).stroke({ color: 0x8af0ff, width: 16, alpha: 0.55 }).poly(pts).stroke({ color: 0xffffff, width: 5, alpha: 0.9 });
   };
   drawZone();
-  // FERNKAMPF-PROJEKTILE: Bogenschützen feuern Pfeile, die zum Ziel fliegen und beim Einschlag Schaden machen.
-  interface Proj { gx: number; gy: number; tgt: U; dmg: number; spr: Sprite; }
-  const projs: Proj[] = [];
+  // BALLISTISCHE PFEILE (Feel aus dem Original: Bogen-Wurf mit z-Höhe+Schwerkraft, dreht zur Flugrichtung,
+  // Staub beim Einschlag). gx/gy homen aufs Ziel, z = Sinus-Bogen über die Flugdauer. tgt = Entity-ID.
+  interface Arrow { sx: number; sy: number; tx: number; ty: number; gx: number; gy: number; tgt: number; dmg: number; age: number; T: number; apex: number; spr: Sprite; psx: number; psy: number; }
+  const arrows: Arrow[] = [];
+  const ARROW_CAP = 1600;                                               // gleichzeitige Pfeile gedeckelt (Scale)
   const arrowTex = makeArrowTexture(app);
-  const fireArrow = (u: U, tg: U): void => {
-    const spr = new Sprite(arrowTex); spr.anchor.set(0.5); buckets[NB - 1].addChild(spr);
-    projs.push({ gx: u.gx, gy: u.gy, tgt: tg, dmg: u.atk, spr });
+  const fireArrow = (i: number, tgt: number): void => {
+    if (arrows.length >= ARROW_CAP) return;
+    const dx = ex[tgt] - ex[i], dy = ey[tgt] - ey[i], d = Math.hypot(dx, dy) || 1;
+    const spr = new Sprite(arrowTex); spr.anchor.set(0.5); arrowsLayer.addChild(spr);
+    arrows.push({ sx: ex[i], sy: ey[i], tx: ex[tgt], ty: ey[tgt], gx: ex[i], gy: ey[i], tgt, dmg: T_atk[etype[i]], age: 0, T: Math.max(0.28, d * 0.02 + 0.12), apex: Math.min(60, 12 + d * 1.1), spr, psx: 0, psy: 0 });
   };
-  // RUNDE: 16 Horden frisch spawnen + Sturm zurücksetzen. Wird bei Sieg neu aufgerufen -> Dauerbetrieb.
+  // RUNDE: PLAYERS Horden frisch spawnen (Gesamtzahl = reqUnits) + Sturm zurücksetzen.
   const newRound = (): void => {
-    for (const u of units) if (!u.dead) { u.spr.destroy(); if (u.banner) u.banner.destroy(); if (u.hpbar) u.hpbar.destroy(); }
-    for (const pr of projs) pr.spr.destroy();
-    units = []; projs.length = 0;
+    for (const kf of kingFX) { kf.banner.destroy(); kf.bg.destroy(); kf.fill.destroy(); }
+    kingFX.length = 0;
+    for (const a of arrows) a.spr.destroy(); arrows.length = 0;
+    nEnt = 0; freeTop = 0; ealive.fill(0);
+    for (const p of pool) p.alpha = 0; lastDrawn = 0;
     zoneR = 320; zoneTarget = 320; zoneTimer = 0; drawZone();
+    const perHorde = Math.max(1, Math.floor((reqUnits - PLAYERS) / PLAYERS));
+    const spreadR = Math.min(110, Math.max(8, Math.sqrt(perHorde) * 1.5)); // Streuung skaliert mit Hordengröße -> keine 1000+-Units-pro-Zelle (findEnemy/Separation bezahlbar)
     for (let pi = 0; pi < PLAYERS; pi++) {
       const f = pi % 3, c = placeOnLand();
-      spawn(c.gx, c.gy, f, 4); // König
-      for (let i = 0; i < HORDE; i++) { const r = Math.random(); const ty = r < 0.55 ? 0 : r < 0.73 ? 1 : r < 0.88 ? 2 : 3; spawn(c.gx + (Math.random() - 0.5) * 14, c.gy + (Math.random() - 0.5) * 14, f, ty); }
+      addKingFX(spawnE(c.gx, c.gy, f, 4), f); // König
+      for (let i = 0; i < perHorde; i++) {
+        const r = Math.random(), ty = r < 0.55 ? 0 : r < 0.73 ? 1 : r < 0.88 ? 2 : 3;
+        let gx = c.gx + (Math.random() - 0.5) * 2 * spreadR, gy = c.gy + (Math.random() - 0.5) * 2 * spreadR;
+        if (!passable(gx, gy)) { gx = c.gx; gy = c.gy; }                  // nicht ins Wasser/Steilhang spawnen
+        spawnE(gx, gy, f, ty);
+      }
     }
   };
+  let lastDrawn = 0;
   newRound();
 
   // --- PIXELATE (Pixel-Perfect-Camera): Welt in eine gesnappte LOW-RES-SCREEN-RT rendern, dann
@@ -697,79 +761,106 @@ async function main(): Promise<void> {
     world.x = mx - wx * ns; world.y = my - wy * ns;
   }, { passive: false });
 
-  let acc = 0, time = 0, frame = 0, victoryTimer = 0;
+  // O(n) COUNTING-SORT auf quantisierter foot-screen-Y (verallgemeinert das alte Bucket-Schema):
+  // Tiefe = welche Unit in welchen festen Draw-Slot geschrieben wird (Slot-Array nie umsortiert).
+  const KSORT = 2048, invSpan = KSORT / Y_SPAN;
+  const sortCnt = new Int32Array(KSORT + 1), sortOrder = new Int32Array(CAP);
+  const renderUnits = (): number => {
+    sortCnt.fill(0);
+    let n = 0;
+    for (let i = 0; i < nEnt; i++) { if (!ealive[i]) continue; let b = ((footY[i] - Y_MIN) * invSpan) | 0; b = b < 0 ? 0 : b >= KSORT ? KSORT - 1 : b; sortCnt[b]++; n++; }
+    let a = 0; for (let b = 0; b < KSORT; b++) { const c = sortCnt[b]; sortCnt[b] = a; a += c; }
+    for (let i = 0; i < nEnt; i++) { if (!ealive[i]) continue; let b = ((footY[i] - Y_MIN) * invSpan) | 0; b = b < 0 ? 0 : b >= KSORT ? KSORT - 1 : b; sortOrder[sortCnt[b]++] = i; }
+    for (let k = 0; k < n; k++) {
+      const u = sortOrder[k], p = pool[k], sc = T_scale[etype[u]];
+      p.x = screenX[u]; p.y = footY[u]; p.scaleX = sc; p.scaleY = sc;
+      p.texture = FRAMES[frameOf(efac[u], etype[u])];
+      p.tint = eflash[u] > 0 ? 0xff5555 : 0xffffff; p.alpha = 1;
+    }
+    for (let k = n; k < lastDrawn; k++) pool[k].alpha = 0; // pensionierte Slots einmalig parken
+    lastDrawn = n;
+    return n;
+  };
+
+  // Benchmark: + / - spawnt/entfernt 1000 Units live (Engine-Stresstest).
+  const aliveKings = (): number[] => kingFX.filter((kf) => ealive[kf.i]).map((kf) => kf.i);
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "+" || e.key === "=") { const ks = aliveKings(); if (!ks.length) return;
+      for (let n = 0; n < 1000 && (freeTop > 0 || nEnt < CAP); n++) { const ki = ks[(Math.random() * ks.length) | 0]; const r = Math.random(); const ty = r < 0.55 ? 0 : r < 0.73 ? 1 : r < 0.88 ? 2 : 3; spawnE(ex[ki] + (Math.random() - 0.5) * 30, ey[ki] + (Math.random() - 0.5) * 30, efac[ki], ty); } }
+    else if (e.key === "-" || e.key === "_") { let removed = 0; for (let i = 0; i < nEnt && removed < 1000; i++) if (ealive[i] && !eking[i]) { killE(i); removed++; } }
+  });
+
+  let acc = 0, time = 0, frame = 0, victoryTimer = 0, simMs = 0, sortMs = 0;
   app.ticker.add((t) => {
-    const dt = t.deltaTime;
-    time += t.deltaMS / 1000; frame++;
+    const dt = Math.min(t.deltaTime, 4); // Frame-Spike-Clamp (kein Tunneln nach Hängern)
+    const dms = Math.min(t.deltaMS, 50); // Sekundentakt ebenfalls clampen (langer Worldgen-Build -> kein Sturm-Sprung)
+    time += dms / 1000; frame++;
     terrainShader.resources.terr.uniforms.uTime = time;
+    const tSim = performance.now();
     // 1) Spatial-Grid neu aufbauen (nur lebende Units)
     gridHead.fill(-1);
-    for (let i = 0; i < units.length; i++) { const u = units[i]; if (u.dead) continue; const c = cellIdx(u.gx, u.gy); gridNext[i] = gridHead[c]; gridHead[c] = i; }
+    for (let i = 0; i < nEnt; i++) { if (!ealive[i]) continue; const c = clampCell(ey[i]) * GW + clampCell(ex[i]); gridNext[i] = gridHead[c]; gridHead[c] = i; }
     // 1b) Sturmzone in Phasen schrumpfen
-    zoneTimer += t.deltaMS / 1000;
+    zoneTimer += dms / 1000;
     if (zoneTimer > 14 && zoneTarget > 60) { zoneTimer = 0; zoneTarget *= 0.66; }
     if (Math.abs(zoneR - zoneTarget) > 0.3) { zoneR += (zoneTarget - zoneR) * Math.min(1, 0.012 * dt); drawZone(); }
     const zr2 = zoneR * zoneR;
-    // 2) Kampf + Bewegung
-    for (let i = 0; i < units.length; i++) {
-      const u = units[i]; if (u.dead) continue;
-      if (!u.target || u.target.dead || i % 16 === frame % 16) { const e = findEnemy(u); if (e) u.target = e; } // Ziel suchen/auffrischen (gestaffelt)
-      const sp = u.speed;
+    // 2) Kampf + Bewegung (SoA, Index i)
+    for (let i = 0; i < nEnt; i++) {
+      if (!ealive[i]) continue;
+      const ty = etype[i], sp = T_speed[ty];
+      let tg = etarget[i];
+      if (tg < 0 || !ealive[tg] || i % 16 === frame % 16) { const e = findEnemy(i); if (e >= 0) { etarget[i] = e; tg = e; } else if (tg >= 0 && !ealive[tg]) { etarget[i] = -1; tg = -1; } }
       let mvx = 0, mvy = 0;
-      const tg = u.target;
-      if (tg && !tg.dead) {
-        const dx = tg.gx - u.gx, dy = tg.gy - u.gy, d = Math.hypot(dx, dy) || 1;
-        if (u.range > 20 && d < 16) { mvx = -dx / d * sp; mvy = -dy / d * sp; }          // Bogenschütze kitet (Abstand halten)
-        else if (d <= u.range) {
-          u.cd -= dt;
-          if (u.cd <= 0) { u.cd = u.cdMax; if (u.range > 20) fireArrow(u, tg); else { tg.hp -= u.atk; tg.flash = 6; if (tg.hp <= 0) kill(tg); } } // Fern: Pfeil, sonst Nahkampf
-        } else { mvx = dx / d * sp; mvy = dy / d * sp; }                                 // hinlaufen
-      } else { const dx = MAP / 2 - u.gx, dy = MAP / 2 - u.gy, d = Math.hypot(dx, dy) || 1; mvx = dx / d * sp * 0.6; mvy = dy / d * sp * 0.6; } // kein Gegner -> zur Mitte
-      // Sturm: außerhalb der sicheren Zone -> rein fliehen (überschreibt Kampf) + Dauerschaden
-      const odx = zoneX - u.gx, ody = zoneY - u.gy, od2 = odx * odx + ody * ody;
+      if (tg >= 0 && ealive[tg]) {
+        const dx = ex[tg] - ex[i], dy = ey[tg] - ey[i], d = Math.sqrt(dx * dx + dy * dy) || 1;
+        if (eranged[i] && d < 16) { mvx = -dx / d * sp; mvy = -dy / d * sp; }            // Bogenschütze kitet
+        else if (d <= T_range[ty]) {
+          ecd[i] -= dt;
+          if (ecd[i] <= 0) { ecd[i] = T_cd[ty]; if (eranged[i]) fireArrow(i, tg); else { ehp[tg] -= T_atk[ty]; eflash[tg] = 6; if (ehp[tg] <= 0) killE(tg); } }
+        } else { mvx = dx / d * sp; mvy = dy / d * sp; }                                  // hinlaufen
+      } else { const dx = MAP / 2 - ex[i], dy = MAP / 2 - ey[i], d = Math.sqrt(dx * dx + dy * dy) || 1; mvx = dx / d * sp * 0.6; mvy = dy / d * sp * 0.6; }
+      // Sturm: außerhalb der Zone -> rein fliehen (überschreibt Kampf) + Dauerschaden
+      const odx = zoneX - ex[i], ody = zoneY - ey[i], od2 = odx * odx + ody * ody;
       if (od2 > zr2) {
         const od = Math.sqrt(od2) || 1; mvx = odx / od * sp; mvy = ody / od * sp;
-        if (frame % 3 === 0) { u.hp -= 7; u.flash = 4; if (u.hp <= 0) { kill(u); continue; } }
+        if (frame % 3 === 0) { ehp[i] -= 7; eflash[i] = 4; if (ehp[i] <= 0) { killE(i); continue; } }
       }
-      // Separation: Abstoßung von sehr nahen Units -> Blob/Front statt Punkt-Pile (auf 8 Nachbarn gedeckelt)
-      { const cx = Math.max(0, Math.min(GW - 1, (u.gx / CELL) | 0)), cy = Math.max(0, Math.min(GW - 1, (u.gy / CELL) | 0)); let px = 0, py = 0, n = 0;
+      // Separation: Abstoßung naher Units -> Front statt Punkt-Pile (auf 8 Nachbarn gedeckelt)
+      { const cx = clampCell(ex[i]), cy = clampCell(ey[i]); let px = 0, py = 0, n = 0;
         for (let dy = -1; dy <= 1 && n < 8; dy++) for (let dx = -1; dx <= 1 && n < 8; dx++) {
           const ng = cx + dx, mg = cy + dy; if (ng < 0 || mg < 0 || ng >= GW || mg >= GW) continue;
           for (let j = gridHead[mg * GW + ng]; j !== -1 && n < 8; j = gridNext[j]) {
-            const v = units[j]; if (v === u || v.dead) continue;
-            const ax = u.gx - v.gx, ay = u.gy - v.gy, a2 = ax * ax + ay * ay;
-            if (a2 > 0.01 && a2 < 6.25) { const a = Math.sqrt(a2); px += ax / a; py += ay / a; n++; }
+            if (j === i || !ealive[j]) continue;
+            const axx = ex[i] - ex[j], ayy = ey[i] - ey[j], a2 = axx * axx + ayy * ayy;
+            if (a2 > 0.01 && a2 < 6.25) { const aa = Math.sqrt(a2); px += axx / aa; py += ayy / aa; n++; }
           }
         }
         if (n > 0) { mvx += px / n * sp * 0.7; mvy += py / n * sp * 0.7; } }
-      if (mvx !== 0 || mvy !== 0) { const nx = u.gx + mvx * dt, ny = u.gy + mvy * dt; if (passable(nx, u.gy)) u.gx = nx; if (passable(u.gx, ny)) u.gy = ny; }
-      if (u.flash > 0) { u.flash -= dt; u.spr.tint = 0xff5555; } else u.spr.tint = u.tint; // Treffer-Blitz, sonst Typ-Tönung
-      const p = worldToIso(u.gx, u.gy), sy = p.y - elevLift(sampleH(u.gx, u.gy));
-      u.spr.x = p.x; u.spr.y = sy;
-      if (u.king) { // Fraktions-Banner + HP-Balken über dem König (Identität + Lesbarkeit)
-        if (!u.banner) { u.banner = new Sprite(bannerTex[u.f]); u.banner.anchor.set(0.12, 1); u.banner.scale.set(1.4); buckets[NB - 1].addChild(u.banner); }
-        u.banner.x = p.x; u.banner.y = sy - 50;
-        if (!u.hpbar) { u.hpbar = new Graphics(); u.hpbar.eventMode = "none"; buckets[NB - 1].addChild(u.hpbar); }
-        const hpf = Math.max(0, u.hp / u.maxHp), bw = 20;
-        u.hpbar.clear().rect(-bw / 2, 0, bw, 3).fill(0x101418).rect(-bw / 2, 0, bw * hpf, 3).fill(hpf > 0.5 ? 0x6fe06f : hpf > 0.25 ? 0xe0c040 : 0xe05050);
-        u.hpbar.x = p.x; u.hpbar.y = sy - 44;
+      if (mvx !== 0 || mvy !== 0) { const nx = ex[i] + mvx * dt, ny = ey[i] + mvy * dt; if (passable(nx, ey[i])) ex[i] = nx; if (passable(ex[i], ny)) ey[i] = ny; }
+      if (eflash[i] > 0) eflash[i] -= dt;
+      const p = worldToIso(ex[i], ey[i]); screenX[i] = p.x; footY[i] = p.y - elevLift(sampleH(ex[i], ey[i]));
+    }
+    simMs = performance.now() - tSim;
+    // 3) Ballistische Pfeile: gx/gy homen aufs Ziel, z = Sinus-Bogen; dreht zur Flugrichtung; Staub beim Einschlag.
+    for (let i = arrows.length - 1; i >= 0; i--) {
+      const ar = arrows[i];
+      ar.age += dms / 1000;
+      if (ealive[ar.tgt]) { ar.tx = ex[ar.tgt]; ar.ty = ey[ar.tgt]; }                     // homing solange Ziel lebt
+      const prog = Math.min(1, ar.age / ar.T);
+      ar.gx = ar.sx + (ar.tx - ar.sx) * prog; ar.gy = ar.sy + (ar.ty - ar.sy) * prog;
+      const z = Math.sin(prog * Math.PI) * ar.apex;
+      const p = worldToIso(ar.gx, ar.gy), sy = p.y - elevLift(sampleH(ar.gx, ar.gy)) - z;
+      ar.spr.x = p.x; ar.spr.y = sy;
+      if (ar.psx !== 0 || ar.psy !== 0) ar.spr.rotation = Math.atan2(sy - ar.psy, p.x - ar.psx);
+      ar.psx = p.x; ar.psy = sy;
+      if (prog >= 1) {
+        if (ealive[ar.tgt]) { ehp[ar.tgt] -= ar.dmg; eflash[ar.tgt] = 6; if (ehp[ar.tgt] <= 0) killE(ar.tgt); }
+        addPuff(ar.gx, ar.gy, 0xffb050, 0.35);                                            // oranger Treffer-Funke
+        ar.spr.destroy(); arrows.splice(i, 1);
       }
-      const bk = bucketOf(sy);
-      if (bk !== u.bk) { buckets[bk].addChild(u.spr); u.bk = bk; } // Eimerwechsel = neue Tiefe (global)
     }
-    // 3) Tote periodisch aus dem Array entfernen (Sprites sind schon zerstört)
-    if (frame % 30 === 0) { for (let i = 0; i < units.length; i++) if (units[i].dead) { units = units.filter((u) => !u.dead); break; } }
-    // 3b) Pfeile fliegen zum Ziel + Einschlag
-    for (let i = projs.length - 1; i >= 0; i--) {
-      const pr = projs[i];
-      if (pr.tgt.dead) { pr.spr.destroy(); projs.splice(i, 1); continue; }
-      const dx = pr.tgt.gx - pr.gx, dy = pr.tgt.gy - pr.gy, d = Math.hypot(dx, dy) || 1, step = 2.2 * dt;
-      if (d <= step + 2) { pr.tgt.hp -= pr.dmg; pr.tgt.flash = 6; if (pr.tgt.hp <= 0) kill(pr.tgt); pr.spr.destroy(); projs.splice(i, 1); continue; }
-      pr.gx += dx / d * step; pr.gy += dy / d * step;
-      const p = worldToIso(pr.gx, pr.gy), sy = p.y - elevLift(sampleH(pr.gx, pr.gy)) - 7;
-      pr.spr.x = p.x; pr.spr.y = sy; pr.spr.rotation = Math.atan2((dx + dy) * HH, (dx - dy) * HW); // iso-Flugrichtung
-    }
-    // 3c) Todes-Poofs aufsteigen + verblassen
+    // 3c) Todes-Poofs + Loot-Orbs aufsteigen + verblassen
     for (let i = puffs.length - 1; i >= 0; i--) {
       const pf = puffs[i]; pf.life -= 0.045 * dt; pf.spr.alpha = Math.max(0, pf.life) * 0.8;
       pf.spr.scale.set(0.5 + (1 - pf.life) * 0.6); pf.spr.y -= 0.3 * dt;
@@ -779,29 +870,44 @@ async function main(): Promise<void> {
       const o = orbs[i]; o.life -= 0.012 * dt; o.spr.y -= 0.6 * dt; o.spr.alpha = Math.max(0, o.life);
       if (o.life <= 0) { o.spr.destroy(); orbs.splice(i, 1); }
     }
-    // PIXELATE Option A: Welt gesnappt in die Low-Res-RT rendern, dann nur den crispen Buffer zeigen.
+    // 4) RENDER: Counting-Sort + Pool-Slots schreiben (EIN Draw-Call), dann König-Banner/HP-Balken.
+    const tSort = performance.now();
+    const drawn = renderUnits();
+    sortMs = performance.now() - tSort;
+    for (const kf of kingFX) {
+      const i = kf.i, on = ealive[i] === 1;
+      kf.banner.visible = on; kf.bg.visible = on; kf.fill.visible = on;
+      if (!on) continue;
+      kf.banner.x = screenX[i]; kf.banner.y = footY[i] - 50;
+      const hpf = Math.max(0, ehp[i] / emaxhp[i]);
+      kf.bg.x = screenX[i] - 11; kf.bg.y = footY[i] - 44;
+      kf.fill.x = screenX[i] - 11; kf.fill.y = footY[i] - 44; kf.fill.width = 22 * hpf;
+      kf.fill.tint = hpf > 0.5 ? 0x6fe06f : hpf > 0.25 ? 0xe0c040 : 0xe05050;
+    }
+    // PIXELATE (nur ?style=bake): Welt gesnappt in Low-Res-RT, dann crisp hochskalieren (welt-verankert).
     if (pixelateBake && bakeRt && bakeSprite) {
       bakeThrottle = !bakeThrottle;
-      if (bakeThrottle || units.length < 4000) {       // 30-Hz-Throttle bei Last
+      if (bakeThrottle || drawn < 6000) {
         const camX = world.x, camY = world.y, zx = world.scale.x;
-        const snapX = Math.round(camX / PX) * PX, snapY = Math.round(camY / PX) * PX; // Kamera auf Texel-Grid -> kein Schwimmen
+        const snapX = Math.round(camX / PX) * PX, snapY = Math.round(camY / PX) * PX;
         world.renderable = true; bakeSprite.visible = false;
-        world.scale.set(zx / PX); world.x = snapX / PX; world.y = snapY / PX;          // Welt 1/PX in die RT
+        world.scale.set(zx / PX); world.x = snapX / PX; world.y = snapY / PX;
         app.renderer.render({ container: world, target: bakeRt, clear: true });
-        world.scale.set(zx); world.x = camX; world.y = camY;                            // echte Kamera zurück
-        bakeSprite.x = camX - snapX; bakeSprite.y = camY - snapY;                       // Subpixel-glatter Rest-Offset
-        bakeSprite.visible = true; world.renderable = false;                            // Haupt-Pass: nur crispe Pixel-Buffer
+        world.scale.set(zx); world.x = camX; world.y = camY;
+        bakeSprite.x = camX - snapX; bakeSprite.y = camY - snapY;
+        bakeSprite.visible = true; world.renderable = false;
       }
     }
     acc += t.deltaMS;
     if (acc > 250) {
       acc = 0;
-      const cnt = [0, 0, 0]; for (const u of units) if (!u.dead) cnt[u.f]++;
-      const names = ["Menschen", "Elfen", "Orks"];
+      const cnt = [0, 0, 0]; for (let i = 0; i < nEnt; i++) if (ealive[i]) cnt[efac[i]]++;
+      const names = ["Menschen", "Elfen", "Orks"], total = cnt[0] + cnt[1] + cnt[2];
       const remaining = cnt.filter((c) => c > 0).length;
       const win = remaining <= 1 ? (names[cnt.findIndex((c) => c > 0)] ?? "—") : "";
       const status = remaining <= 1 ? ` · SIEG: ${win} · neue Runde…` : "";
-      hud.textContent = `Horde.IO — ${cnt[0] + cnt[1] + cnt[2]} Krieger · ${names.map((n, i) => `${n} ${cnt[i]}`).join(" · ")}${status} · Sturm R${zoneR | 0} · ${app.ticker.FPS.toFixed(0)} FPS`;
+      const frameMs = 1000 / Math.max(1, app.ticker.FPS);
+      hud.textContent = `Horde.IO — ${total} Units (+/- ±1000) · ${app.ticker.FPS.toFixed(0)} FPS · ${frameMs.toFixed(1)}ms (sim ${simMs.toFixed(1)} / sort ${sortMs.toFixed(1)}) · ${names.map((n, i) => `${n} ${cnt[i]}`).join(" · ")}${status} · Sturm R${zoneR | 0}`;
       if (remaining <= 1) { victoryTimer += 0.25; if (victoryTimer >= 5) { victoryTimer = 0; newRound(); } } else victoryTimer = 0; // Auto-Neustart 5s nach Sieg
     }
   });
