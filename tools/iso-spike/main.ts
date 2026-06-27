@@ -650,6 +650,7 @@ async function main(): Promise<void> {
   // König-Fähigkeiten (Sekunden): Dash = Burst in Laufrichtung (5s CD), Schild = -50% Schaden 5s (10s CD).
   let dashCd = 0, shieldCd = 0, shieldTimer = 0;
   let buffSpeed = 0, buffDmg = 0; // Power-Up-Timer (Sekunden): Tempo ×1.5 / Schaden ×1.5
+  let survT = 0;                  // überlebte Zeit der laufenden Runde (Sekunden) für den End-Screen
   let nEnt = 0;                                                         // höchster je belegter Index +1
   const freeStack = new Int32Array(CAP); let freeTop = 0;               // O(1) Tod/Spawn (keine .filter-Kompaktierung)
 
@@ -1008,7 +1009,7 @@ async function main(): Promise<void> {
       <p class="hint">WASD / Pfeile bewegen · bei deiner Horde bleiben · grüne Seelen einsammeln</p></div>`;
   };
   const showMenu = (): void => { gameState = "menu"; playerActive = false; newRound(); overlay.style.display = "flex"; renderMenu(); };
-  const startGame = (): void => { gameState = "playing"; playerActive = true; newRound(); overlay.style.display = "none"; };
+  const startGame = (): void => { gameState = "playing"; playerActive = true; survT = 0; newRound(); overlay.style.display = "none"; };
   const showOver = (title: string, sub: string): void => {
     if (gameState === "over") return; gameState = "over"; overlay.style.display = "flex";
     overlay.innerHTML = `<div class="panel"><h1>${title}</h1><p>${sub}</p><button class="play" data-on="again">NOCHMAL</button><button data-on="menu" style="margin-top:8px">ZURÜCK ZUM MENÜ</button></div>`;
@@ -1033,8 +1034,8 @@ async function main(): Promise<void> {
       const ksy = (keys.has("s") || keys.has("arrowdown") ? 1 : 0) - (keys.has("w") || keys.has("arrowup") ? 1 : 0);
       const gdx = ksx + ksy, gdy = -ksx + ksy, m = Math.hypot(gdx, gdy);
       if (m > 0) { pInX = gdx / m; pInY = gdy / m; } else { pInX = 0; pInY = 0; } }
-    // Fähigkeits-Cooldowns + Buff-Timer (Echtzeit)
-    { const sdt = dms / 1000; if (dashCd > 0) dashCd = Math.max(0, dashCd - sdt); if (shieldCd > 0) shieldCd = Math.max(0, shieldCd - sdt); if (shieldTimer > 0) shieldTimer = Math.max(0, shieldTimer - sdt); if (buffSpeed > 0) buffSpeed = Math.max(0, buffSpeed - sdt); if (buffDmg > 0) buffDmg = Math.max(0, buffDmg - sdt); }
+    // Fähigkeits-Cooldowns + Buff-Timer + Überlebenszeit (Echtzeit)
+    { const sdt = dms / 1000; if (dashCd > 0) dashCd = Math.max(0, dashCd - sdt); if (shieldCd > 0) shieldCd = Math.max(0, shieldCd - sdt); if (shieldTimer > 0) shieldTimer = Math.max(0, shieldTimer - sdt); if (buffSpeed > 0) buffSpeed = Math.max(0, buffSpeed - sdt); if (buffDmg > 0) buffDmg = Math.max(0, buffDmg - sdt); if (gameState === "playing") survT += sdt; }
     // Fixed-Step-Sim: so viele 30Hz-Ticks wie nötig (max 5 gegen Spiral-of-Death).
     accSim += dms;
     let steps = 0;
@@ -1156,7 +1157,8 @@ async function main(): Promise<void> {
       hud.textContent = `Horde.IO — ${me} · Könige ${kingsAlive}/${PLAYERS} · ${total} Units · WASD · Dash(Space) ${dashS} · Schild(Q) ${shieldS}${buffs} · ${app.ticker.FPS.toFixed(0)} FPS (sim ${simMs.toFixed(1)}/sort ${sortMs.toFixed(1)}) · Sturm R${zoneR | 0}`;
       const roundOver = kingsAlive <= 1;
       if (playerActive && gameState === "playing" && (roundOver || !pAlive)) {
-        showOver(pAlive ? "SIEG!" : "BESIEGT", pAlive ? `Letzter König — Horde ${myHorde}` : `Deine Horde fiel · Könige übrig ${kingsAlive}`);
+        const place = pAlive ? 1 : kingsAlive + 1, tsec = survT | 0;
+        showOver(pAlive ? "SIEG!" : "BESIEGT", `Platz ${place}/${PLAYERS} · Lv${playerLevel} · Horde ${myHorde} · ${(tsec / 60) | 0}:${`${tsec % 60}`.padStart(2, "0")} überlebt`);
       } else if (!playerActive && roundOver) {
         victoryTimer += 0.25; if (victoryTimer >= 5) { victoryTimer = 0; newRound(); } // Menü-Vorschau: Auto-Neustart
       } else victoryTimer = 0;
