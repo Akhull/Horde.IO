@@ -753,6 +753,16 @@ async function main(): Promise<void> {
     zoneG.clear().poly(pts).stroke({ color: 0x8af0ff, width: 16, alpha: 0.55 }).poly(pts).stroke({ color: 0xffffff, width: 5, alpha: 0.9 });
   };
   drawZone();
+  // MINIMAP (Bildschirm-Raum, unten rechts): Sturm-Kreis + König-Punkte -> Übersicht trotz Zoom auf den König.
+  const mini = new Graphics(); mini.eventMode = "none"; app.stage.addChild(mini);
+  const MINI = 170, MINI_PAD = 12;
+  const drawMini = (): void => {
+    mini.clear(); if (!playerActive) return;
+    const ox = app.screen.width - MINI - MINI_PAD, oy = app.screen.height - MINI - MINI_PAD, sc = MINI / MAP;
+    mini.rect(ox, oy, MINI, MINI).fill({ color: 0x0a1422, alpha: 0.72 }).stroke({ color: 0x3a5a86, width: 2 });
+    mini.circle(ox + zoneX * sc, oy + zoneY * sc, zoneR * sc).stroke({ color: 0x8af0ff, width: 1.5, alpha: 0.85 });
+    for (let p = 0; p < PLAYERS; p++) { const k = kingIdx[p]; if (k < 0) continue; const isP = k === playerKing; mini.circle(ox + ex[k] * sc, oy + ey[k] * sc, isP ? 4 : 2.2).fill(isP ? 0xffffff : FACTION_COL[efac[k]]); }
+  };
   // BALLISTISCHE PFEILE (Feel aus dem Original: Bogen-Wurf mit z-Höhe+Schwerkraft, dreht zur Flugrichtung,
   // Staub beim Einschlag). gx/gy homen aufs Ziel, z = Sinus-Bogen über die Flugdauer. tgt = Entity-ID.
   interface Arrow { sx: number; sy: number; tx: number; ty: number; gx: number; gy: number; tgt: number; dmg: number; age: number; T: number; apex: number; spr: Sprite; psx: number; psy: number; }
@@ -1105,6 +1115,7 @@ async function main(): Promise<void> {
       kf.fill.x = screenX[i] - 11; kf.fill.y = footY[i] - 44; kf.fill.width = 22 * hpf;
       kf.fill.tint = hpf > 0.5 ? 0x6fe06f : hpf > 0.25 ? 0xe0c040 : 0xe05050;
     }
+    drawMini();
     // PIXELATE (nur ?style=bake): Welt gesnappt in Low-Res-RT, dann crisp hochskalieren (welt-verankert).
     if (pixelateBake && bakeRt && bakeSprite) {
       bakeThrottle = !bakeThrottle;
