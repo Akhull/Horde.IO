@@ -629,6 +629,11 @@ async function main(): Promise<void> {
   const PLAYER = 0;                      // owner 0 = der Spieler-König
   const kingIdx = new Int32Array(PLAYERS).fill(-1); // Entity-ID des Königs je Owner (-1 = tot) -> Horde folgt IHM
   let playerKing = -1, camInit = false;
+  let playerActive = false;                          // false = Menü-Vorschau-Auto-Battle; true = Spieler steuert
+  let playerFaction = Math.max(0, Math.min(2, parseInt(params.get("fac") ?? "", 10) || 0)); // 0 Mensch 1 Elf 2 Ork
+  let difficulty = 1;                                // 0 Leicht .. 3 Hardcore
+  const DIFF = [{ label: "Leicht", hp: 1.7 }, { label: "Normal", hp: 1.0 }, { label: "Schwer", hp: 0.72 }, { label: "Hardcore", hp: 0.5 }];
+  let gameState: "menu" | "playing" | "over" = "menu";
   let nEnt = 0;                                                         // höchster je belegter Index +1
   const freeStack = new Int32Array(CAP); let freeTop = 0;               // O(1) Tod/Spawn (keine .filter-Kompaktierung)
 
@@ -745,8 +750,9 @@ async function main(): Promise<void> {
     const perHorde = Math.max(1, Math.floor((reqUnits - PLAYERS) / PLAYERS));
     const spreadR = Math.min(110, Math.max(8, Math.sqrt(perHorde) * 1.5)); // Streuung skaliert mit Hordengröße -> keine 1000+-Units-pro-Zelle (findEnemy/Separation bezahlbar)
     for (let pi = 0; pi < PLAYERS; pi++) {
-      const f = pi % 3, c = placeOnLand();                               // owner = pi (eigenes König-Team), Fraktion = pi%3 (Optik)
+      const f = pi === PLAYER ? playerFaction : pi % 3, c = placeOnLand(); // owner = pi (König-Team); Spieler bekommt gewählte Fraktion
       const king = spawnE(c.gx, c.gy, f, 4, pi); kingIdx[pi] = king; addKingFX(king, f);
+      if (pi === PLAYER) { emaxhp[king] *= DIFF[difficulty].hp; ehp[king] = emaxhp[king]; } // Schwierigkeit -> Spieler-König-HP
       for (let i = 0; i < perHorde; i++) {
         const r = Math.random(), ty = r < 0.55 ? 0 : r < 0.73 ? 1 : r < 0.88 ? 2 : 3;
         let gx = c.gx + (Math.random() - 0.5) * 2 * spreadR, gy = c.gy + (Math.random() - 0.5) * 2 * spreadR;
@@ -757,7 +763,6 @@ async function main(): Promise<void> {
     playerKing = kingIdx[PLAYER]; camInit = false;                       // Kamera beim Rundenstart auf Spieler-König snappen
   };
   let lastDrawn = 0;
-  newRound();
 
   // --- PIXELATE (Pixel-Perfect-Camera): Welt in eine gesnappte LOW-RES-SCREEN-RT rendern, dann
   // NEAREST x PX hochskalieren. Block = PX BILDSCHIRM-px -> KONSTANT über alle Zooms (kein Pixelmatsch
@@ -848,7 +853,7 @@ async function main(): Promise<void> {
     // 2) Kampf + Bewegung (SoA, Index i)
     for (let i = 0; i < nEnt; i++) {
       if (!ealive[i]) continue;
-      const ty = etype[i], sp = T_speed[ty], isPlayer = i === playerKing;
+      const ty = etype[i], sp = T_speed[ty], isPlayer = playerActive && i === playerKing;
       let tg = etarget[i];
       if (tg < 0 || !ealive[tg] || i % 32 === simFrame % 32) { const e = findEnemy(i); if (e >= 0) { etarget[i] = e; tg = e; } else if (tg >= 0 && !ealive[tg]) { etarget[i] = -1; tg = -1; } }
       let mvx = 0, mvy = 0;
@@ -906,6 +911,48 @@ async function main(): Promise<void> {
       screenX[i] = sx; footY[i] = fy; evis[i] = 1;
     }
   };
+
+  // ── MENÜ + SPIEL-ZUSTAND (DOM-Overlay über dem Canvas; Vorschau-Auto-Battle läuft dahinter) ──
+  const FAC_NAMES = ["Menschen", "Elfen", "Orks"];
+  const mstyle = document.createElement("style");
+  mstyle.textContent = `
+    #menu{position:fixed;inset:0;z-index:20;display:flex;align-items:center;justify-content:center;font:14px/1.5 monospace;color:#cfe;background:rgba(4,10,20,.5);}
+    #menu .panel{background:rgba(8,16,30,.94);border:2px solid #3a5a86;border-radius:10px;padding:26px 30px;max-width:540px;text-align:center;box-shadow:0 10px 40px rgba(0,0,0,.6);}
+    #menu h1{margin:0 0 6px;font-size:34px;letter-spacing:3px;color:#ffd24a;text-shadow:0 2px 0 #6a4a00;}
+    #menu p{margin:6px 0 16px;color:#9fc;}
+    #menu .row{display:flex;align-items:center;gap:8px;justify-content:center;margin:10px 0;flex-wrap:wrap;}
+    #menu .row>span{width:104px;text-align:right;color:#8ab;}
+    #menu button{font:13px monospace;color:#cfe;background:#16243c;border:1px solid #3a5a86;border-radius:6px;padding:8px 12px;cursor:pointer;}
+    #menu button:hover{background:#1d3052;}
+    #menu button.sel{background:#2c64a8;border-color:#7fb0ff;color:#fff;}
+    #menu .play{display:block;width:100%;margin:18px auto 4px;padding:14px;font-size:18px;background:#2c7a3a;border-color:#5fd07a;color:#fff;letter-spacing:2px;}
+    #menu .play:hover{background:#369048;}
+    #menu .hint{font-size:12px;color:#789;margin-top:12px;}`;
+  document.head.appendChild(mstyle);
+  const overlay = document.createElement("div"); overlay.id = "menu"; document.body.appendChild(overlay);
+  const mbtn = (label: string, on: string, sel: boolean): string => `<button data-on="${on}"${sel ? ' class="sel"' : ""}>${label}</button>`;
+  const renderMenu = (): void => {
+    overlay.innerHTML = `<div class="panel"><h1>HORDE.IO</h1>
+      <p>Steuere deinen König, sammle Seelen, lass deine Horde wachsen — sei der letzte König.</p>
+      <div class="row"><span>Fraktion</span>${FAC_NAMES.map((n, i) => mbtn(n, "fac" + i, playerFaction === i)).join("")}</div>
+      <div class="row"><span>Schwierigkeit</span>${DIFF.map((d, i) => mbtn(d.label, "dif" + i, difficulty === i)).join("")}</div>
+      <button class="play" data-on="play">SPIELEN</button>
+      <p class="hint">WASD / Pfeile bewegen · bei deiner Horde bleiben · grüne Seelen einsammeln</p></div>`;
+  };
+  const showMenu = (): void => { gameState = "menu"; playerActive = false; newRound(); overlay.style.display = "flex"; renderMenu(); };
+  const startGame = (): void => { gameState = "playing"; playerActive = true; newRound(); overlay.style.display = "none"; };
+  const showOver = (title: string, sub: string): void => {
+    if (gameState === "over") return; gameState = "over"; overlay.style.display = "flex";
+    overlay.innerHTML = `<div class="panel"><h1>${title}</h1><p>${sub}</p><button class="play" data-on="again">NOCHMAL</button><button data-on="menu" style="margin-top:8px">ZURÜCK ZUM MENÜ</button></div>`;
+  };
+  overlay.addEventListener("click", (e) => {
+    const on = (e.target as HTMLElement).getAttribute?.("data-on"); if (!on) return;
+    if (on.startsWith("fac")) { playerFaction = +on.slice(3); renderMenu(); }
+    else if (on.startsWith("dif")) { difficulty = +on.slice(3); renderMenu(); }
+    else if (on === "play" || on === "again") startGame();
+    else if (on === "menu") showMenu();
+  });
+  showMenu();
 
   let acc = 0, time = 0, frame = 0, victoryTimer = 0, simMs = 0, sortMs = 0, accSim = 0;
   app.ticker.add((t) => {
@@ -1017,9 +1064,13 @@ async function main(): Promise<void> {
       let total = 0, myHorde = 0; for (let i = 0; i < nEnt; i++) if (ealive[i]) { total++; if (eowner[i] === PLAYER) myHorde++; }
       const pAlive = playerKing >= 0 && ealive[playerKing] === 1;
       const me = pAlive ? `Du: ${Math.max(0, ehp[playerKing]) | 0} HP · Horde ${myHorde}` : `besiegt (Zuschauer)`;
-      const status = kingsAlive <= 1 ? " · SIEG · neue Runde…" : "";
-      hud.textContent = `Horde.IO — ${me} · Könige ${kingsAlive}/${PLAYERS} · ${total} Units · WASD bewegen · ${app.ticker.FPS.toFixed(0)} FPS (sim ${simMs.toFixed(1)}/sort ${sortMs.toFixed(1)}) · Sturm R${zoneR | 0}${status}`;
-      if (kingsAlive <= 1) { victoryTimer += 0.25; if (victoryTimer >= 5) { victoryTimer = 0; newRound(); } } else victoryTimer = 0; // Auto-Neustart 5s nach Sieg
+      hud.textContent = `Horde.IO — ${me} · Könige ${kingsAlive}/${PLAYERS} · ${total} Units · WASD bewegen · ${app.ticker.FPS.toFixed(0)} FPS (sim ${simMs.toFixed(1)}/sort ${sortMs.toFixed(1)}) · Sturm R${zoneR | 0}`;
+      const roundOver = kingsAlive <= 1;
+      if (playerActive && gameState === "playing" && (roundOver || !pAlive)) {
+        showOver(pAlive ? "SIEG!" : "BESIEGT", pAlive ? `Letzter König — Horde ${myHorde}` : `Deine Horde fiel · Könige übrig ${kingsAlive}`);
+      } else if (!playerActive && roundOver) {
+        victoryTimer += 0.25; if (victoryTimer >= 5) { victoryTimer = 0; newRound(); } // Menü-Vorschau: Auto-Neustart
+      } else victoryTimer = 0;
     }
   });
 }
