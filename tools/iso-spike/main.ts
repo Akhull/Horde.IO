@@ -641,6 +641,7 @@ async function main(): Promise<void> {
   const XP_TO_NEXT = [0, 6, 10, 16, 24, 34]; // Index = aktuelle Stufe -> XP bis zur nächsten (Deckel Stufe 6)
   // König-Fähigkeiten (Sekunden): Dash = Burst in Laufrichtung (5s CD), Schild = -50% Schaden 5s (10s CD).
   let dashCd = 0, shieldCd = 0, shieldTimer = 0;
+  let buffSpeed = 0, buffDmg = 0; // Power-Up-Timer (Sekunden): Tempo ×1.5 / Schaden ×1.5
   let nEnt = 0;                                                         // höchster je belegter Index +1
   const freeStack = new Int32Array(CAP); let freeTop = 0;               // O(1) Tod/Spawn (keine .filter-Kompaktierung)
 
@@ -696,6 +697,16 @@ async function main(): Promise<void> {
       if (playerKing >= 0 && ealive[playerKing]) { emaxhp[playerKing] += 28; ehp[playerKing] = Math.min(emaxhp[playerKing], ehp[playerKing] + 28); addPuff(ex[playerKing], ey[playerKing], 0xffd24a, 1.2); }
     }
   };
+  // POWER-UPS: verstreute Buffs (0 Tempo · 1 Schaden · 2 Heilung · 3 Schild). Beim Aufsammeln neu platziert
+  // (bleiben als Karten-Ressource). Nur der Spieler-König nutzt sie.
+  const POW_COL = [0x49e0e0, 0xe05050, 0x6fe06f, 0x7fb0ff];
+  interface Pow { gx: number; gy: number; type: number; spr: Sprite; }
+  const pows: Pow[] = [];
+  const placePow = (p: Pow): void => { const c = placeOnLand(); p.gx = c.gx; p.gy = c.gy; p.type = (Math.random() * 4) | 0; p.spr.tint = POW_COL[p.type]; const w = worldToIso(p.gx, p.gy); p.spr.x = w.x; p.spr.y = w.y - elevLift(sampleH(p.gx, p.gy)) - 6; };
+  const spawnPows = (): void => {
+    for (const p of pows) p.spr.destroy(); pows.length = 0;
+    for (let i = 0; i < 12; i++) { const spr = new Sprite(orbTex); spr.anchor.set(0.5); spr.scale.set(0.7); fxLayer.addChild(spr); const p: Pow = { gx: 0, gy: 0, type: 0, spr }; placePow(p); pows.push(p); }
+  };
   const spawnE = (gx: number, gy: number, f: number, ty: number, owner: number): number => {
     const i = freeTop > 0 ? freeStack[--freeTop] : nEnt++;
     ex[i] = gx; ey[i] = gy; prevX[i] = gx; prevY[i] = gy; emaxhp[i] = T_hp[ty] * FAC_HP[f]; ehp[i] = emaxhp[i]; ecd[i] = Math.random() * T_cd[ty]; eflash[i] = 0; eatk[i] = 0;
@@ -734,7 +745,7 @@ async function main(): Promise<void> {
     kingFX.push({ i, banner, bg, fill });
   };
   // BATTLE-ROYALE-STURMZONE: sicherer Kreis schrumpft in Phasen; außerhalb Dauerschaden.
-  let zoneX = MAP / 2, zoneY = MAP / 2, zoneR = 320, zoneTarget = 320, zoneTimer = 0;
+  let zoneX = MAP / 2, zoneY = MAP / 2, zoneR = 380, zoneTarget = 380, zoneTimer = 0;
   const zoneG = new Graphics(); zoneG.eventMode = "none"; world.addChild(zoneG); // ganz oben
   const drawZone = (): void => {
     const pts: number[] = [];
@@ -752,7 +763,7 @@ async function main(): Promise<void> {
     if (arrows.length >= ARROW_CAP) return;
     const dx = ex[tgt] - ex[i], dy = ey[tgt] - ey[i], d = Math.hypot(dx, dy) || 1;
     const spr = new Sprite(arrowTex); spr.anchor.set(0.5); arrowsLayer.addChild(spr);
-    arrows.push({ sx: ex[i], sy: ey[i], tx: ex[tgt], ty: ey[tgt], gx: ex[i], gy: ey[i], tgt, dmg: T_atk[etype[i]] * FAC_DMG[efac[i]] * (playerActive && i === playerKing ? playerDmgMult : 1), age: 0, T: Math.max(0.28, d * 0.02 + 0.12), apex: Math.min(60, 12 + d * 1.1), spr, psx: 0, psy: 0 });
+    arrows.push({ sx: ex[i], sy: ey[i], tx: ex[tgt], ty: ey[tgt], gx: ex[i], gy: ey[i], tgt, dmg: T_atk[etype[i]] * FAC_DMG[efac[i]] * (playerActive && i === playerKing ? playerDmgMult * (buffDmg > 0 ? 1.5 : 1) : 1), age: 0, T: Math.max(0.28, d * 0.02 + 0.12), apex: Math.min(60, 12 + d * 1.1), spr, psx: 0, psy: 0 });
   };
   // RUNDE: PLAYERS Horden frisch spawnen (Gesamtzahl = reqUnits) + Sturm zurücksetzen.
   const newRound = (): void => {
@@ -762,7 +773,7 @@ async function main(): Promise<void> {
     for (const s of souls) s.spr.destroy(); souls.length = 0;
     nEnt = 0; freeTop = 0; ealive.fill(0); kingIdx.fill(-1);
     for (const p of pool) p.alpha = 0; lastDrawn = 0;
-    zoneR = 320; zoneTarget = 320; zoneTimer = 0; drawZone();
+    zoneR = 380; zoneTarget = 380; zoneTimer = 0; drawZone();
     const perHorde = Math.max(1, Math.floor((reqUnits - PLAYERS) / PLAYERS));
     const spreadR = Math.min(110, Math.max(8, Math.sqrt(perHorde) * 1.5)); // Streuung skaliert mit Hordengröße -> keine 1000+-Units-pro-Zelle (findEnemy/Separation bezahlbar)
     for (let pi = 0; pi < PLAYERS; pi++) {
@@ -778,7 +789,8 @@ async function main(): Promise<void> {
     }
     playerKing = kingIdx[PLAYER]; camInit = false;                       // Kamera beim Rundenstart auf Spieler-König snappen
     playerXP = 0; playerLevel = 1; playerSizeMult = 1; playerDmgMult = 1; // König-Progression zurücksetzen
-    dashCd = 0; shieldCd = 0; shieldTimer = 0;                             // Fähigkeiten zurücksetzen
+    dashCd = 0; shieldCd = 0; shieldTimer = 0; buffSpeed = 0; buffDmg = 0; // Fähigkeiten + Buffs zurücksetzen
+    spawnPows();                                                           // Power-Ups neu verteilen
   };
   let lastDrawn = 0;
 
@@ -874,7 +886,7 @@ async function main(): Promise<void> {
   // ── 30 Hz FIXED-STEP-SIM + RENDER-INTERPOLATION (Gaffer-Akkumulator) ──
   // Sim läuft 30x/s (DT_FIX=2 -> identisch zum alten 60fps-Tempo/Timing), Render interpoliert prevX->ex
   // pro Bildschirm-Frame -> glatt bei jeder Monitor-Hz UND ~2-5x weniger Sim-Last (Kampf/Suche/Separation).
-  const DT_FIX = 2, HSTEP = 1000 / 30, STORM_DMG = 4.5;
+  const DT_FIX = 2, HSTEP = 1000 / 30, STORM_DMG = 3.5;
   let simFrame = 0;
   const simTick = (): void => {
     simFrame++;
@@ -883,13 +895,14 @@ async function main(): Promise<void> {
     for (let i = 0; i < nEnt; i++) { if (!ealive[i]) continue; const c = clampCell(ey[i]) * GW + clampCell(ex[i]); gridNext[i] = gridHead[c]; gridHead[c] = i; }
     // 1b) Sturmzone in Phasen schrumpfen
     zoneTimer += HSTEP / 1000;
-    if (zoneTimer > 14 && zoneTarget > 60) { zoneTimer = 0; zoneTarget *= 0.66; }
+    if (zoneTimer > 20 && zoneTarget > 60) { zoneTimer = 0; zoneTarget *= 0.72; } // langsamer/größer -> Match ~1.5min, kein Sofort-Wipe
     if (Math.abs(zoneR - zoneTarget) > 0.3) { zoneR += (zoneTarget - zoneR) * Math.min(1, 0.012 * DT_FIX); drawZone(); }
     const zr2 = zoneR * zoneR;
     // 2) Kampf + Bewegung (SoA, Index i)
     for (let i = 0; i < nEnt; i++) {
       if (!ealive[i]) continue;
-      const ty = etype[i], sp = T_speed[ty] * FAC_SPD[efac[i]], isPlayer = playerActive && i === playerKing;
+      const isPlayer = playerActive && i === playerKing;
+      const ty = etype[i], sp = T_speed[ty] * FAC_SPD[efac[i]] * (isPlayer && buffSpeed > 0 ? 1.5 : 1);
       let tg = etarget[i];
       if (tg < 0 || !ealive[tg] || i % 32 === simFrame % 32) { const e = findEnemy(i); if (e >= 0) { etarget[i] = e; tg = e; } else if (tg >= 0 && !ealive[tg]) { etarget[i] = -1; tg = -1; } }
       let mvx = 0, mvy = 0;
@@ -897,7 +910,7 @@ async function main(): Promise<void> {
         const dx = ex[tg] - ex[i], dy = ey[tg] - ey[i], d = Math.sqrt(dx * dx + dy * dy) || 1;
         if (d <= T_range[ty]) {                                                           // in Reichweite -> angreifen (auch Spieler)
           ecd[i] -= DT_FIX;
-          if (ecd[i] <= 0) { ecd[i] = T_cd[ty]; if (eranged[i]) fireArrow(i, tg); else { eatk[i] = 5; ehp[tg] -= T_atk[ty] * FAC_DMG[efac[i]] * (isPlayer ? playerDmgMult : 1) * (tg === playerKing && shieldTimer > 0 ? 0.5 : 1); eflash[tg] = 6; if (ehp[tg] <= 0) killE(tg); } }
+          if (ecd[i] <= 0) { ecd[i] = T_cd[ty]; if (eranged[i]) fireArrow(i, tg); else { eatk[i] = 5; ehp[tg] -= T_atk[ty] * FAC_DMG[efac[i]] * (isPlayer ? playerDmgMult * (buffDmg > 0 ? 1.5 : 1) : 1) * (tg === playerKing && shieldTimer > 0 ? 0.5 : 1); eflash[tg] = 6; if (ehp[tg] <= 0) killE(tg); } }
           if (eranged[i] && d < 16 && !isPlayer) { mvx = -dx / d * sp; mvy = -dy / d * sp; } // Bogenschütze kitet
         } else if (!isPlayer) { mvx = dx / d * sp; mvy = dy / d * sp; }                   // hinlaufen (Spieler steuert selbst)
       }
@@ -1001,8 +1014,8 @@ async function main(): Promise<void> {
       const ksy = (keys.has("s") || keys.has("arrowdown") ? 1 : 0) - (keys.has("w") || keys.has("arrowup") ? 1 : 0);
       const gdx = ksx + ksy, gdy = -ksx + ksy, m = Math.hypot(gdx, gdy);
       if (m > 0) { pInX = gdx / m; pInY = gdy / m; } else { pInX = 0; pInY = 0; } }
-    // Fähigkeits-Cooldowns (Echtzeit)
-    { const sdt = dms / 1000; if (dashCd > 0) dashCd = Math.max(0, dashCd - sdt); if (shieldCd > 0) shieldCd = Math.max(0, shieldCd - sdt); if (shieldTimer > 0) shieldTimer = Math.max(0, shieldTimer - sdt); }
+    // Fähigkeits-Cooldowns + Buff-Timer (Echtzeit)
+    { const sdt = dms / 1000; if (dashCd > 0) dashCd = Math.max(0, dashCd - sdt); if (shieldCd > 0) shieldCd = Math.max(0, shieldCd - sdt); if (shieldTimer > 0) shieldTimer = Math.max(0, shieldTimer - sdt); if (buffSpeed > 0) buffSpeed = Math.max(0, buffSpeed - sdt); if (buffDmg > 0) buffDmg = Math.max(0, buffDmg - sdt); }
     // Fixed-Step-Sim: so viele 30Hz-Ticks wie nötig (max 5 gegen Spiral-of-Death).
     accSim += dms;
     let steps = 0;
@@ -1055,6 +1068,16 @@ async function main(): Promise<void> {
           const p = worldToIso(s.gx, s.gy); s.spr.x = p.x; s.spr.y = p.y - elevLift(sampleH(s.gx, s.gy)) - 4;
         }
       }
+      // POWER-UPS aufsammeln (< 12 grid) -> Buff anwenden, dann neu verteilen (bleibt Karten-Ressource).
+      for (const po of pows) {
+        const dx = kx - po.gx, dy = ky - po.gy;
+        if (dx * dx + dy * dy < 144) {
+          if (po.type === 0) buffSpeed = 6; else if (po.type === 1) buffDmg = 6;
+          else if (po.type === 2) ehp[playerKing] = Math.min(emaxhp[playerKing], ehp[playerKing] + 80);
+          else shieldTimer = Math.max(shieldTimer, 5);
+          addPuff(po.gx, po.gy, POW_COL[po.type], 1.0); placePow(po);
+        }
+      }
     }
     // KAMERA folgt dem Spieler-König (geglättet); beim Rundenstart hart snappen. Vor der Projektion,
     // damit der Frustum-Cull die gefolgte Kamera nutzt. Spieler tot -> einem lebenden König zuschauen.
@@ -1104,7 +1127,8 @@ async function main(): Promise<void> {
       const pAlive = playerKing >= 0 && ealive[playerKing] === 1;
       const me = pAlive ? `Du: Lv${playerLevel} · ${Math.max(0, ehp[playerKing]) | 0}/${emaxhp[playerKing] | 0} HP · Horde ${myHorde}` : `besiegt (Zuschauer)`;
       const dashS = dashCd > 0 ? `${Math.ceil(dashCd)}s` : "●", shieldS = shieldTimer > 0 ? `aktiv ${Math.ceil(shieldTimer)}s` : shieldCd > 0 ? `${Math.ceil(shieldCd)}s` : "●";
-      hud.textContent = `Horde.IO — ${me} · Könige ${kingsAlive}/${PLAYERS} · ${total} Units · WASD · Dash(Space) ${dashS} · Schild(Q) ${shieldS} · ${app.ticker.FPS.toFixed(0)} FPS (sim ${simMs.toFixed(1)}/sort ${sortMs.toFixed(1)}) · Sturm R${zoneR | 0}`;
+      const buffs = (buffSpeed > 0 ? " ⚡Tempo" : "") + (buffDmg > 0 ? " ⚔Schaden" : "");
+      hud.textContent = `Horde.IO — ${me} · Könige ${kingsAlive}/${PLAYERS} · ${total} Units · WASD · Dash(Space) ${dashS} · Schild(Q) ${shieldS}${buffs} · ${app.ticker.FPS.toFixed(0)} FPS (sim ${simMs.toFixed(1)}/sort ${sortMs.toFixed(1)}) · Sturm R${zoneR | 0}`;
       const roundOver = kingsAlive <= 1;
       if (playerActive && gameState === "playing" && (roundOver || !pAlive)) {
         showOver(pAlive ? "SIEG!" : "BESIEGT", pAlive ? `Letzter König — Horde ${myHorde}` : `Deine Horde fiel · Könige übrig ${kingsAlive}`);
