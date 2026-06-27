@@ -105,7 +105,7 @@ function hydrology(): void {
   for (let o = 0; o < cap; o++) { const k = order[o], r = REC[k]; if (r >= 0) ACC[r] += ACC[k]; }
   // --- (3) WET = lokaler Wasser-Lift; Flüsse: Bett eintiefen + Kanal auf Tal-Höhe füllen ---
   let maxAcc = 1; for (let k = 0; k < cap; k++) if (ACC[k] > maxAcc) maxAcc = ACC[k];
-  const RIVER_THRESH = maxAcc * 0.03;         // NUR große Ströme (hoher Abfluss), keine Mini-Bäche
+  const RIVER_THRESH = maxAcc * 0.12;         // NUR ganz wenige, sehr große Ströme (keine dünnen Flüsse/Bäche)
   const isRiver = new Uint8Array(cap);
   for (let k = 0; k < cap; k++) {
     const lake = HF[k] - H[k];
@@ -124,7 +124,7 @@ function hydrology(): void {
   const Hsrc = Float32Array.from(H), Wsrc = Float32Array.from(WET);
   for (let i = 2; i < N - 2; i++) for (let j = 2; j < N - 2; j++) {
     const k = i * N + j; if (!isRiver[k]) continue;
-    const rad = ACC[k] > maxAcc * 0.25 ? 2 : 1;          // große Ströme breiter (2 Zellen)
+    const rad = ACC[k] > maxAcc * 0.4 ? 3 : 2;           // immer breit -> echtes Gewässer, kein Faden
     for (let di = -rad; di <= rad; di++) for (let dj = -rad; dj <= rad; dj++) {
       if ((di === 0 && dj === 0) || di * di + dj * dj > rad * rad + 1) continue;
       const n = (i + di) * N + (j + dj);
@@ -302,14 +302,8 @@ function buildTerrainMesh(): Mesh {
           float spec = pow(max(dot(Nw, Hl), 0.0), 96.0);                  // Sonnenglanz, wandert auf den Kämmen
           col += vec3(1.0, 0.97, 0.88) * spec * (0.55 * openSea);
           col += smoothstep(2.2, 2.9, crest) * 0.05 * openSea;            // sparsames Funkeln auf schärfsten Kämmen
-          // FLUSS-STRÖMUNG: nur Flusszellen (vFlow gesetzt) -> helle Linien wandern flussABWÄRTS (kein Noise)
-          float fmag = length(vFlow);
-          if (fmag > 0.01) {
-            float cur = sin(dot(vWorld, normalize(vFlow)) * 0.7 - uTime * 2.4);
-            col += 0.06 * smoothstep(0.35, 1.0, cur * 0.5 + 0.5);
-            col = mix(col, vec3(0.40, 0.62, 0.66), 0.14);                 // Fluss leicht türkiser -> sichtbar
-          }
-          float shore = smoothstep(0.016, 0.0, vWet);                     // Schaum an Wasserkante (Küste + Flussufer)
+          // (KEINE Fluss-Strömungs-Animation -> Flüsse rendern ruhig wie Seen/Meer, kein LSD)
+          float shore = smoothstep(0.016, 0.0, vWet);                     // Schaum an Wasserkante (Küste + Ufer)
           float lap = 0.5 + 0.5 * sin(uTime * 1.0 + (vWorld.x + vWorld.y) * 0.25);
           col = mix(col, vec3(0.86, 0.93, 0.96), shore * (0.4 + 0.6 * lap) * 0.6);
           if (uStyle > 0.5 && uStyle < 2.5) { col = floor(col * 8.0 + 0.5) / 8.0; spec = step(0.5, spec); }
