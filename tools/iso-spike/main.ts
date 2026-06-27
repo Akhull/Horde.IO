@@ -639,6 +639,8 @@ async function main(): Promise<void> {
   // König-Progression: der Spieler-König levelt aus eingesammelten Seelen (mehr HP/Schaden/Größe).
   let playerXP = 0, playerLevel = 1, playerSizeMult = 1, playerDmgMult = 1;
   const XP_TO_NEXT = [0, 6, 10, 16, 24, 34]; // Index = aktuelle Stufe -> XP bis zur nächsten (Deckel Stufe 6)
+  // König-Fähigkeiten (Sekunden): Dash = Burst in Laufrichtung (5s CD), Schild = -50% Schaden 5s (10s CD).
+  let dashCd = 0, shieldCd = 0, shieldTimer = 0;
   let nEnt = 0;                                                         // höchster je belegter Index +1
   const freeStack = new Int32Array(CAP); let freeTop = 0;               // O(1) Tod/Spawn (keine .filter-Kompaktierung)
 
@@ -776,6 +778,7 @@ async function main(): Promise<void> {
     }
     playerKing = kingIdx[PLAYER]; camInit = false;                       // Kamera beim Rundenstart auf Spieler-König snappen
     playerXP = 0; playerLevel = 1; playerSizeMult = 1; playerDmgMult = 1; // König-Progression zurücksetzen
+    dashCd = 0; shieldCd = 0; shieldTimer = 0;                             // Fähigkeiten zurücksetzen
   };
   let lastDrawn = 0;
 
@@ -829,7 +832,7 @@ async function main(): Promise<void> {
       const u = sortOrder[k], p = pool[k], sc = T_scale[etype[u]] * (u === playerKing ? playerSizeMult : 1);
       p.x = screenX[u]; p.y = footY[u]; p.scaleX = sc; p.scaleY = sc;
       p.texture = FRAMES[frameOf(efac[u], etype[u])];
-      p.tint = eflash[u] > 0 ? 0xff5555 : 0xffffff; p.alpha = 1;
+      p.tint = eflash[u] > 0 ? 0xff5555 : u === playerKing && shieldTimer > 0 ? 0x8fc4ff : 0xffffff; p.alpha = 1;
     }
     for (let k = n; k < lastDrawn; k++) pool[k].alpha = 0; // pensionierte Slots einmalig parken
     lastDrawn = n;
@@ -846,9 +849,27 @@ async function main(): Promise<void> {
 
   // SPIELER-STEUERUNG: WASD/Pfeile bewegen den eigenen König (owner 0). Bildschirm-Richtung -> Iso-Grid.
   const keys = new Set<string>();
-  window.addEventListener("keydown", (e) => { keys.add(e.key.toLowerCase()); });
-  window.addEventListener("keyup", (e) => { keys.delete(e.key.toLowerCase()); });
   let pInX = 0, pInY = 0; // normalisierte Grid-Bewegungsrichtung des Spieler-Königs (im Ticker gesetzt)
+  // DASH: Burst ~26 Grid in Laufrichtung (begehbar bleiben). SCHILD: -50% Schaden für 5s.
+  // Richtung direkt aus den Tasten (nicht aus pInX -> funktioniert auch wenn Richtung+Space gleichzeitig kommen).
+  const doDash = (): boolean => {
+    if (playerKing < 0 || !ealive[playerKing]) return false;
+    const ksx = (keys.has("d") || keys.has("arrowright") ? 1 : 0) - (keys.has("a") || keys.has("arrowleft") ? 1 : 0);
+    const ksy = (keys.has("s") || keys.has("arrowdown") ? 1 : 0) - (keys.has("w") || keys.has("arrowup") ? 1 : 0);
+    let dx = ksx + ksy, dy = -ksx + ksy; const m = Math.hypot(dx, dy);
+    if (m === 0) return false; dx /= m; dy /= m;
+    let nx = ex[playerKing], ny = ey[playerKing];
+    for (let s = 0; s < 26; s++) { const tx = nx + dx, ty = ny + dy; let moved = false; if (passable(tx, ny)) { nx = tx; moved = true; } if (passable(nx, ty)) { ny = ty; moved = true; } if (!moved) break; }
+    ex[playerKing] = nx; ey[playerKing] = ny; prevX[playerKing] = nx; prevY[playerKing] = ny; // Teleport: Interpolation mitziehen
+    addPuff(nx, ny, 0xffffff, 0.8); return true;
+  };
+  window.addEventListener("keydown", (e) => {
+    const k = e.key.toLowerCase(); keys.add(k);
+    if (!playerActive) return;
+    if ((k === " " || e.code === "Space") && dashCd <= 0) { if (doDash()) dashCd = 5; }
+    else if (k === "q" && shieldCd <= 0 && playerKing >= 0 && ealive[playerKing]) { shieldTimer = 5; shieldCd = 10; addPuff(ex[playerKing], ey[playerKing], 0x7fb0ff, 1.2); }
+  });
+  window.addEventListener("keyup", (e) => { keys.delete(e.key.toLowerCase()); });
 
   // ── 30 Hz FIXED-STEP-SIM + RENDER-INTERPOLATION (Gaffer-Akkumulator) ──
   // Sim läuft 30x/s (DT_FIX=2 -> identisch zum alten 60fps-Tempo/Timing), Render interpoliert prevX->ex
@@ -876,7 +897,7 @@ async function main(): Promise<void> {
         const dx = ex[tg] - ex[i], dy = ey[tg] - ey[i], d = Math.sqrt(dx * dx + dy * dy) || 1;
         if (d <= T_range[ty]) {                                                           // in Reichweite -> angreifen (auch Spieler)
           ecd[i] -= DT_FIX;
-          if (ecd[i] <= 0) { ecd[i] = T_cd[ty]; if (eranged[i]) fireArrow(i, tg); else { eatk[i] = 5; ehp[tg] -= T_atk[ty] * FAC_DMG[efac[i]] * (isPlayer ? playerDmgMult : 1); eflash[tg] = 6; if (ehp[tg] <= 0) killE(tg); } }
+          if (ecd[i] <= 0) { ecd[i] = T_cd[ty]; if (eranged[i]) fireArrow(i, tg); else { eatk[i] = 5; ehp[tg] -= T_atk[ty] * FAC_DMG[efac[i]] * (isPlayer ? playerDmgMult : 1) * (tg === playerKing && shieldTimer > 0 ? 0.5 : 1); eflash[tg] = 6; if (ehp[tg] <= 0) killE(tg); } }
           if (eranged[i] && d < 16 && !isPlayer) { mvx = -dx / d * sp; mvy = -dy / d * sp; } // Bogenschütze kitet
         } else if (!isPlayer) { mvx = dx / d * sp; mvy = dy / d * sp; }                   // hinlaufen (Spieler steuert selbst)
       }
@@ -890,7 +911,7 @@ async function main(): Promise<void> {
       const odx = zoneX - ex[i], ody = zoneY - ey[i], od2 = odx * odx + ody * ody;
       if (od2 > zr2) {
         if (!isPlayer) { const od = Math.sqrt(od2) || 1; mvx = odx / od * sp; mvy = ody / od * sp; }
-        ehp[i] -= STORM_DMG; eflash[i] = 4; if (ehp[i] <= 0) { killE(i); continue; }
+        ehp[i] -= STORM_DMG * (isPlayer && shieldTimer > 0 ? 0.5 : 1); eflash[i] = 4; if (ehp[i] <= 0) { killE(i); continue; }
       }
       // Separation: Abstoßung naher Units -> Front statt Punkt-Pile (auf 8 Nachbarn gedeckelt)
       { const cx = clampCell(ex[i]), cy = clampCell(ey[i]); let px = 0, py = 0, n = 0;
@@ -980,6 +1001,8 @@ async function main(): Promise<void> {
       const ksy = (keys.has("s") || keys.has("arrowdown") ? 1 : 0) - (keys.has("w") || keys.has("arrowup") ? 1 : 0);
       const gdx = ksx + ksy, gdy = -ksx + ksy, m = Math.hypot(gdx, gdy);
       if (m > 0) { pInX = gdx / m; pInY = gdy / m; } else { pInX = 0; pInY = 0; } }
+    // Fähigkeits-Cooldowns (Echtzeit)
+    { const sdt = dms / 1000; if (dashCd > 0) dashCd = Math.max(0, dashCd - sdt); if (shieldCd > 0) shieldCd = Math.max(0, shieldCd - sdt); if (shieldTimer > 0) shieldTimer = Math.max(0, shieldTimer - sdt); }
     // Fixed-Step-Sim: so viele 30Hz-Ticks wie nötig (max 5 gegen Spiral-of-Death).
     accSim += dms;
     let steps = 0;
@@ -1001,7 +1024,7 @@ async function main(): Promise<void> {
       if (ar.psx !== 0 || ar.psy !== 0) ar.spr.rotation = Math.atan2(sy - ar.psy, p.x - ar.psx);
       ar.psx = p.x; ar.psy = sy;
       if (prog >= 1) {
-        if (ealive[ar.tgt]) { ehp[ar.tgt] -= ar.dmg; eflash[ar.tgt] = 6; if (ehp[ar.tgt] <= 0) killE(ar.tgt); }
+        if (ealive[ar.tgt]) { ehp[ar.tgt] -= ar.dmg * (ar.tgt === playerKing && shieldTimer > 0 ? 0.5 : 1); eflash[ar.tgt] = 6; if (ehp[ar.tgt] <= 0) killE(ar.tgt); }
         addPuff(ar.gx, ar.gy, 0xffb050, 0.35);                                            // oranger Treffer-Funke
         ar.spr.destroy(); arrows.splice(i, 1);
       }
@@ -1080,7 +1103,8 @@ async function main(): Promise<void> {
       let total = 0, myHorde = 0; for (let i = 0; i < nEnt; i++) if (ealive[i]) { total++; if (eowner[i] === PLAYER) myHorde++; }
       const pAlive = playerKing >= 0 && ealive[playerKing] === 1;
       const me = pAlive ? `Du: Lv${playerLevel} · ${Math.max(0, ehp[playerKing]) | 0}/${emaxhp[playerKing] | 0} HP · Horde ${myHorde}` : `besiegt (Zuschauer)`;
-      hud.textContent = `Horde.IO — ${me} · Könige ${kingsAlive}/${PLAYERS} · ${total} Units · WASD bewegen · ${app.ticker.FPS.toFixed(0)} FPS (sim ${simMs.toFixed(1)}/sort ${sortMs.toFixed(1)}) · Sturm R${zoneR | 0}`;
+      const dashS = dashCd > 0 ? `${Math.ceil(dashCd)}s` : "●", shieldS = shieldTimer > 0 ? `aktiv ${Math.ceil(shieldTimer)}s` : shieldCd > 0 ? `${Math.ceil(shieldCd)}s` : "●";
+      hud.textContent = `Horde.IO — ${me} · Könige ${kingsAlive}/${PLAYERS} · ${total} Units · WASD · Dash(Space) ${dashS} · Schild(Q) ${shieldS} · ${app.ticker.FPS.toFixed(0)} FPS (sim ${simMs.toFixed(1)}/sort ${sortMs.toFixed(1)}) · Sturm R${zoneR | 0}`;
       const roundOver = kingsAlive <= 1;
       if (playerActive && gameState === "playing" && (roundOver || !pAlive)) {
         showOver(pAlive ? "SIEG!" : "BESIEGT", pAlive ? `Letzter König — Horde ${myHorde}` : `Deine Horde fiel · Könige übrig ${kingsAlive}`);
