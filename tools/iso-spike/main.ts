@@ -688,6 +688,38 @@ async function main(): Promise<void> {
   const gridHead = new Int32Array(GW * GW), gridNext = new Int32Array(CAP);
   const clampCell = (v: number): number => { const c = (v / CELL) | 0; return c < 0 ? 0 : c >= GW ? GW - 1 : c; };
 
+  // ── FLOW-FIELD-PATHFINDING ── Pro König ein Richtungsfeld (BFS um Wasser/Berge herum). Units, die ihrem
+  // König folgen, sampeln dessen Feld -> laufen um Hindernisse statt hängenzubleiben. Feld pro Tick für
+  // EINEN König neu (Round-Robin) -> billig (BFS über ~14k Grobzellen). O(1)-Sampling pro Unit.
+  const FW = 120, FCELL = MAP / FW;
+  const flowPass = new Uint8Array(FW * FW);
+  for (let cy = 0; cy < FW; cy++) for (let cx = 0; cx < FW; cx++) flowPass[cy * FW + cx] = passable((cx + 0.5) * FCELL, (cy + 0.5) * FCELL) ? 1 : 0;
+  const flowCell = (gx: number, gy: number): number => {
+    let cx = (gx / FCELL) | 0, cy = (gy / FCELL) | 0;
+    cx = cx < 0 ? 0 : cx >= FW ? FW - 1 : cx; cy = cy < 0 ? 0 : cy >= FW ? FW - 1 : cy; return cy * FW + cx;
+  };
+  const kingFlowX = new Int8Array(PLAYERS * FW * FW), kingFlowY = new Int8Array(PLAYERS * FW * FW);
+  const bfsDist = new Int32Array(FW * FW), bfsQueue = new Int32Array(FW * FW);
+  const FNX = [-1, 1, 0, 0, -1, -1, 1, 1], FNY = [0, 0, -1, 1, -1, 1, -1, 1]; // 8 Nachbarn
+  const buildKingFlow = (king: number): void => {
+    if (king < 0 || !ealive[king]) return;
+    const owner = eowner[king], base = owner * FW * FW;
+    bfsDist.fill(-1);
+    const start = flowCell(ex[king], ey[king]);
+    let head = 0, tail = 0; bfsDist[start] = 0; bfsQueue[tail++] = start;
+    while (head < tail) {
+      const c = bfsQueue[head++], cx = c % FW, cy = (c / FW) | 0, dc = bfsDist[c];
+      for (let n = 0; n < 8; n++) { const nx = cx + FNX[n], ny = cy + FNY[n]; if (nx < 0 || ny < 0 || nx >= FW || ny >= FW) continue; const nc = ny * FW + nx; if (bfsDist[nc] !== -1 || !flowPass[nc]) continue; bfsDist[nc] = dc + 1; bfsQueue[tail++] = nc; }
+    }
+    for (let c = 0; c < FW * FW; c++) {
+      const dc = bfsDist[c];
+      if (dc <= 0) { kingFlowX[base + c] = 0; kingFlowY[base + c] = 0; continue; }       // Ziel/unerreichbar -> kein Flow
+      const cx = c % FW, cy = (c / FW) | 0; let best = dc, bx = 0, by = 0;
+      for (let n = 0; n < 8; n++) { const nx = cx + FNX[n], ny = cy + FNY[n]; if (nx < 0 || ny < 0 || nx >= FW || ny >= FW) continue; const nd = bfsDist[ny * FW + nx]; if (nd >= 0 && nd < best) { best = nd; bx = FNX[n]; by = FNY[n]; } }
+      const m = Math.hypot(bx, by) || 1; kingFlowX[base + c] = ((bx / m) * 100) | 0; kingFlowY[base + c] = ((by / m) * 100) | 0;
+    }
+  };
+
   const bannerTex = FACTION_COL.map((c) => makeBannerTexture(app, c));  // Fraktions-Banner an Königen
   const puffTex = makePuffTexture(app);
   interface Puff { spr: Sprite; life: number; }
@@ -975,6 +1007,7 @@ async function main(): Promise<void> {
     if (zoneTimer > 38 && zoneTarget > 95) { zoneTimer = 0; zoneTarget *= 0.85; } // viel langsamer: ~40s Atempause/Stufe, mildere Schritte
     if (Math.abs(zoneR - zoneTarget) > 0.3) { zoneR += (zoneTarget - zoneR) * Math.min(1, 0.006 * DT_FIX); drawZone(); }
     const zr2 = zoneR * zoneR;
+    buildKingFlow(kingIdx[simFrame % PLAYERS]); // pro Tick EIN König-Flow-Feld neu (Round-Robin -> jeder ~0.5s)
     // 2) Kampf + Bewegung (SoA, Index i; Deko 0..decorCount übersprungen)
     for (let i = decorCount; i < nEnt; i++) {
       if (!ealive[i]) continue;
@@ -1005,8 +1038,14 @@ async function main(): Promise<void> {
       }
       if (!isPlayer && mvx === 0 && mvy === 0) {                                          // kein Kampf-Move -> der eigenen König-Horde folgen
         const k = kingIdx[eowner[i]];
-        if (k >= 0 && k !== i) { const dx = ex[k] - ex[i], dy = ey[k] - ey[i], dd = dx * dx + dy * dy; if (dd > 100) { const d = Math.sqrt(dd); mvx = dx / d * sp * 0.9; mvy = dy / d * sp * 0.9; } }
-        else { const dx = MAP / 2 - ex[i], dy = MAP / 2 - ey[i], d = Math.sqrt(dx * dx + dy * dy) || 1; mvx = dx / d * sp * 0.6; mvy = dy / d * sp * 0.6; } // König (oder verwaist) -> Mitte
+        if (k >= 0 && k !== i) {
+          const dx = ex[k] - ex[i], dy = ey[k] - ey[i], dd = dx * dx + dy * dy;
+          if (dd > 100) {                                                                 // weit weg -> Flow-Field (um Hindernisse), sonst direkt
+            const fb = eowner[i] * FW * FW + flowCell(ex[i], ey[i]), fx = kingFlowX[fb], fy = kingFlowY[fb];
+            if (fx !== 0 || fy !== 0) { mvx = (fx / 100) * sp * 0.9; mvy = (fy / 100) * sp * 0.9; }
+            else { const d = Math.sqrt(dd); mvx = dx / d * sp * 0.9; mvy = dy / d * sp * 0.9; }
+          }
+        } else { const dx = MAP / 2 - ex[i], dy = MAP / 2 - ey[i], d = Math.sqrt(dx * dx + dy * dy) || 1; mvx = dx / d * sp * 0.6; mvy = dy / d * sp * 0.6; } // König tot/verwaist -> Mitte
       }
       if (isPlayer) { const tvx = pInX * sp, tvy = pInY * sp; pkvx += (tvx - pkvx) * 0.4; pkvy += (tvy - pkvy) * 0.4; mvx = pkvx; mvy = pkvy; } // Smoothing: Geschwindigkeit lerpt -> kein abruptes Ruckeln
       // Sturm: außerhalb der Zone Dauerschaden; KI flieht rein, Spieler bleibt steuerbar.
