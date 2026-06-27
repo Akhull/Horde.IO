@@ -61,6 +61,7 @@ const HF = new Float32Array(N * N);   // Priority-Flood Füllhöhe = lokale Spil
 const ACC = new Float32Array(N * N);  // D8-Abfluss (Drainage-Fläche pro Zelle)
 const REC = new Int32Array(N * N);    // D8-Empfänger (-1 = Auslass am Rand/Meer)
 const WET = new Float32Array(N * N);  // lokaler Wasser-Lift über dem Grund (0 = trocken)
+const PASS = new Uint8Array(N * N);   // Begehbarkeits-Bitmap (1=begehbar) — EINMAL beim Worldgen, O(1)-Lookup im Tick
 const FLOWX = new Float32Array(N * N), FLOWY = new Float32Array(N * N); // Fließrichtung NUR auf Flusszellen
 const HG = (i: number, j: number): number => H[Math.max(0, Math.min(N - 1, i)) * N + Math.max(0, Math.min(N - 1, j))];
 function baseHeight(i: number, j: number): number {
@@ -140,6 +141,11 @@ function buildHeight(terrace: boolean): void {
   for (let k = 0; k < N * N; k++) H[k] = Math.max(0, Math.min(1, H[k]));
   hydrology();   // emergente Flüsse/Seen + Fließrichtung rein aus H (kein separates Fluss-System)
   if (terrace) for (let k = 0; k < N * N; k++) H[k] = Math.floor(H[k] * 13) / 13; // Voxel-Stufen
+  // Begehbarkeits-Bitmap EINMAL vorberechnen (nicht Wasser/Hochgebirge/Steilhang/Fluss) -> O(1) im Tick.
+  for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
+    const k = i * N + j, h = H[k];
+    PASS[k] = h >= WATER && h <= MOUNTAIN && slopeAt(i, j) < STEEP && WET[k] <= 0.0005 ? 1 : 0;
+  }
 }
 // Droplet-basierte hydraulische Erosion (Sebastian-Lague-Muster): jeder Tropfen folgt dem
 // Gefälle, trägt Sediment, erodiert bergab und lagert in Senken ab -> dendritische Täler/Flüsse.
@@ -188,12 +194,10 @@ function sampleH(fx: number, fy: number): number {
   const a = H[i * N + j], b = H[(i + 1) * N + j], c = H[i * N + (j + 1)], d = H[(i + 1) * N + (j + 1)];
   return (a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + d * tx) * ty;
 }
-// begehbar = nicht Wasser, nicht Hochgebirge UND nicht zu steil (Steilhang/Klippe blockt wie Wasser).
+// begehbar = O(1)-Lookup in die vorberechnete PASS-Bitmap (nicht Wasser/Hochgebirge/Steilhang/Fluss).
 const passable = (fx: number, fy: number): boolean => {
-  const h = sampleH(fx, fy);
-  if (h < WATER || h > MOUNTAIN || slopeAt(fx, fy) >= STEEP) return false;
-  const ix = Math.max(0, Math.min(N - 1, Math.floor(fx))), iy = Math.max(0, Math.min(N - 1, Math.floor(fy)));
-  return WET[ix * N + iy] <= 0.0005; // Flüsse/Seen blockieren Units wie Wasser (emergent)
+  const ix = fx < 0 ? 0 : fx >= MAP ? MAP - 1 : fx | 0, iy = fy < 0 ? 0 : fy >= MAP ? MAP - 1 : fy | 0;
+  return PASS[ix * N + iy] === 1;
 };
 // Hangneigung (für „flach genug zum Bauen"): Summe der Höhendifferenzen ringsum.
 function slopeAt(gx: number, gy: number): number {
@@ -615,7 +619,8 @@ async function main(): Promise<void> {
   const reqUnits = Math.max(PLAYERS * 4, parseInt(params.get("units") ?? "", 10) || PLAYERS * (HORDE + 1));
   const CAP = reqUnits + 64;                                            // SoA-Kapazität inkl. Headroom
   // — SoA-Felder (Index i = Entity-ID). Kein Objekt-Pointer mehr (target = Int32-ID), kein GC. —
-  const ex = new Float32Array(CAP), ey = new Float32Array(CAP);         // Welt gx/gy
+  const ex = new Float32Array(CAP), ey = new Float32Array(CAP);         // Welt gx/gy (Sim-Stand nach letztem Tick)
+  const prevX = new Float32Array(CAP), prevY = new Float32Array(CAP);   // gx/gy vor dem letzten Tick (Render-Interpolation)
   const screenX = new Float32Array(CAP), footY = new Float32Array(CAP); // iso-Render-Pos (footY = Sort-Key)
   const ehp = new Float32Array(CAP), emaxhp = new Float32Array(CAP), ecd = new Float32Array(CAP), eflash = new Float32Array(CAP);
   const efac = new Uint8Array(CAP), etype = new Uint8Array(CAP), eking = new Uint8Array(CAP), eranged = new Uint8Array(CAP), ealive = new Uint8Array(CAP);
@@ -653,24 +658,29 @@ async function main(): Promise<void> {
   };
   const spawnE = (gx: number, gy: number, f: number, ty: number): number => {
     const i = freeTop > 0 ? freeStack[--freeTop] : nEnt++;
-    ex[i] = gx; ey[i] = gy; ehp[i] = T_hp[ty]; emaxhp[i] = T_hp[ty]; ecd[i] = Math.random() * T_cd[ty]; eflash[i] = 0;
+    ex[i] = gx; ey[i] = gy; prevX[i] = gx; prevY[i] = gy; ehp[i] = T_hp[ty]; emaxhp[i] = T_hp[ty]; ecd[i] = Math.random() * T_cd[ty]; eflash[i] = 0;
     efac[i] = f; etype[i] = ty; eking[i] = ty === 4 ? 1 : 0; eranged[i] = T_range[ty] > 20 ? 1 : 0; ealive[i] = 1; etarget[i] = -1;
     const p = worldToIso(gx, gy); screenX[i] = p.x; footY[i] = p.y - elevLift(sampleH(gx, gy));
     return i;
   };
   const killE = (i: number): void => { if (!ealive[i]) return; ealive[i] = 0; etarget[i] = -1; addPuff(ex[i], ey[i], FACTION_COL[efac[i]]); freeStack[freeTop++] = i; };
+  // Adaptiv: erst inneres 3x3 (deckt Nahkampf), nur bei leer den äußeren 5x5-Ring -> meist 9 statt 25 Zellen.
   const findEnemy = (i: number): number => {
-    const cx = clampCell(ex[i]), cy = clampCell(ey[i]), uf = efac[i];
-    let best = -1, bestD = 1e9;
-    for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
-      const nx = cx + dx, ny = cy + dy; if (nx < 0 || ny < 0 || nx >= GW || ny >= GW) continue;
-      for (let j = gridHead[ny * GW + nx]; j !== -1; j = gridNext[j]) {
-        if (!ealive[j] || efac[j] === uf) continue;
-        const ddx = ex[j] - ex[i], ddy = ey[j] - ey[i], d = ddx * ddx + ddy * ddy;
-        if (d < bestD) { bestD = d; best = j; }
+    const cx = clampCell(ex[i]), cy = clampCell(ey[i]), uf = efac[i], xi = ex[i], yi = ey[i];
+    for (let R = 1; R <= 2; R++) {
+      let best = -1, bestD = 1e9;
+      for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) {
+        if (R === 2 && dx > -2 && dx < 2 && dy > -2 && dy < 2) continue; // inneres 3x3 in R=2 überspringen (schon gescannt)
+        const nx = cx + dx, ny = cy + dy; if (nx < 0 || ny < 0 || nx >= GW || ny >= GW) continue;
+        for (let j = gridHead[ny * GW + nx]; j !== -1; j = gridNext[j]) {
+          if (!ealive[j] || efac[j] === uf) continue;
+          const ddx = ex[j] - xi, ddy = ey[j] - yi, d = ddx * ddx + ddy * ddy;
+          if (d < bestD) { bestD = d; best = j; }
+        }
       }
+      if (best >= 0) return best;
     }
-    return best;
+    return -1;
   };
   // KÖNIG-FX: Banner + HP-Balken als gepoolte Sprites (kein Per-Frame Graphics.clear mehr).
   interface KingFX { i: number; banner: Sprite; bg: Sprite; fill: Sprite; }
@@ -790,33 +800,33 @@ async function main(): Promise<void> {
     else if (e.key === "-" || e.key === "_") { let removed = 0; for (let i = 0; i < nEnt && removed < 1000; i++) if (ealive[i] && !eking[i]) { killE(i); removed++; } }
   });
 
-  let acc = 0, time = 0, frame = 0, victoryTimer = 0, simMs = 0, sortMs = 0;
-  app.ticker.add((t) => {
-    const dt = Math.min(t.deltaTime, 4); // Frame-Spike-Clamp (kein Tunneln nach Hängern)
-    const dms = Math.min(t.deltaMS, 50); // Sekundentakt ebenfalls clampen (langer Worldgen-Build -> kein Sturm-Sprung)
-    time += dms / 1000; frame++;
-    terrainShader.resources.terr.uniforms.uTime = time;
-    const tSim = performance.now();
+  // ── 30 Hz FIXED-STEP-SIM + RENDER-INTERPOLATION (Gaffer-Akkumulator) ──
+  // Sim läuft 30x/s (DT_FIX=2 -> identisch zum alten 60fps-Tempo/Timing), Render interpoliert prevX->ex
+  // pro Bildschirm-Frame -> glatt bei jeder Monitor-Hz UND ~2-5x weniger Sim-Last (Kampf/Suche/Separation).
+  const DT_FIX = 2, HSTEP = 1000 / 30, STORM_DMG = 4.5;
+  let simFrame = 0;
+  const simTick = (): void => {
+    simFrame++;
     // 1) Spatial-Grid neu aufbauen (nur lebende Units)
     gridHead.fill(-1);
     for (let i = 0; i < nEnt; i++) { if (!ealive[i]) continue; const c = clampCell(ey[i]) * GW + clampCell(ex[i]); gridNext[i] = gridHead[c]; gridHead[c] = i; }
     // 1b) Sturmzone in Phasen schrumpfen
-    zoneTimer += dms / 1000;
+    zoneTimer += HSTEP / 1000;
     if (zoneTimer > 14 && zoneTarget > 60) { zoneTimer = 0; zoneTarget *= 0.66; }
-    if (Math.abs(zoneR - zoneTarget) > 0.3) { zoneR += (zoneTarget - zoneR) * Math.min(1, 0.012 * dt); drawZone(); }
+    if (Math.abs(zoneR - zoneTarget) > 0.3) { zoneR += (zoneTarget - zoneR) * Math.min(1, 0.012 * DT_FIX); drawZone(); }
     const zr2 = zoneR * zoneR;
     // 2) Kampf + Bewegung (SoA, Index i)
     for (let i = 0; i < nEnt; i++) {
       if (!ealive[i]) continue;
       const ty = etype[i], sp = T_speed[ty];
       let tg = etarget[i];
-      if (tg < 0 || !ealive[tg] || i % 16 === frame % 16) { const e = findEnemy(i); if (e >= 0) { etarget[i] = e; tg = e; } else if (tg >= 0 && !ealive[tg]) { etarget[i] = -1; tg = -1; } }
+      if (tg < 0 || !ealive[tg] || i % 32 === simFrame % 32) { const e = findEnemy(i); if (e >= 0) { etarget[i] = e; tg = e; } else if (tg >= 0 && !ealive[tg]) { etarget[i] = -1; tg = -1; } }
       let mvx = 0, mvy = 0;
       if (tg >= 0 && ealive[tg]) {
         const dx = ex[tg] - ex[i], dy = ey[tg] - ey[i], d = Math.sqrt(dx * dx + dy * dy) || 1;
         if (eranged[i] && d < 16) { mvx = -dx / d * sp; mvy = -dy / d * sp; }            // Bogenschütze kitet
         else if (d <= T_range[ty]) {
-          ecd[i] -= dt;
+          ecd[i] -= DT_FIX;
           if (ecd[i] <= 0) { ecd[i] = T_cd[ty]; if (eranged[i]) fireArrow(i, tg); else { ehp[tg] -= T_atk[ty]; eflash[tg] = 6; if (ehp[tg] <= 0) killE(tg); } }
         } else { mvx = dx / d * sp; mvy = dy / d * sp; }                                  // hinlaufen
       } else { const dx = MAP / 2 - ex[i], dy = MAP / 2 - ey[i], d = Math.sqrt(dx * dx + dy * dy) || 1; mvx = dx / d * sp * 0.6; mvy = dy / d * sp * 0.6; }
@@ -824,7 +834,7 @@ async function main(): Promise<void> {
       const odx = zoneX - ex[i], ody = zoneY - ey[i], od2 = odx * odx + ody * ody;
       if (od2 > zr2) {
         const od = Math.sqrt(od2) || 1; mvx = odx / od * sp; mvy = ody / od * sp;
-        if (frame % 3 === 0) { ehp[i] -= 7; eflash[i] = 4; if (ehp[i] <= 0) { killE(i); continue; } }
+        ehp[i] -= STORM_DMG; eflash[i] = 4; if (ehp[i] <= 0) { killE(i); continue; }
       }
       // Separation: Abstoßung naher Units -> Front statt Punkt-Pile (auf 8 Nachbarn gedeckelt)
       { const cx = clampCell(ex[i]), cy = clampCell(ey[i]); let px = 0, py = 0, n = 0;
@@ -837,12 +847,34 @@ async function main(): Promise<void> {
           }
         }
         if (n > 0) { mvx += px / n * sp * 0.7; mvy += py / n * sp * 0.7; } }
-      if (mvx !== 0 || mvy !== 0) { const nx = ex[i] + mvx * dt, ny = ey[i] + mvy * dt; if (passable(nx, ey[i])) ex[i] = nx; if (passable(ex[i], ny)) ey[i] = ny; }
-      if (eflash[i] > 0) eflash[i] -= dt;
-      const p = worldToIso(ex[i], ey[i]); screenX[i] = p.x; footY[i] = p.y - elevLift(sampleH(ex[i], ey[i]));
+      if (mvx !== 0 || mvy !== 0) { const nx = ex[i] + mvx * DT_FIX, ny = ey[i] + mvy * DT_FIX; if (passable(nx, ey[i])) ex[i] = nx; if (passable(ex[i], ny)) ey[i] = ny; }
+      if (eflash[i] > 0) eflash[i] -= DT_FIX;
     }
-    simMs = performance.now() - tSim;
-    // 3) Ballistische Pfeile: gx/gy homen aufs Ziel, z = Sinus-Bogen; dreht zur Flugrichtung; Staub beim Einschlag.
+  };
+  // Render-Projektion: interpolierte gx/gy (prevX->ex) -> iso screenX/footY (pro Bildschirm-Frame).
+  const projectInterp = (a: number): void => {
+    for (let i = 0; i < nEnt; i++) {
+      if (!ealive[i]) continue;
+      const ix = prevX[i] + (ex[i] - prevX[i]) * a, iy = prevY[i] + (ey[i] - prevY[i]) * a;
+      const p = worldToIso(ix, iy); screenX[i] = p.x; footY[i] = p.y - elevLift(sampleH(ix, iy));
+    }
+  };
+
+  let acc = 0, time = 0, frame = 0, victoryTimer = 0, simMs = 0, sortMs = 0, accSim = 0;
+  app.ticker.add((t) => {
+    const dms = Math.min(t.deltaMS, 100);
+    const dtR = Math.min(t.deltaTime, 4); // Bildschirm-Frame-Einheiten für Echtzeit-FX (Pfeile/Poofs)
+    time += dms / 1000; frame++;
+    terrainShader.resources.terr.uniforms.uTime = time;
+    // Fixed-Step-Sim: so viele 30Hz-Ticks wie nötig (max 5 gegen Spiral-of-Death).
+    accSim += dms;
+    let steps = 0;
+    const tSim = performance.now();
+    while (accSim >= HSTEP && steps < 5) { prevX.set(ex); prevY.set(ey); simTick(); accSim -= HSTEP; steps++; }
+    if (steps === 5) accSim = 0;
+    if (steps > 0) simMs = (performance.now() - tSim) / steps; // Kosten PRO 30Hz-Tick (0 auf Frames ohne Tick)
+    const alpha = Math.min(1, accSim / HSTEP);
+    // Ballistische Pfeile (Echtzeit): homen aufs Ziel, z = Sinus-Bogen; dreht zur Flugrichtung; Staub.
     for (let i = arrows.length - 1; i >= 0; i--) {
       const ar = arrows[i];
       ar.age += dms / 1000;
@@ -860,18 +892,19 @@ async function main(): Promise<void> {
         ar.spr.destroy(); arrows.splice(i, 1);
       }
     }
-    // 3c) Todes-Poofs + Loot-Orbs aufsteigen + verblassen
+    // Todes-Poofs + Loot-Orbs aufsteigen + verblassen (Echtzeit)
     for (let i = puffs.length - 1; i >= 0; i--) {
-      const pf = puffs[i]; pf.life -= 0.045 * dt; pf.spr.alpha = Math.max(0, pf.life) * 0.8;
-      pf.spr.scale.set(0.5 + (1 - pf.life) * 0.6); pf.spr.y -= 0.3 * dt;
+      const pf = puffs[i]; pf.life -= 0.045 * dtR; pf.spr.alpha = Math.max(0, pf.life) * 0.8;
+      pf.spr.scale.set(0.5 + (1 - pf.life) * 0.6); pf.spr.y -= 0.3 * dtR;
       if (pf.life <= 0) { pf.spr.destroy(); puffs.splice(i, 1); }
     }
     for (let i = orbs.length - 1; i >= 0; i--) {
-      const o = orbs[i]; o.life -= 0.012 * dt; o.spr.y -= 0.6 * dt; o.spr.alpha = Math.max(0, o.life);
+      const o = orbs[i]; o.life -= 0.012 * dtR; o.spr.y -= 0.6 * dtR; o.spr.alpha = Math.max(0, o.life);
       if (o.life <= 0) { o.spr.destroy(); orbs.splice(i, 1); }
     }
-    // 4) RENDER: Counting-Sort + Pool-Slots schreiben (EIN Draw-Call), dann König-Banner/HP-Balken.
+    // RENDER: interpolierte Positionen -> Counting-Sort + Pool-Slots (EIN Draw-Call), dann König-FX.
     const tSort = performance.now();
+    projectInterp(alpha);
     const drawn = renderUnits();
     sortMs = performance.now() - tSort;
     for (const kf of kingFX) {
