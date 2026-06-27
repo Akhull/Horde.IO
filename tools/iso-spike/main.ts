@@ -377,6 +377,7 @@ const PAL: Record<string, Palette> = {
 };
 const OUTLINE: RGB = hexRGB(0x161a22), GOLD: RGB = hexRGB(0xffd24a);
 const UW = 24, UH = 28, UCX = UW >> 1;
+let BODY_STEP = 0; // 0/1 -> Gang-Zyklus (Beinstellung); buildUnitAtlas backt beide Frames pro Einheit
 interface Pen { m: (x: number, y: number, c: RGB) => void; r: (x: number, y: number, c: RGB) => void; }
 function makePen(buf: (RGB | 0)[]): Pen {
   const set = (x: number, y: number, c: RGB): void => { if (x >= 0 && x < UW && y >= 0 && y < UH) buf[y * UW + x] = c; };
@@ -393,7 +394,9 @@ function drawBody(p: Pen, P: Palette, bodyW: number, torsoTop = 11, footY = 25):
     for (let x = UCX - half; x <= UCX + half; x++) p.m(x, y, x === UCX - half || x === UCX + half ? P.cloth[0] : P.cloth[si]);
   }
   for (let x = UCX - half; x <= UCX + half; x++) p.m(x, footY - 4, P.accent);            // Gürtel
-  for (let y = footY - 3; y <= footY; y++) { p.m(UCX - 2, y, P.cloth[0]); p.m(UCX, y, P.cloth[1]); } // Beine
+  // Beine: Gang-Zyklus über BODY_STEP — Frame 0 Stand (eng), Frame 1 Schritt (gespreizt) -> wirkt wie Laufen.
+  if (BODY_STEP === 0) { for (let y = footY - 3; y <= footY; y++) { p.m(UCX - 2, y, P.cloth[0]); p.m(UCX, y, P.cloth[1]); } }
+  else { for (let y = footY - 3; y <= footY; y++) { p.m(UCX - 3, y, P.cloth[0]); p.m(UCX + 1, y, P.cloth[1]); } }
 }
 function drawWarrior(p: Pen, P: Palette): void {
   drawBody(p, P, 7);
@@ -451,17 +454,19 @@ function renderUnitCell(faction: string, type: string): (RGB | 0)[] {
   for (const [sx, sy, sw] of sh) for (let x = sx; x < sx + sw; x++) { const i = sy * UW + x; if (out[i] === 0) out[i] = shade(0x161a22, 0.15); }
   return out;
 }
-// ATLAS: alle 15 Zellen (3 Fraktionen x 5 Typen) auf EINE TextureSource backen -> ParticleContainer
-// kann ALLE Units in EINEM Draw-Call zeichnen. frame[fac*5+type] -> Sub-Texture. frameId = fac*5+ty.
+// ATLAS: 3 Fraktionen x 6 Typen x 2 Gang-Frames = 36 Zellen auf EINE TextureSource -> ParticleContainer
+// zeichnet ALLE Units in EINEM Draw-Call. Layout: ((fac*6 + type)*2 + step). frameOf(f,ty)*2 + ph.
 const FAC_ORDER = ["human", "elf", "orc"] as const;
 const TY_ORDER = ["warrior", "archer", "spearman", "brute", "king", "champion"] as const;
+const ANIM = 2; // Frames pro Einheit (Gang-Zyklus)
 function buildUnitAtlas(): Texture[] {
-  const COLS = FAC_ORDER.length * TY_ORDER.length, AW = COLS * UW;
+  const COLS = FAC_ORDER.length * TY_ORDER.length * ANIM, AW = COLS * UW;
   const cv = document.createElement("canvas"); cv.width = AW; cv.height = UH;
   const ctx = cv.getContext("2d")!; ctx.imageSmoothingEnabled = false;
   const img = ctx.createImageData(AW, UH), d = img.data;
   let col = 0;
-  for (const f of FAC_ORDER) for (const t of TY_ORDER) {
+  for (const f of FAC_ORDER) for (const t of TY_ORDER) for (let step = 0; step < ANIM; step++) {
+    BODY_STEP = step;
     const cell = renderUnitCell(f, t), ox = col * UW;
     for (let y = 0; y < UH; y++) for (let x = 0; x < UW; x++) {
       const c = cell[y * UW + x]; if (c === 0) continue;
@@ -473,7 +478,7 @@ function buildUnitAtlas(): Texture[] {
   const src = Texture.from(cv).source; src.scaleMode = "nearest";
   const frames: Texture[] = [];
   for (let i = 0; i < COLS; i++) frames.push(new Texture({ source: src, frame: new Rectangle(i * UW, 0, UW, UH) }));
-  return frames; // index = fac*5 + type
+  return frames; // index = (fac*6 + type)*2 + step
 }
 
 async function main(): Promise<void> {
@@ -875,7 +880,9 @@ async function main(): Promise<void> {
     for (let k = 0; k < n; k++) {
       const u = sortOrder[k], p = pool[k], sc = T_scale[etype[u]] * (u === playerKing ? playerSizeMult : 1);
       p.x = screenX[u]; p.y = footY[u]; p.scaleX = sc; p.scaleY = sc;
-      p.texture = FRAMES[frameOf(efac[u], etype[u])];
+      const moving = Math.abs(ex[u] - prevX[u]) + Math.abs(ey[u] - prevY[u]) > 0.05;      // Gang-Frame nur in Bewegung
+      const ph = moving ? (((time * 7 + u) | 0) & 1) : 0;
+      p.texture = FRAMES[frameOf(efac[u], etype[u]) * 2 + ph];
       p.tint = eflash[u] > 0 ? 0xff5555 : u === playerKing && shieldTimer > 0 ? 0x8fc4ff : 0xffffff; p.alpha = 1;
     }
     for (let k = n; k < lastDrawn; k++) pool[k].alpha = 0; // pensionierte Slots einmalig parken
