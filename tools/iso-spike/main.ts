@@ -581,7 +581,7 @@ async function main(): Promise<void> {
   // GAMEPLAY: Horden-Kampf mit Unit-TYPEN. Jede Unit: Fraktion (0-2) + Typ (0-4) mit eigenem
   // HP/Angriff/Reichweite/Tempo/Cooldown. Verhalten: Gegner suchen -> ran bzw. Fernkampf -> Schaden ->
   // sterben. Typen: 0 Krieger 1 Bogenschütze(Fern,Pfeile) 2 Speer(Reichweite) 3 Brute(zäh,langsam) 4 König.
-  interface U { gx: number; gy: number; spr: Sprite; bk: number; f: number; ty: number; hp: number; atk: number; range: number; cd: number; cdMax: number; speed: number; flash: number; tint: number; king: boolean; dead: boolean; target: U | null; }
+  interface U { gx: number; gy: number; spr: Sprite; bk: number; f: number; ty: number; hp: number; atk: number; range: number; cd: number; cdMax: number; speed: number; flash: number; tint: number; king: boolean; dead: boolean; target: U | null; banner: Sprite | null; }
   let units: U[] = [];
   const T = [
     { hp: 50, atk: 6, range: 5, cd: 26, speed: 0.22, scale: 1.5 },    // 0 Krieger (Nahkampf)
@@ -599,7 +599,7 @@ async function main(): Promise<void> {
     const spr = new Sprite(unitTex(f, ty)); spr.anchor.set(0.5, 0.82); spr.scale.set(st.scale); spr.tint = tint;
     const p = worldToIso(gx, gy), sy = p.y - elevLift(sampleH(gx, gy)); spr.x = p.x; spr.y = sy;
     const bk = bucketOf(sy); buckets[bk].addChild(spr);
-    units.push({ gx, gy, spr, bk, f, ty, hp: st.hp, atk: st.atk, range: st.range, cd: Math.random() * st.cd, cdMax: st.cd, speed: st.speed, flash: 0, tint, king: ty === 4, dead: false, target: null });
+    units.push({ gx, gy, spr, bk, f, ty, hp: st.hp, atk: st.atk, range: st.range, cd: Math.random() * st.cd, cdMax: st.cd, speed: st.speed, flash: 0, tint, king: ty === 4, dead: false, target: null, banner: null });
   }
   // Spatial-Grid (verkettete Liste pro Zelle) -> schnelle Gegnersuche bei 8000+ Units (kein O(n^2)).
   const CELL = 18, GW = Math.ceil(MAP / CELL) + 1;
@@ -607,6 +607,7 @@ async function main(): Promise<void> {
   const cellIdx = (gx: number, gy: number): number => Math.max(0, Math.min(GW - 1, (gy / CELL) | 0)) * GW + Math.max(0, Math.min(GW - 1, (gx / CELL) | 0));
   // Todes-Effekt: fraktionsfarbener Staub-Poof, wenn eine Unit fällt -> Schlachtfeld "raucht".
   const FACTION_COL = [0x9fb8ff, 0x8fe39a, 0xe2795a]; // Menschen blau · Elfen grün · Orks rot
+  const bannerTex = FACTION_COL.map((c) => makeBannerTexture(app, c)); // Fraktions-Banner an Königen
   interface Puff { spr: Sprite; life: number; }
   const puffs: Puff[] = [];
   const puffTex = makePuffTexture(app);
@@ -615,7 +616,7 @@ async function main(): Promise<void> {
     const p = worldToIso(gx, gy); spr.x = p.x; spr.y = p.y - elevLift(sampleH(gx, gy)) - 6;
     buckets[NB - 1].addChild(spr); puffs.push({ spr, life: 1 });
   };
-  const kill = (v: U): void => { v.dead = true; addPuff(v.gx, v.gy, FACTION_COL[v.f]); v.spr.destroy(); };
+  const kill = (v: U): void => { v.dead = true; addPuff(v.gx, v.gy, FACTION_COL[v.f]); v.spr.destroy(); if (v.banner) { v.banner.destroy(); v.banner = null; } };
   const findEnemy = (u: U): U | null => {
     const cx = Math.max(0, Math.min(GW - 1, (u.gx / CELL) | 0)), cy = Math.max(0, Math.min(GW - 1, (u.gy / CELL) | 0));
     let best: U | null = null, bestD = 1e9;
@@ -649,7 +650,7 @@ async function main(): Promise<void> {
   };
   // RUNDE: 16 Horden frisch spawnen + Sturm zurücksetzen. Wird bei Sieg neu aufgerufen -> Dauerbetrieb.
   const newRound = (): void => {
-    for (const u of units) if (!u.dead) u.spr.destroy();
+    for (const u of units) if (!u.dead) { u.spr.destroy(); if (u.banner) u.banner.destroy(); }
     for (const pr of projs) pr.spr.destroy();
     units = []; projs.length = 0;
     zoneR = 320; zoneTarget = 320; zoneTimer = 0; drawZone();
@@ -745,6 +746,10 @@ async function main(): Promise<void> {
       if (u.flash > 0) { u.flash -= dt; u.spr.tint = 0xff5555; } else u.spr.tint = u.tint; // Treffer-Blitz, sonst Typ-Tönung
       const p = worldToIso(u.gx, u.gy), sy = p.y - elevLift(sampleH(u.gx, u.gy));
       u.spr.x = p.x; u.spr.y = sy;
+      if (u.king) { // Fraktions-Banner schwebt über dem König (Identität auf dem Schlachtfeld)
+        if (!u.banner) { u.banner = new Sprite(bannerTex[u.f]); u.banner.anchor.set(0.12, 1); u.banner.scale.set(1.4); buckets[NB - 1].addChild(u.banner); }
+        u.banner.x = p.x; u.banner.y = sy - 50;
+      }
       const bk = bucketOf(sy);
       if (bk !== u.bk) { buckets[bk].addChild(u.spr); u.bk = bk; } // Eimerwechsel = neue Tiefe (global)
     }
@@ -818,6 +823,15 @@ function makePuffTexture(app: Application): Texture {
   gr.circle(0, 0, 7).fill({ color: 0xffffff, alpha: 0.5 });
   gr.circle(-2, -1, 4).fill({ color: 0xffffff, alpha: 0.5 });
   gr.circle(3, 1, 4).fill({ color: 0xffffff, alpha: 0.5 });               // Wölkchen-Form
+  const t = app.renderer.generateTexture({ target: gr, antialias: true });
+  gr.destroy();
+  return t;
+}
+function makeBannerTexture(app: Application, color: number): Texture {
+  const gr = new Graphics();
+  gr.rect(-1, 0, 2, 28).fill(0x4a3318);                                    // Stange
+  gr.poly([1, 0, 14, 4, 1, 11]).fill(color).stroke({ color: 0x161a22, width: 1, alpha: 0.7 }); // Wimpel
+  gr.circle(0, -1, 2).fill(0xffd24a);                                      // Knauf
   const t = app.renderer.generateTexture({ target: gr, antialias: true });
   gr.destroy();
   return t;
