@@ -601,14 +601,9 @@ async function main(): Promise<void> {
     const bk = bucketOf(sy); buckets[bk].addChild(spr);
     units.push({ gx, gy, spr, bk, f, ty, hp: st.hp, atk: st.atk, range: st.range, cd: Math.random() * st.cd, cdMax: st.cd, speed: st.speed, flash: 0, tint, king: ty === 4, dead: false, target: null });
   }
-  for (let pi = 0; pi < PLAYERS; pi++) {
-    const f = pi % 3, c = placeOnLand();
-    spawn(c.gx, c.gy, f, 4); // König
-    for (let i = 0; i < HORDE; i++) { const r = Math.random(); const ty = r < 0.55 ? 0 : r < 0.73 ? 1 : r < 0.88 ? 2 : 3; spawn(c.gx + (Math.random() - 0.5) * 14, c.gy + (Math.random() - 0.5) * 14, f, ty); }
-  }
   // Spatial-Grid (verkettete Liste pro Zelle) -> schnelle Gegnersuche bei 8000+ Units (kein O(n^2)).
   const CELL = 18, GW = Math.ceil(MAP / CELL) + 1;
-  const gridHead = new Int32Array(GW * GW), gridNext = new Int32Array(units.length);
+  const gridHead = new Int32Array(GW * GW), gridNext = new Int32Array(PLAYERS * (HORDE + 1)); // auf Max dimensioniert (Respawn)
   const cellIdx = (gx: number, gy: number): number => Math.max(0, Math.min(GW - 1, (gy / CELL) | 0)) * GW + Math.max(0, Math.min(GW - 1, (gx / CELL) | 0));
   // Todes-Effekt: fraktionsfarbener Staub-Poof, wenn eine Unit fällt -> Schlachtfeld "raucht".
   const FACTION_COL = [0x9fb8ff, 0x8fe39a, 0xe2795a]; // Menschen blau · Elfen grün · Orks rot
@@ -652,6 +647,19 @@ async function main(): Promise<void> {
     const spr = new Sprite(arrowTex); spr.anchor.set(0.5); buckets[NB - 1].addChild(spr);
     projs.push({ gx: u.gx, gy: u.gy, tgt: tg, dmg: u.atk, spr });
   };
+  // RUNDE: 16 Horden frisch spawnen + Sturm zurücksetzen. Wird bei Sieg neu aufgerufen -> Dauerbetrieb.
+  const newRound = (): void => {
+    for (const u of units) if (!u.dead) u.spr.destroy();
+    for (const pr of projs) pr.spr.destroy();
+    units = []; projs.length = 0;
+    zoneR = 320; zoneTarget = 320; zoneTimer = 0; drawZone();
+    for (let pi = 0; pi < PLAYERS; pi++) {
+      const f = pi % 3, c = placeOnLand();
+      spawn(c.gx, c.gy, f, 4); // König
+      for (let i = 0; i < HORDE; i++) { const r = Math.random(); const ty = r < 0.55 ? 0 : r < 0.73 ? 1 : r < 0.88 ? 2 : 3; spawn(c.gx + (Math.random() - 0.5) * 14, c.gy + (Math.random() - 0.5) * 14, f, ty); }
+    }
+  };
+  newRound();
 
   // --- PIXELATE (Pixel-Perfect-Camera): Welt in eine gesnappte LOW-RES-SCREEN-RT rendern, dann
   // NEAREST x PX hochskalieren. Block = PX BILDSCHIRM-px -> KONSTANT über alle Zooms (kein Pixelmatsch
@@ -688,7 +696,7 @@ async function main(): Promise<void> {
     world.x = mx - wx * ns; world.y = my - wy * ns;
   }, { passive: false });
 
-  let acc = 0, time = 0, frame = 0;
+  let acc = 0, time = 0, frame = 0, victoryTimer = 0;
   app.ticker.add((t) => {
     const dt = t.deltaTime;
     time += t.deltaMS / 1000; frame++;
@@ -782,8 +790,10 @@ async function main(): Promise<void> {
       const cnt = [0, 0, 0]; for (const u of units) if (!u.dead) cnt[u.f]++;
       const names = ["Menschen", "Elfen", "Orks"];
       const remaining = cnt.filter((c) => c > 0).length;
-      const status = remaining <= 1 ? ` · SIEG: ${names[cnt.findIndex((c) => c > 0)] ?? "—"}` : "";
+      const win = remaining <= 1 ? (names[cnt.findIndex((c) => c > 0)] ?? "—") : "";
+      const status = remaining <= 1 ? ` · SIEG: ${win} · neue Runde…` : "";
       hud.textContent = `Horde.IO — ${cnt[0] + cnt[1] + cnt[2]} Krieger · ${names.map((n, i) => `${n} ${cnt[i]}`).join(" · ")}${status} · Sturm R${zoneR | 0} · ${app.ticker.FPS.toFixed(0)} FPS`;
+      if (remaining <= 1) { victoryTimer += 0.25; if (victoryTimer >= 5) { victoryTimer = 0; newRound(); } } else victoryTimer = 0; // Auto-Neustart 5s nach Sieg
     }
   });
 }
