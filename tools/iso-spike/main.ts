@@ -27,7 +27,7 @@ const MAP = 720, N = MAP + 1; // große Insel (16-Spieler-Battle-Royale)
 const ELEV = 150;           // Screen-Y-Lift (markante Berge)
 const NORM_K = 26;          // Höhen->Slope-Skala für die Beleuchtung
 const WATER = 0.38, MOUNTAIN = 0.80; // höhere Block-Schwelle -> weniger gesperrte Fläche, mehr Pässe
-const STEEP = 0.05;                  // Hang steiler als das -> unbegehbar (Klippe/Steilhang blockt wie Wasser)
+const STEEP = 0.22;                  // nur echte Klippen/Steilhänge blocken (Hügel begehbar -> Terrain sperrt nicht alles)
 const PLAYERS = 16, HORDE = 520, BUILDINGS = 520, TREES = 2200;
 const ASSET = "/assets/kenney/medieval-rts/PNG/Retina";
 
@@ -474,10 +474,11 @@ const ANIM = 2; // Frames pro Einheit (Gang-Zyklus)
 const UNIT_FRAMES = FAC_ORDER.length * TY_ORDER.length * ANIM; // 36 Unit-Zellen, danach Deko-Frames
 // Atlas: 36 Unit-Zellen + Deko (Bäume/Steine/Gebäude) auf EINE Source -> Deko sortiert IM SELBEN
 // Counting-Sort wie die Units (globale Z-Regel: tiefer im Bild = vorne gilt auch für Deko<->Units).
-function buildUnitAtlas(decor: { tex: Texture; h: number }[]): Texture[] {
-  const dW = decor.map((dd) => Math.max(1, Math.round(dd.h * (dd.tex.width / dd.tex.height))));
+function buildUnitAtlas(decor: { tex: Texture }[]): Texture[] {
+  // Deko in NATIVER Auflösung backen (volle Qualität); Größe kommt per Particle-scale (DECOR_SCALE).
+  const dW = decor.map((dd) => Math.max(1, Math.round(dd.tex.width))), dH = decor.map((dd) => Math.max(1, Math.round(dd.tex.height)));
   const unitW = UNIT_FRAMES * UW, AW = unitW + dW.reduce((a, b) => a + b, 0);
-  const AH = Math.max(UH, ...decor.map((dd) => dd.h));
+  const AH = Math.max(UH, ...dH);
   const cv = document.createElement("canvas"); cv.width = AW; cv.height = AH;
   const ctx = cv.getContext("2d")!; ctx.imageSmoothingEnabled = false;
   const img = ctx.createImageData(unitW, UH), d = img.data;
@@ -494,7 +495,7 @@ function buildUnitAtlas(decor: { tex: Texture; h: number }[]): Texture[] {
   ctx.putImageData(img, 0, 0); // Units als ImageData; Deko danach per drawImage in eigene Spalten
   const decorRect: Rectangle[] = [];
   let dx = unitW;
-  for (let j = 0; j < decor.length; j++) { ctx.drawImage(decor[j].tex.source.resource as CanvasImageSource, dx, 0, dW[j], decor[j].h); decorRect.push(new Rectangle(dx, 0, dW[j], decor[j].h)); dx += dW[j]; }
+  for (let j = 0; j < decor.length; j++) { ctx.drawImage(decor[j].tex.source.resource as CanvasImageSource, dx, 0, dW[j], dH[j]); decorRect.push(new Rectangle(dx, 0, dW[j], dH[j])); dx += dW[j]; }
   const src = Texture.from(cv).source; src.scaleMode = "nearest";
   const frames: Texture[] = [];
   for (let i = 0; i < UNIT_FRAMES; i++) frames.push(new Texture({ source: src, frame: new Rectangle(i * UW, 0, UW, UH) }));
@@ -640,6 +641,7 @@ async function main(): Promise<void> {
   const eowner = new Uint8Array(CAP);   // König-/Team-ID (0..PLAYERS-1). FFA: anderer Owner = Feind. efac = nur Optik.
   const edecor = new Uint8Array(CAP);   // 0 = Unit, sonst Deko-Typ+1 (Baum/Stein/Gebäude) -> sortiert mit Units, keine Sim
   let decorCount = 0;                   // erste decorCount Indizes = Deko (bleiben über Runden erhalten)
+  const buildingIdx: number[] = [];     // zerstörbare Gebäude (im Grid -> Units greifen an -> Rekruten-Seelen)
   const etarget = new Int32Array(CAP);
   const PLAYER = 0;                      // owner 0 = der Spieler-König
   const kingIdx = new Int32Array(PLAYERS).fill(-1); // Entity-ID des Königs je Owner (-1 = tot) -> Horde folgt IHM
@@ -661,13 +663,13 @@ async function main(): Promise<void> {
 
   // ATLAS-Frames + ParticleContainer-Pool. dynamicProperties: position(x,y) + vertex(scale/anchor) +
   // uvs(welches Frame) + color(tint/alpha) ändern sich pro Slot/Frame (Slot-Inhalt = jeweils andere Unit).
-  // Deko-Spezifikation (Welt-Höhe + Anker): wird in den Atlas gebacken; Frames ab Index UNIT_FRAMES.
+  // Deko-Spezifikation: native Auflösung gebacken, Größe per scale (groß genug -> nicht winzig), Fuß-Anker.
   const DECOR_SPEC = [
-    { tex: tex.tree1, h: 58, anchorY: 0.94 }, { tex: tex.tree2, h: 58, anchorY: 0.94 }, { tex: tex.tree3, h: 58, anchorY: 0.94 },
-    { tex: tex.rock1, h: 24, anchorY: 0.9 }, { tex: tex.rock2, h: 24, anchorY: 0.9 },
-    { tex: tex.barn, h: 52, anchorY: 0.9 }, { tex: tex.house, h: 52, anchorY: 0.9 }, { tex: tex.tower, h: 66, anchorY: 0.92 }, { tex: tex.barracks, h: 52, anchorY: 0.9 },
+    { tex: tex.tree1, scale: 0.9, anchorY: 0.92 }, { tex: tex.tree2, scale: 0.9, anchorY: 0.92 }, { tex: tex.tree3, scale: 0.9, anchorY: 0.92 },
+    { tex: tex.rock1, scale: 0.5, anchorY: 0.88 }, { tex: tex.rock2, scale: 0.5, anchorY: 0.88 },
+    { tex: tex.barn, scale: 0.85, anchorY: 0.9 }, { tex: tex.house, scale: 0.85, anchorY: 0.9 }, { tex: tex.tower, scale: 0.95, anchorY: 0.92 }, { tex: tex.barracks, scale: 0.85, anchorY: 0.9 },
   ];
-  const DECOR_ANCHOR = DECOR_SPEC.map((s) => s.anchorY);
+  const DECOR_ANCHOR = DECOR_SPEC.map((s) => s.anchorY), DECOR_SCALE = DECOR_SPEC.map((s) => s.scale);
   const FRAMES = buildUnitAtlas(DECOR_SPEC);
   const frameOf = (f: number, ty: number): number => f * 6 + ty; // 6 Typen pro Fraktion im Atlas
   const unitsPC = new ParticleContainer({ dynamicProperties: { position: true, vertex: true, uvs: true, color: true, rotation: false } });
@@ -741,11 +743,20 @@ async function main(): Promise<void> {
     const i = nEnt++;
     ex[i] = gx; ey[i] = gy; prevX[i] = gx; prevY[i] = gy; ealive[i] = 1; edecor[i] = dt + 1;
     efac[i] = 0; etype[i] = 0; eowner[i] = 255; eflash[i] = 0; eatk[i] = 0; etarget[i] = -1; eking[i] = 0; eranged[i] = 0;
+    if (dt >= 5) { ehp[i] = 200; emaxhp[i] = 200; buildingIdx.push(i); } // Gebäude: zerstörbar (Rekruten-Quelle)
     const p = worldToIso(gx, gy); screenX[i] = p.x; footY[i] = p.y - elevLift(sampleH(gx, gy));
   };
   for (const dp of decorPlan) if (nEnt < CAP) spawnDecor(dp.gx, dp.gy, dp.dt);
   decorCount = nEnt;                                                    // Units spawnen ab hier; Deko bleibt unten
-  const killE = (i: number): void => { if (!ealive[i]) return; ealive[i] = 0; etarget[i] = -1; if (eking[i]) kingIdx[eowner[i]] = -1; addPuff(ex[i], ey[i], FACTION_COL[efac[i]]); if (rng() < 0.5) dropSoul(ex[i], ey[i]); freeStack[freeTop++] = i; };
+  const killE = (i: number): void => {
+    if (!ealive[i]) return;
+    if (edecor[i]) { // Gebäude/Deko zerstört: Gebäude (edecor>=6) droppt Rekruten-Seelen -> Armee wächst. KEIN Freelist (Deko-Slot bleibt reserviert).
+      ealive[i] = 0;
+      if (edecor[i] >= 6) { addPuff(ex[i], ey[i], 0xffd24a, 1.6); for (let s = 0; s < 5; s++) dropSoul(ex[i] + (rng() - 0.5) * 10, ey[i] + (rng() - 0.5) * 10); }
+      return;
+    }
+    ealive[i] = 0; etarget[i] = -1; if (eking[i]) kingIdx[eowner[i]] = -1; addPuff(ex[i], ey[i], FACTION_COL[efac[i]]); if (rng() < 0.5) dropSoul(ex[i], ey[i]); freeStack[freeTop++] = i;
+  };
   // Adaptiv: erst inneres 3x3 (deckt Nahkampf), nur bei leer den äußeren 5x5-Ring -> meist 9 statt 25 Zellen.
   // FFA: Feind = anderer Owner (König-Team), nicht andere Fraktion -> mehrere Könige derselben Rasse sind Rivalen.
   const findEnemy = (i: number): number => {
@@ -825,6 +836,7 @@ async function main(): Promise<void> {
     for (const a of arrows) a.spr.destroy(); arrows.length = 0;
     for (const s of souls) s.spr.destroy(); souls.length = 0;
     nEnt = decorCount; freeTop = 0; ealive.fill(0, decorCount); kingIdx.fill(-1); // Deko (0..decorCount) bleibt erhalten
+    for (let b = 0; b < buildingIdx.length; b++) { const i = buildingIdx[b]; ealive[i] = 1; ehp[i] = emaxhp[i]; } // Gebäude pro Runde neu aufbauen
     for (const p of pool) p.alpha = 0; lastDrawn = 0;
     zoneR = 380; zoneTarget = 380; zoneTimer = 0; drawZone();
     const perHorde = Math.max(1, Math.floor((reqUnits - PLAYERS) / PLAYERS));
@@ -897,9 +909,9 @@ async function main(): Promise<void> {
       const u = sortOrder[k], p = pool[k];
       p.x = screenX[u]; p.y = footY[u];
       const di = edecor[u];
-      if (di) {                                                                          // DEKO: eigener Frame/Anker, keine Anim
-        const j = di - 1;
-        p.texture = FRAMES[UNIT_FRAMES + j]; p.anchorY = DECOR_ANCHOR[j]; p.scaleX = 1; p.scaleY = 1; p.tint = 0xffffff; p.alpha = 1;
+      if (di) {                                                                          // DEKO: eigener Frame/Anker/Skala, keine Anim
+        const j = di - 1, dsc = DECOR_SCALE[j];
+        p.texture = FRAMES[UNIT_FRAMES + j]; p.anchorY = DECOR_ANCHOR[j]; p.scaleX = dsc; p.scaleY = dsc; p.tint = 0xffffff; p.alpha = 1;
       } else {                                                                           // UNIT: Typ-Skala, Gang-Frame, Tönung
         const sc = T_scale[etype[u]] * (u === playerKing ? playerSizeMult : 1);
         p.anchorY = 0.82; p.scaleX = sc; p.scaleY = sc;
@@ -949,17 +961,18 @@ async function main(): Promise<void> {
   // ── 30 Hz FIXED-STEP-SIM + RENDER-INTERPOLATION (Gaffer-Akkumulator) ──
   // Sim läuft 30x/s (DT_FIX=2 -> identisch zum alten 60fps-Tempo/Timing), Render interpoliert prevX->ex
   // pro Bildschirm-Frame -> glatt bei jeder Monitor-Hz UND ~2-5x weniger Sim-Last (Kampf/Suche/Separation).
-  const DT_FIX = 2, HSTEP = 1000 / 30, STORM_DMG = 3.5;
+  const DT_FIX = 2, HSTEP = 1000 / 30, STORM_DMG = 2.2;
   let simFrame = 0;
   const simTick = (): void => {
     simFrame++;
     // 1) Spatial-Grid neu aufbauen (nur lebende Units)
     gridHead.fill(-1);
     for (let i = decorCount; i < nEnt; i++) { if (!ealive[i]) continue; const c = clampCell(ey[i]) * GW + clampCell(ex[i]); gridNext[i] = gridHead[c]; gridHead[c] = i; }
+    for (let b = 0; b < buildingIdx.length; b++) { const i = buildingIdx[b]; if (!ealive[i]) continue; const c = clampCell(ey[i]) * GW + clampCell(ex[i]); gridNext[i] = gridHead[c]; gridHead[c] = i; } // Gebäude angreifbar machen
     // 1b) Sturmzone in Phasen schrumpfen
     zoneTimer += HSTEP / 1000;
-    if (zoneTimer > 20 && zoneTarget > 60) { zoneTimer = 0; zoneTarget *= 0.72; } // langsamer/größer -> Match ~1.5min, kein Sofort-Wipe
-    if (Math.abs(zoneR - zoneTarget) > 0.3) { zoneR += (zoneTarget - zoneR) * Math.min(1, 0.012 * DT_FIX); drawZone(); }
+    if (zoneTimer > 38 && zoneTarget > 95) { zoneTimer = 0; zoneTarget *= 0.85; } // viel langsamer: ~40s Atempause/Stufe, mildere Schritte
+    if (Math.abs(zoneR - zoneTarget) > 0.3) { zoneR += (zoneTarget - zoneR) * Math.min(1, 0.006 * DT_FIX); drawZone(); }
     const zr2 = zoneR * zoneR;
     // 2) Kampf + Bewegung (SoA, Index i; Deko 0..decorCount übersprungen)
     for (let i = decorCount; i < nEnt; i++) {
