@@ -745,6 +745,18 @@ async function main(): Promise<void> {
     }
     return -1;
   };
+  // Champion-CLEAVE: AoE-Hieb auf Gegner nahe dem Haupttreffer (Massen-Wucht; Champions sind selten -> billig).
+  const cleave = (i: number, tg: number): void => {
+    const ccx = clampCell(ex[tg]), ccy = clampCell(ey[tg]), splash = T_atk[5] * FAC_DMG[efac[i]] * 0.5, uf = eowner[i];
+    for (let oy = -1; oy <= 1; oy++) for (let ox = -1; ox <= 1; ox++) {
+      const ng = ccx + ox, mg = ccy + oy; if (ng < 0 || mg < 0 || ng >= GW || mg >= GW) continue;
+      for (let j = gridHead[mg * GW + ng]; j !== -1; j = gridNext[j]) {
+        if (j === tg || !ealive[j] || eowner[j] === uf) continue;
+        const dx = ex[j] - ex[tg], dy = ey[j] - ey[tg];
+        if (dx * dx + dy * dy < 49) { ehp[j] -= splash; eflash[j] = 6; if (ehp[j] <= 0) killE(j); }
+      }
+    }
+  };
   // KÖNIG-FX: Banner + HP-Balken als gepoolte Sprites (kein Per-Frame Graphics.clear mehr).
   interface KingFX { i: number; banner: Sprite; bg: Sprite; fill: Sprite; }
   const kingFX: KingFX[] = [];
@@ -930,7 +942,7 @@ async function main(): Promise<void> {
         const dx = ex[tg] - ex[i], dy = ey[tg] - ey[i], d = Math.sqrt(dx * dx + dy * dy) || 1;
         if (d <= T_range[ty]) {                                                           // in Reichweite -> angreifen (auch Spieler)
           ecd[i] -= DT_FIX;
-          if (ecd[i] <= 0) { ecd[i] = T_cd[ty]; if (eranged[i]) fireArrow(i, tg); else { eatk[i] = 5; ehp[tg] -= T_atk[ty] * FAC_DMG[efac[i]] * (isPlayer ? playerDmgMult * (buffDmg > 0 ? 1.5 : 1) : 1) * (tg === playerKing && shieldTimer > 0 ? 0.5 : 1); eflash[tg] = 6; if (ehp[tg] <= 0) killE(tg); } }
+          if (ecd[i] <= 0) { ecd[i] = T_cd[ty]; if (eranged[i]) fireArrow(i, tg); else { eatk[i] = 5; ehp[tg] -= T_atk[ty] * FAC_DMG[efac[i]] * (isPlayer ? playerDmgMult * (buffDmg > 0 ? 1.5 : 1) : 1) * (tg === playerKing && shieldTimer > 0 ? 0.5 : 1); eflash[tg] = 6; if (ty === 5) cleave(i, tg); if (ehp[tg] <= 0) killE(tg); } }
           if (eranged[i] && d < 16 && !isPlayer) { mvx = -dx / d * sp; mvy = -dy / d * sp; } // Bogenschütze kitet
         } else if (!isPlayer) { mvx = dx / d * sp; mvy = dy / d * sp; }                   // hinlaufen (Spieler steuert selbst)
       }
