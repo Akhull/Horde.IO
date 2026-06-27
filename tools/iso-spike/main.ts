@@ -581,7 +581,7 @@ async function main(): Promise<void> {
   // GAMEPLAY: Horden-Kampf mit Unit-TYPEN. Jede Unit: Fraktion (0-2) + Typ (0-4) mit eigenem
   // HP/Angriff/Reichweite/Tempo/Cooldown. Verhalten: Gegner suchen -> ran bzw. Fernkampf -> Schaden ->
   // sterben. Typen: 0 Krieger 1 Bogenschütze(Fern,Pfeile) 2 Speer(Reichweite) 3 Brute(zäh,langsam) 4 König.
-  interface U { gx: number; gy: number; spr: Sprite; bk: number; f: number; ty: number; hp: number; atk: number; range: number; cd: number; cdMax: number; speed: number; flash: number; tint: number; king: boolean; dead: boolean; target: U | null; banner: Sprite | null; }
+  interface U { gx: number; gy: number; spr: Sprite; bk: number; f: number; ty: number; hp: number; maxHp: number; atk: number; range: number; cd: number; cdMax: number; speed: number; flash: number; tint: number; king: boolean; dead: boolean; target: U | null; banner: Sprite | null; hpbar: Graphics | null; }
   let units: U[] = [];
   const T = [
     { hp: 50, atk: 6, range: 5, cd: 26, speed: 0.22, scale: 1.5 },    // 0 Krieger (Nahkampf)
@@ -599,7 +599,7 @@ async function main(): Promise<void> {
     const spr = new Sprite(unitTex(f, ty)); spr.anchor.set(0.5, 0.82); spr.scale.set(st.scale); spr.tint = tint;
     const p = worldToIso(gx, gy), sy = p.y - elevLift(sampleH(gx, gy)); spr.x = p.x; spr.y = sy;
     const bk = bucketOf(sy); buckets[bk].addChild(spr);
-    units.push({ gx, gy, spr, bk, f, ty, hp: st.hp, atk: st.atk, range: st.range, cd: Math.random() * st.cd, cdMax: st.cd, speed: st.speed, flash: 0, tint, king: ty === 4, dead: false, target: null, banner: null });
+    units.push({ gx, gy, spr, bk, f, ty, hp: st.hp, maxHp: st.hp, atk: st.atk, range: st.range, cd: Math.random() * st.cd, cdMax: st.cd, speed: st.speed, flash: 0, tint, king: ty === 4, dead: false, target: null, banner: null, hpbar: null });
   }
   // Spatial-Grid (verkettete Liste pro Zelle) -> schnelle Gegnersuche bei 8000+ Units (kein O(n^2)).
   const CELL = 18, GW = Math.ceil(MAP / CELL) + 1;
@@ -616,7 +616,7 @@ async function main(): Promise<void> {
     const p = worldToIso(gx, gy); spr.x = p.x; spr.y = p.y - elevLift(sampleH(gx, gy)) - 6;
     buckets[NB - 1].addChild(spr); puffs.push({ spr, life: 1 });
   };
-  const kill = (v: U): void => { v.dead = true; addPuff(v.gx, v.gy, FACTION_COL[v.f]); v.spr.destroy(); if (v.banner) { v.banner.destroy(); v.banner = null; } };
+  const kill = (v: U): void => { v.dead = true; addPuff(v.gx, v.gy, FACTION_COL[v.f]); v.spr.destroy(); if (v.banner) { v.banner.destroy(); v.banner = null; } if (v.hpbar) { v.hpbar.destroy(); v.hpbar = null; } };
   const findEnemy = (u: U): U | null => {
     const cx = Math.max(0, Math.min(GW - 1, (u.gx / CELL) | 0)), cy = Math.max(0, Math.min(GW - 1, (u.gy / CELL) | 0));
     let best: U | null = null, bestD = 1e9;
@@ -650,7 +650,7 @@ async function main(): Promise<void> {
   };
   // RUNDE: 16 Horden frisch spawnen + Sturm zurücksetzen. Wird bei Sieg neu aufgerufen -> Dauerbetrieb.
   const newRound = (): void => {
-    for (const u of units) if (!u.dead) { u.spr.destroy(); if (u.banner) u.banner.destroy(); }
+    for (const u of units) if (!u.dead) { u.spr.destroy(); if (u.banner) u.banner.destroy(); if (u.hpbar) u.hpbar.destroy(); }
     for (const pr of projs) pr.spr.destroy();
     units = []; projs.length = 0;
     zoneR = 320; zoneTarget = 320; zoneTimer = 0; drawZone();
@@ -746,9 +746,13 @@ async function main(): Promise<void> {
       if (u.flash > 0) { u.flash -= dt; u.spr.tint = 0xff5555; } else u.spr.tint = u.tint; // Treffer-Blitz, sonst Typ-Tönung
       const p = worldToIso(u.gx, u.gy), sy = p.y - elevLift(sampleH(u.gx, u.gy));
       u.spr.x = p.x; u.spr.y = sy;
-      if (u.king) { // Fraktions-Banner schwebt über dem König (Identität auf dem Schlachtfeld)
+      if (u.king) { // Fraktions-Banner + HP-Balken über dem König (Identität + Lesbarkeit)
         if (!u.banner) { u.banner = new Sprite(bannerTex[u.f]); u.banner.anchor.set(0.12, 1); u.banner.scale.set(1.4); buckets[NB - 1].addChild(u.banner); }
         u.banner.x = p.x; u.banner.y = sy - 50;
+        if (!u.hpbar) { u.hpbar = new Graphics(); u.hpbar.eventMode = "none"; buckets[NB - 1].addChild(u.hpbar); }
+        const hpf = Math.max(0, u.hp / u.maxHp), bw = 20;
+        u.hpbar.clear().rect(-bw / 2, 0, bw, 3).fill(0x101418).rect(-bw / 2, 0, bw * hpf, 3).fill(hpf > 0.5 ? 0x6fe06f : hpf > 0.25 ? 0xe0c040 : 0xe05050);
+        u.hpbar.x = p.x; u.hpbar.y = sy - 44;
       }
       const bk = bucketOf(sy);
       if (bk !== u.bk) { buckets[bk].addChild(u.spr); u.bk = bk; } // Eimerwechsel = neue Tiefe (global)
