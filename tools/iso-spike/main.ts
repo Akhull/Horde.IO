@@ -10,6 +10,18 @@
 
 import { Application, Container, Sprite, Texture, Assets, Geometry, Buffer, BufferUsage, Mesh, Shader, GlProgram, Graphics, RenderTexture, Rectangle, ParticleContainer, Particle } from "pixi.js";
 
+// SEEDED RNG (mulberry32) — Worldgen + Sim ziehen hieraus -> deterministisch/reproduzierbar per ?seed=N.
+// Fundament fürs Multiplayer ([[multiplayer-masterplan]]): gleicher Seed = gleicher Spielverlauf.
+// FX/Optik (Poofs) dürfen weiter Math.random nutzen (rein lokale Präsentation).
+let _rngState = 1 >>> 0;
+function seedRng(s: number): void { _rngState = s >>> 0 || 1; }
+function rng(): number {
+  _rngState = (_rngState + 0x6d2b79f5) | 0;
+  let t = Math.imul(_rngState ^ (_rngState >>> 15), 1 | _rngState);
+  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
+
 const TILE_W = 32, TILE_H = 16, HW = TILE_W / 2, HH = TILE_H / 2;
 const MAP = 720, N = MAP + 1; // große Insel (16-Spieler-Battle-Royale)
 const ELEV = 150;           // Screen-Y-Lift (markante Berge)
@@ -152,7 +164,7 @@ function buildHeight(terrace: boolean): void {
 function erode(drops: number): void {
   const inertia = 0.04, capF = 3.6, minSlope = 0.01, erodeR = 0.34, depositR = 0.28, evap = 0.018, grav = 5, life = 36;
   for (let d = 0; d < drops; d++) {
-    let x = 1 + Math.random() * (N - 3), y = 1 + Math.random() * (N - 3);
+    let x = 1 + rng() * (N - 3), y = 1 + rng() * (N - 3);
     let dx = 0, dy = 0, spd = 1, water = 1, sed = 0;
     for (let l = 0; l < life; l++) {
       const i = Math.floor(x), j = Math.floor(y), u = x - i, v = y - j;
@@ -519,6 +531,10 @@ async function main(): Promise<void> {
   if (lowRes || pixelateBake) for (const tt of Object.values(tex)) tt.source.scaleMode = "nearest";
 
   hud.textContent = "Baue Welt…";
+  // Seed: per ?seed=N reproduzierbar (Worldgen + Sim ziehen aus rng()); sonst zufällig pro Laden.
+  const seed = (parseInt(params.get("seed") ?? "", 10) || ((Math.random() * 4294967296) >>> 0)) >>> 0;
+  seedRng(seed);
+  console.log("[Horde.IO] seed =", seed);
   buildHeight(terrace);
   const world = new Container();
   app.stage.addChild(world);
@@ -544,7 +560,7 @@ async function main(): Promise<void> {
   const dry = (gx: number, gy: number): boolean => WET[Math.max(0, Math.min(N - 1, Math.floor(gx))) * N + Math.max(0, Math.min(N - 1, Math.floor(gy)))] <= 0.0005;
   function placeOnLand(): { gx: number; gy: number } {
     for (let i = 0; i < 80; i++) {
-      const gx = 6 + Math.random() * (MAP - 12), gy = 6 + Math.random() * (MAP - 12), h = sampleH(gx, gy);
+      const gx = 6 + rng() * (MAP - 12), gy = 6 + rng() * (MAP - 12), h = sampleH(gx, gy);
       if (h >= WATER + 0.03 && h <= MOUNTAIN - 0.02 && slopeAt(gx, gy) < STEEP && dry(gx, gy)) return { gx, gy };
     }
     return { gx: MAP / 2, gy: MAP / 2 };
@@ -559,17 +575,17 @@ async function main(): Promise<void> {
   let tPlaced = 0, tGuard = 0;
   while (tPlaced < TREES && tGuard < TREES * 25) {
     tGuard++;
-    const gx = 6 + Math.random() * (MAP - 12), gy = 6 + Math.random() * (MAP - 12);
+    const gx = 6 + rng() * (MAP - 12), gy = 6 + rng() * (MAP - 12);
     const h = sampleH(gx, gy);
     if (h < WATER + 0.04 || h > 0.70 || slopeAt(gx, gy) > 0.06 || !dry(gx, gy)) continue;
     if (forestMask(gx, gy) < 0.52) continue; // nur in Wald-Zonen -> Cluster
-    const s = new Sprite(treeT[(Math.random() * 3) | 0]);
+    const s = new Sprite(treeT[(rng() * 3) | 0]);
     s.anchor.set(0.5, 0.9); s.scale.set(0.6); s.zIndex = 0; place(s, gx, gy); tPlaced++;
   }
   // STEINE: am Bergfuß / höherem felsigem Gelände gestreut.
   for (let i = 0; i < TREES * 0.2; i++) {
     let gx = 0, gy = 0, ok = false;
-    for (let k = 0; k < 25; k++) { gx = 6 + Math.random() * (MAP - 12); gy = 6 + Math.random() * (MAP - 12); if (sampleH(gx, gy) > 0.58 && sampleH(gx, gy) < 0.9) { ok = true; break; } }
+    for (let k = 0; k < 25; k++) { gx = 6 + rng() * (MAP - 12); gy = 6 + rng() * (MAP - 12); if (sampleH(gx, gy) > 0.58 && sampleH(gx, gy) < 0.9) { ok = true; break; } }
     if (!ok) continue;
     const s = new Sprite(rockT[i % 2]); s.anchor.set(0.5, 0.9); s.scale.set(0.28); s.zIndex = 0; place(s, gx, gy);
   }
@@ -580,7 +596,7 @@ async function main(): Promise<void> {
   let buildingsLeft = 0;
   const orbTex = makeOrbTexture(app);
   const addBuilding = (gx: number, gy: number): void => {
-    const s = new Sprite(bTex[(Math.random() * 4) | 0]);
+    const s = new Sprite(bTex[(rng() * 4) | 0]);
     s.anchor.set(0.5, 0.88); s.scale.set(0.58); s.zIndex = 1; s.eventMode = "static"; s.cursor = "pointer";
     s.on("pointerdown", (e) => {
       e.stopPropagation();
@@ -592,7 +608,7 @@ async function main(): Promise<void> {
   // STÄDTE: Zentren auf flachem Gras (nie Berg/uneben), dann Gebäude drumherum clustern.
   const towns: { gx: number; gy: number }[] = [];
   for (let g = 0; g < 20000 && towns.length < 26; g++) {
-    const gx = 14 + Math.random() * (MAP - 28), gy = 14 + Math.random() * (MAP - 28);
+    const gx = 14 + rng() * (MAP - 28), gy = 14 + rng() * (MAP - 28);
     const h = sampleH(gx, gy);
     if (h > 0.43 && h < 0.58 && slopeAt(gx, gy) < 0.022 && dry(gx, gy) && towns.every((t) => Math.hypot(t.gx - gx, t.gy - gy) > 34)) towns.push({ gx, gy });
   }
@@ -601,7 +617,7 @@ async function main(): Promise<void> {
     const target = Math.ceil(BUILDINGS / Math.max(1, towns.length));
     while (n < target && g2 < 800) {
       g2++;
-      const a = Math.random() * Math.PI * 2, r = Math.random() * 20;
+      const a = rng() * Math.PI * 2, r = rng() * 20;
       const gx = t.gx + Math.cos(a) * r, gy = t.gy + Math.sin(a) * r;
       const h = sampleH(gx, gy);
       if (h < 0.42 || h > 0.62 || slopeAt(gx, gy) > 0.03 || !dry(gx, gy)) continue; // flach + Gras, trocken, nie Berg/uneben
@@ -698,7 +714,7 @@ async function main(): Promise<void> {
     if (souls.length >= SOUL_CAP || playerKing < 0 || !ealive[playerKing]) return;
     const dx = gx - ex[playerKing], dy = gy - ey[playerKing];
     if (dx * dx + dy * dy > 250 * 250) return;                          // nur nahe dem Spieler -> keine Sprite-Flut
-    const gold = Math.random() < 0.045;                                 // seltene Gold-Seele -> Champion
+    const gold = rng() < 0.045;                                 // seltene Gold-Seele -> Champion
     const spr = new Sprite(orbTex); spr.anchor.set(0.5); spr.tint = gold ? 0xffd24a : 0x8fe39a; spr.scale.set(gold ? 0.62 : 0.42);
     const p = worldToIso(gx, gy); spr.x = p.x; spr.y = p.y - elevLift(sampleH(gx, gy)) - 4;
     fxLayer.addChild(spr); souls.push({ gx, gy, spr, gold });
@@ -717,19 +733,19 @@ async function main(): Promise<void> {
   const POW_COL = [0x49e0e0, 0xe05050, 0x6fe06f, 0x7fb0ff];
   interface Pow { gx: number; gy: number; type: number; spr: Sprite; }
   const pows: Pow[] = [];
-  const placePow = (p: Pow): void => { const c = placeOnLand(); p.gx = c.gx; p.gy = c.gy; p.type = (Math.random() * 4) | 0; p.spr.tint = POW_COL[p.type]; const w = worldToIso(p.gx, p.gy); p.spr.x = w.x; p.spr.y = w.y - elevLift(sampleH(p.gx, p.gy)) - 6; };
+  const placePow = (p: Pow): void => { const c = placeOnLand(); p.gx = c.gx; p.gy = c.gy; p.type = (rng() * 4) | 0; p.spr.tint = POW_COL[p.type]; const w = worldToIso(p.gx, p.gy); p.spr.x = w.x; p.spr.y = w.y - elevLift(sampleH(p.gx, p.gy)) - 6; };
   const spawnPows = (): void => {
     for (const p of pows) p.spr.destroy(); pows.length = 0;
     for (let i = 0; i < 12; i++) { const spr = new Sprite(orbTex); spr.anchor.set(0.5); spr.scale.set(0.7); fxLayer.addChild(spr); const p: Pow = { gx: 0, gy: 0, type: 0, spr }; placePow(p); pows.push(p); }
   };
   const spawnE = (gx: number, gy: number, f: number, ty: number, owner: number): number => {
     const i = freeTop > 0 ? freeStack[--freeTop] : nEnt++;
-    ex[i] = gx; ey[i] = gy; prevX[i] = gx; prevY[i] = gy; emaxhp[i] = T_hp[ty] * FAC_HP[f]; ehp[i] = emaxhp[i]; ecd[i] = Math.random() * T_cd[ty]; eflash[i] = 0; eatk[i] = 0;
+    ex[i] = gx; ey[i] = gy; prevX[i] = gx; prevY[i] = gy; emaxhp[i] = T_hp[ty] * FAC_HP[f]; ehp[i] = emaxhp[i]; ecd[i] = rng() * T_cd[ty]; eflash[i] = 0; eatk[i] = 0;
     efac[i] = f; etype[i] = ty; eowner[i] = owner; eking[i] = ty === 4 ? 1 : 0; eranged[i] = T_range[ty] > 20 || (ty === 5 && f === 1) ? 1 : 0; ealive[i] = 1; etarget[i] = -1; // Elf-Champion = Fernkämpfer
     const p = worldToIso(gx, gy); screenX[i] = p.x; footY[i] = p.y - elevLift(sampleH(gx, gy));
     return i;
   };
-  const killE = (i: number): void => { if (!ealive[i]) return; ealive[i] = 0; etarget[i] = -1; if (eking[i]) kingIdx[eowner[i]] = -1; addPuff(ex[i], ey[i], FACTION_COL[efac[i]]); if (Math.random() < 0.5) dropSoul(ex[i], ey[i]); freeStack[freeTop++] = i; };
+  const killE = (i: number): void => { if (!ealive[i]) return; ealive[i] = 0; etarget[i] = -1; if (eking[i]) kingIdx[eowner[i]] = -1; addPuff(ex[i], ey[i], FACTION_COL[efac[i]]); if (rng() < 0.5) dropSoul(ex[i], ey[i]); freeStack[freeTop++] = i; };
   // Adaptiv: erst inneres 3x3 (deckt Nahkampf), nur bei leer den äußeren 5x5-Ring -> meist 9 statt 25 Zellen.
   // FFA: Feind = anderer Owner (König-Team), nicht andere Fraktion -> mehrere Könige derselben Rasse sind Rivalen.
   const findEnemy = (i: number): number => {
@@ -818,8 +834,8 @@ async function main(): Promise<void> {
       const king = spawnE(c.gx, c.gy, f, 4, pi); kingIdx[pi] = king; addKingFX(king, f);
       if (pi === PLAYER) { emaxhp[king] *= DIFF[difficulty].hp; ehp[king] = emaxhp[king]; } // Schwierigkeit -> Spieler-König-HP
       for (let i = 0; i < perHorde; i++) {
-        const r = Math.random(), ty = r < 0.55 ? 0 : r < 0.73 ? 1 : r < 0.88 ? 2 : 3;
-        let gx = c.gx + (Math.random() - 0.5) * 2 * spreadR, gy = c.gy + (Math.random() - 0.5) * 2 * spreadR;
+        const r = rng(), ty = r < 0.55 ? 0 : r < 0.73 ? 1 : r < 0.88 ? 2 : 3;
+        let gx = c.gx + (rng() - 0.5) * 2 * spreadR, gy = c.gy + (rng() - 0.5) * 2 * spreadR;
         if (!passable(gx, gy)) { gx = c.gx; gy = c.gy; }                  // nicht ins Wasser/Steilhang spawnen
         spawnE(gx, gy, f, ty, pi);
       }
@@ -894,7 +910,7 @@ async function main(): Promise<void> {
   const aliveKings = (): number[] => kingFX.filter((kf) => ealive[kf.i]).map((kf) => kf.i);
   window.addEventListener("keydown", (e) => {
     if (e.key === "+" || e.key === "=") { const ks = aliveKings(); if (!ks.length) return;
-      for (let n = 0; n < 1000 && (freeTop > 0 || nEnt < CAP); n++) { const ki = ks[(Math.random() * ks.length) | 0]; const r = Math.random(); const ty = r < 0.55 ? 0 : r < 0.73 ? 1 : r < 0.88 ? 2 : 3; spawnE(ex[ki] + (Math.random() - 0.5) * 30, ey[ki] + (Math.random() - 0.5) * 30, efac[ki], ty, eowner[ki]); } }
+      for (let n = 0; n < 1000 && (freeTop > 0 || nEnt < CAP); n++) { const ki = ks[(rng() * ks.length) | 0]; const r = rng(); const ty = r < 0.55 ? 0 : r < 0.73 ? 1 : r < 0.88 ? 2 : 3; spawnE(ex[ki] + (rng() - 0.5) * 30, ey[ki] + (rng() - 0.5) * 30, efac[ki], ty, eowner[ki]); } }
     else if (e.key === "-" || e.key === "_") { let removed = 0; for (let i = 0; i < nEnt && removed < 1000; i++) if (ealive[i] && !eking[i]) { killE(i); removed++; } }
   });
 
@@ -1110,10 +1126,10 @@ async function main(): Promise<void> {
         const s = souls[i], dx = kx - s.gx, dy = ky - s.gy, d2 = dx * dx + dy * dy;
         if (d2 < 64) {                                                   // eingesammelt (< 8 grid)
           if (s.gold) {                                                  // Gold-Seele -> Champion beschwören (+ extra XP)
-            if (freeTop > 0 || nEnt < CAP) spawnE(kx + (Math.random() - 0.5) * 16, ky + (Math.random() - 0.5) * 16, pf, 5, PLAYER);
+            if (freeTop > 0 || nEnt < CAP) spawnE(kx + (rng() - 0.5) * 16, ky + (rng() - 0.5) * 16, pf, 5, PLAYER);
             onPlayerSoul(); onPlayerSoul(); addPuff(kx, ky, 0xffd24a, 1.5);
           } else {                                                       // grüne Seele -> Vasall + König-XP
-            if (freeTop > 0 || nEnt < CAP) { const r = Math.random(), ty = r < 0.78 ? 0 : r < 0.92 ? 1 : 2; spawnE(kx + (Math.random() - 0.5) * 16, ky + (Math.random() - 0.5) * 16, pf, ty, PLAYER); }
+            if (freeTop > 0 || nEnt < CAP) { const r = rng(), ty = r < 0.78 ? 0 : r < 0.92 ? 1 : 2; spawnE(kx + (rng() - 0.5) * 16, ky + (rng() - 0.5) * 16, pf, ty, PLAYER); }
             onPlayerSoul();
           }
           s.spr.destroy(); souls.splice(i, 1); continue;
