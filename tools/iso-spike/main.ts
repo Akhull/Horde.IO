@@ -624,7 +624,11 @@ async function main(): Promise<void> {
   const screenX = new Float32Array(CAP), footY = new Float32Array(CAP); // iso-Render-Pos (footY = Sort-Key)
   const ehp = new Float32Array(CAP), emaxhp = new Float32Array(CAP), ecd = new Float32Array(CAP), eflash = new Float32Array(CAP), eatk = new Float32Array(CAP);
   const efac = new Uint8Array(CAP), etype = new Uint8Array(CAP), eking = new Uint8Array(CAP), eranged = new Uint8Array(CAP), ealive = new Uint8Array(CAP), evis = new Uint8Array(CAP);
+  const eowner = new Uint8Array(CAP);   // König-/Team-ID (0..PLAYERS-1). FFA: anderer Owner = Feind. efac = nur Optik.
   const etarget = new Int32Array(CAP);
+  const PLAYER = 0;                      // owner 0 = der Spieler-König
+  const kingIdx = new Int32Array(PLAYERS).fill(-1); // Entity-ID des Königs je Owner (-1 = tot) -> Horde folgt IHM
+  let playerKing = -1, camInit = false;
   let nEnt = 0;                                                         // höchster je belegter Index +1
   const freeStack = new Int32Array(CAP); let freeTop = 0;               // O(1) Tod/Spawn (keine .filter-Kompaktierung)
 
@@ -658,24 +662,25 @@ async function main(): Promise<void> {
     const p = worldToIso(gx, gy); spr.x = p.x; spr.y = p.y - elevLift(sampleH(gx, gy)) - 6;
     fxLayer.addChild(spr); puffs.push({ spr, life: 1 });
   };
-  const spawnE = (gx: number, gy: number, f: number, ty: number): number => {
+  const spawnE = (gx: number, gy: number, f: number, ty: number, owner: number): number => {
     const i = freeTop > 0 ? freeStack[--freeTop] : nEnt++;
     ex[i] = gx; ey[i] = gy; prevX[i] = gx; prevY[i] = gy; ehp[i] = T_hp[ty]; emaxhp[i] = T_hp[ty]; ecd[i] = Math.random() * T_cd[ty]; eflash[i] = 0; eatk[i] = 0;
-    efac[i] = f; etype[i] = ty; eking[i] = ty === 4 ? 1 : 0; eranged[i] = T_range[ty] > 20 ? 1 : 0; ealive[i] = 1; etarget[i] = -1;
+    efac[i] = f; etype[i] = ty; eowner[i] = owner; eking[i] = ty === 4 ? 1 : 0; eranged[i] = T_range[ty] > 20 ? 1 : 0; ealive[i] = 1; etarget[i] = -1;
     const p = worldToIso(gx, gy); screenX[i] = p.x; footY[i] = p.y - elevLift(sampleH(gx, gy));
     return i;
   };
-  const killE = (i: number): void => { if (!ealive[i]) return; ealive[i] = 0; etarget[i] = -1; addPuff(ex[i], ey[i], FACTION_COL[efac[i]]); freeStack[freeTop++] = i; };
+  const killE = (i: number): void => { if (!ealive[i]) return; ealive[i] = 0; etarget[i] = -1; if (eking[i]) kingIdx[eowner[i]] = -1; addPuff(ex[i], ey[i], FACTION_COL[efac[i]]); freeStack[freeTop++] = i; };
   // Adaptiv: erst inneres 3x3 (deckt Nahkampf), nur bei leer den äußeren 5x5-Ring -> meist 9 statt 25 Zellen.
+  // FFA: Feind = anderer Owner (König-Team), nicht andere Fraktion -> mehrere Könige derselben Rasse sind Rivalen.
   const findEnemy = (i: number): number => {
-    const cx = clampCell(ex[i]), cy = clampCell(ey[i]), uf = efac[i], xi = ex[i], yi = ey[i];
+    const cx = clampCell(ex[i]), cy = clampCell(ey[i]), uf = eowner[i], xi = ex[i], yi = ey[i];
     for (let R = 1; R <= 2; R++) {
       let best = -1, bestD = 1e9, scan = 0;
       for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) {
         if (R === 2 && dx > -2 && dx < 2 && dy > -2 && dy < 2) continue; // inneres 3x3 in R=2 überspringen (schon gescannt)
         const nx = cx + dx, ny = cy + dy; if (nx < 0 || ny < 0 || nx >= GW || ny >= GW) continue;
         for (let j = gridHead[ny * GW + nx]; j !== -1; j = gridNext[j]) {
-          if (!ealive[j] || efac[j] === uf) continue;
+          if (!ealive[j] || eowner[j] === uf) continue;
           const ddx = ex[j] - xi, ddy = ey[j] - yi, d = ddx * ddx + ddy * ddy;
           if (d < bestD) { bestD = d; best = j; }
           if (++scan >= 64) { dy = R + 1; dx = R + 1; break; }           // Scan-Budget gegen Mega-dichte Zellen ("nah genug" reicht)
@@ -720,21 +725,22 @@ async function main(): Promise<void> {
     for (const kf of kingFX) { kf.banner.destroy(); kf.bg.destroy(); kf.fill.destroy(); }
     kingFX.length = 0;
     for (const a of arrows) a.spr.destroy(); arrows.length = 0;
-    nEnt = 0; freeTop = 0; ealive.fill(0);
+    nEnt = 0; freeTop = 0; ealive.fill(0); kingIdx.fill(-1);
     for (const p of pool) p.alpha = 0; lastDrawn = 0;
     zoneR = 320; zoneTarget = 320; zoneTimer = 0; drawZone();
     const perHorde = Math.max(1, Math.floor((reqUnits - PLAYERS) / PLAYERS));
     const spreadR = Math.min(110, Math.max(8, Math.sqrt(perHorde) * 1.5)); // Streuung skaliert mit Hordengröße -> keine 1000+-Units-pro-Zelle (findEnemy/Separation bezahlbar)
     for (let pi = 0; pi < PLAYERS; pi++) {
-      const f = pi % 3, c = placeOnLand();
-      addKingFX(spawnE(c.gx, c.gy, f, 4), f); // König
+      const f = pi % 3, c = placeOnLand();                               // owner = pi (eigenes König-Team), Fraktion = pi%3 (Optik)
+      const king = spawnE(c.gx, c.gy, f, 4, pi); kingIdx[pi] = king; addKingFX(king, f);
       for (let i = 0; i < perHorde; i++) {
         const r = Math.random(), ty = r < 0.55 ? 0 : r < 0.73 ? 1 : r < 0.88 ? 2 : 3;
         let gx = c.gx + (Math.random() - 0.5) * 2 * spreadR, gy = c.gy + (Math.random() - 0.5) * 2 * spreadR;
         if (!passable(gx, gy)) { gx = c.gx; gy = c.gy; }                  // nicht ins Wasser/Steilhang spawnen
-        spawnE(gx, gy, f, ty);
+        spawnE(gx, gy, f, ty, pi);
       }
     }
+    playerKing = kingIdx[PLAYER]; camInit = false;                       // Kamera beim Rundenstart auf Spieler-König snappen
   };
   let lastDrawn = 0;
   newRound();
@@ -800,9 +806,15 @@ async function main(): Promise<void> {
   const aliveKings = (): number[] => kingFX.filter((kf) => ealive[kf.i]).map((kf) => kf.i);
   window.addEventListener("keydown", (e) => {
     if (e.key === "+" || e.key === "=") { const ks = aliveKings(); if (!ks.length) return;
-      for (let n = 0; n < 1000 && (freeTop > 0 || nEnt < CAP); n++) { const ki = ks[(Math.random() * ks.length) | 0]; const r = Math.random(); const ty = r < 0.55 ? 0 : r < 0.73 ? 1 : r < 0.88 ? 2 : 3; spawnE(ex[ki] + (Math.random() - 0.5) * 30, ey[ki] + (Math.random() - 0.5) * 30, efac[ki], ty); } }
+      for (let n = 0; n < 1000 && (freeTop > 0 || nEnt < CAP); n++) { const ki = ks[(Math.random() * ks.length) | 0]; const r = Math.random(); const ty = r < 0.55 ? 0 : r < 0.73 ? 1 : r < 0.88 ? 2 : 3; spawnE(ex[ki] + (Math.random() - 0.5) * 30, ey[ki] + (Math.random() - 0.5) * 30, efac[ki], ty, eowner[ki]); } }
     else if (e.key === "-" || e.key === "_") { let removed = 0; for (let i = 0; i < nEnt && removed < 1000; i++) if (ealive[i] && !eking[i]) { killE(i); removed++; } }
   });
+
+  // SPIELER-STEUERUNG: WASD/Pfeile bewegen den eigenen König (owner 0). Bildschirm-Richtung -> Iso-Grid.
+  const keys = new Set<string>();
+  window.addEventListener("keydown", (e) => { keys.add(e.key.toLowerCase()); });
+  window.addEventListener("keyup", (e) => { keys.delete(e.key.toLowerCase()); });
+  let pInX = 0, pInY = 0; // normalisierte Grid-Bewegungsrichtung des Spieler-Königs (im Ticker gesetzt)
 
   // ── 30 Hz FIXED-STEP-SIM + RENDER-INTERPOLATION (Gaffer-Akkumulator) ──
   // Sim läuft 30x/s (DT_FIX=2 -> identisch zum alten 60fps-Tempo/Timing), Render interpoliert prevX->ex
@@ -822,22 +834,28 @@ async function main(): Promise<void> {
     // 2) Kampf + Bewegung (SoA, Index i)
     for (let i = 0; i < nEnt; i++) {
       if (!ealive[i]) continue;
-      const ty = etype[i], sp = T_speed[ty];
+      const ty = etype[i], sp = T_speed[ty], isPlayer = i === playerKing;
       let tg = etarget[i];
       if (tg < 0 || !ealive[tg] || i % 32 === simFrame % 32) { const e = findEnemy(i); if (e >= 0) { etarget[i] = e; tg = e; } else if (tg >= 0 && !ealive[tg]) { etarget[i] = -1; tg = -1; } }
       let mvx = 0, mvy = 0;
       if (tg >= 0 && ealive[tg]) {
         const dx = ex[tg] - ex[i], dy = ey[tg] - ey[i], d = Math.sqrt(dx * dx + dy * dy) || 1;
-        if (eranged[i] && d < 16) { mvx = -dx / d * sp; mvy = -dy / d * sp; }            // Bogenschütze kitet
-        else if (d <= T_range[ty]) {
+        if (d <= T_range[ty]) {                                                           // in Reichweite -> angreifen (auch Spieler)
           ecd[i] -= DT_FIX;
           if (ecd[i] <= 0) { ecd[i] = T_cd[ty]; if (eranged[i]) fireArrow(i, tg); else { eatk[i] = 5; ehp[tg] -= T_atk[ty]; eflash[tg] = 6; if (ehp[tg] <= 0) killE(tg); } }
-        } else { mvx = dx / d * sp; mvy = dy / d * sp; }                                  // hinlaufen
-      } else { const dx = MAP / 2 - ex[i], dy = MAP / 2 - ey[i], d = Math.sqrt(dx * dx + dy * dy) || 1; mvx = dx / d * sp * 0.6; mvy = dy / d * sp * 0.6; }
-      // Sturm: außerhalb der Zone -> rein fliehen (überschreibt Kampf) + Dauerschaden
+          if (eranged[i] && d < 16 && !isPlayer) { mvx = -dx / d * sp; mvy = -dy / d * sp; } // Bogenschütze kitet
+        } else if (!isPlayer) { mvx = dx / d * sp; mvy = dy / d * sp; }                   // hinlaufen (Spieler steuert selbst)
+      }
+      if (!isPlayer && mvx === 0 && mvy === 0) {                                          // kein Kampf-Move -> der eigenen König-Horde folgen
+        const k = kingIdx[eowner[i]];
+        if (k >= 0 && k !== i) { const dx = ex[k] - ex[i], dy = ey[k] - ey[i], dd = dx * dx + dy * dy; if (dd > 100) { const d = Math.sqrt(dd); mvx = dx / d * sp * 0.9; mvy = dy / d * sp * 0.9; } }
+        else { const dx = MAP / 2 - ex[i], dy = MAP / 2 - ey[i], d = Math.sqrt(dx * dx + dy * dy) || 1; mvx = dx / d * sp * 0.6; mvy = dy / d * sp * 0.6; } // König (oder verwaist) -> Mitte
+      }
+      if (isPlayer) { mvx = pInX * sp; mvy = pInY * sp; }                                 // Spieler-Input überschreibt Bewegung
+      // Sturm: außerhalb der Zone Dauerschaden; KI flieht rein, Spieler bleibt steuerbar.
       const odx = zoneX - ex[i], ody = zoneY - ey[i], od2 = odx * odx + ody * ody;
       if (od2 > zr2) {
-        const od = Math.sqrt(od2) || 1; mvx = odx / od * sp; mvy = ody / od * sp;
+        if (!isPlayer) { const od = Math.sqrt(od2) || 1; mvx = odx / od * sp; mvy = ody / od * sp; }
         ehp[i] -= STORM_DMG; eflash[i] = 4; if (ehp[i] <= 0) { killE(i); continue; }
       }
       // Separation: Abstoßung naher Units -> Front statt Punkt-Pile (auf 8 Nachbarn gedeckelt)
@@ -881,6 +899,11 @@ async function main(): Promise<void> {
     const dtR = Math.min(t.deltaTime, 4); // Bildschirm-Frame-Einheiten für Echtzeit-FX (Pfeile/Poofs)
     time += dms / 1000; frame++;
     terrainShader.resources.terr.uniforms.uTime = time;
+    // Spieler-König-Input: Bildschirm-Richtung (WASD/Pfeile) -> Iso-Grid-Richtung (rechts=+gx-gy, runter=+gx+gy).
+    { const ksx = (keys.has("d") || keys.has("arrowright") ? 1 : 0) - (keys.has("a") || keys.has("arrowleft") ? 1 : 0);
+      const ksy = (keys.has("s") || keys.has("arrowdown") ? 1 : 0) - (keys.has("w") || keys.has("arrowup") ? 1 : 0);
+      const gdx = ksx + ksy, gdy = -ksx + ksy, m = Math.hypot(gdx, gdy);
+      if (m > 0) { pInX = gdx / m; pInY = gdy / m; } else { pInX = 0; pInY = 0; } }
     // Fixed-Step-Sim: so viele 30Hz-Ticks wie nötig (max 5 gegen Spiral-of-Death).
     accSim += dms;
     let steps = 0;
@@ -917,6 +940,14 @@ async function main(): Promise<void> {
       const o = orbs[i]; o.life -= 0.012 * dtR; o.spr.y -= 0.6 * dtR; o.spr.alpha = Math.max(0, o.life);
       if (o.life <= 0) { o.spr.destroy(); orbs.splice(i, 1); }
     }
+    // KAMERA folgt dem Spieler-König (geglättet); beim Rundenstart hart snappen. Vor der Projektion,
+    // damit der Frustum-Cull die gefolgte Kamera nutzt.
+    if (playerKing >= 0 && ealive[playerKing]) {
+      const ix = prevX[playerKing] + (ex[playerKing] - prevX[playerKing]) * alpha, iy = prevY[playerKing] + (ey[playerKing] - prevY[playerKing]) * alpha;
+      const psx = (ix - iy) * HW, psy = (ix + iy) * HH - elevLift(sampleH(ix, iy)), sc0 = world.scale.x;
+      const tx = app.screen.width / 2 - psx * sc0, ty = app.screen.height / 2 - psy * sc0;
+      if (!camInit) { world.x = tx; world.y = ty; camInit = true; } else { world.x += (tx - world.x) * 0.12; world.y += (ty - world.y) * 0.12; }
+    }
     // RENDER: interpolierte Positionen -> Counting-Sort + Pool-Slots (EIN Draw-Call), dann König-FX.
     const tSort = performance.now();
     projectInterp(alpha);
@@ -949,14 +980,13 @@ async function main(): Promise<void> {
     acc += t.deltaMS;
     if (acc > 250) {
       acc = 0;
-      const cnt = [0, 0, 0]; for (let i = 0; i < nEnt; i++) if (ealive[i]) cnt[efac[i]]++;
-      const names = ["Menschen", "Elfen", "Orks"], total = cnt[0] + cnt[1] + cnt[2];
-      const remaining = cnt.filter((c) => c > 0).length;
-      const win = remaining <= 1 ? (names[cnt.findIndex((c) => c > 0)] ?? "—") : "";
-      const status = remaining <= 1 ? ` · SIEG: ${win} · neue Runde…` : "";
-      const frameMs = 1000 / Math.max(1, app.ticker.FPS);
-      hud.textContent = `Horde.IO — ${total} Units (+/- ±1000) · ${app.ticker.FPS.toFixed(0)} FPS · ${frameMs.toFixed(1)}ms (sim ${simMs.toFixed(1)} / sort ${sortMs.toFixed(1)}) · ${names.map((n, i) => `${n} ${cnt[i]}`).join(" · ")}${status} · Sturm R${zoneR | 0}`;
-      if (remaining <= 1) { victoryTimer += 0.25; if (victoryTimer >= 5) { victoryTimer = 0; newRound(); } } else victoryTimer = 0; // Auto-Neustart 5s nach Sieg
+      let kingsAlive = 0; for (let p = 0; p < PLAYERS; p++) if (kingIdx[p] >= 0) kingsAlive++;
+      let total = 0, myHorde = 0; for (let i = 0; i < nEnt; i++) if (ealive[i]) { total++; if (eowner[i] === PLAYER) myHorde++; }
+      const pAlive = playerKing >= 0 && ealive[playerKing] === 1;
+      const me = pAlive ? `Du: ${Math.max(0, ehp[playerKing]) | 0} HP · Horde ${myHorde}` : `besiegt (Zuschauer)`;
+      const status = kingsAlive <= 1 ? " · SIEG · neue Runde…" : "";
+      hud.textContent = `Horde.IO — ${me} · Könige ${kingsAlive}/${PLAYERS} · ${total} Units · WASD bewegen · ${app.ticker.FPS.toFixed(0)} FPS (sim ${simMs.toFixed(1)}/sort ${sortMs.toFixed(1)}) · Sturm R${zoneR | 0}${status}`;
+      if (kingsAlive <= 1) { victoryTimer += 0.25; if (victoryTimer >= 5) { victoryTimer = 0; newRound(); } } else victoryTimer = 0; // Auto-Neustart 5s nach Sieg
     }
   });
 }
