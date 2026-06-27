@@ -41,5 +41,19 @@ Prefer PROVEN techniques (memory `use-proven-techniques`); use ultracode workflo
 - Make the spike combat deterministic (seeded mulberry32 Rng, fixed-timestep accumulator),
   split sim from render. Then revisit `docs/MULTIPLAYER-MASTERPLAN.md`.
 
-## Progress log
-- (fill in per commit)
+## Progress log (overnight 2026-06-27)
+- DONE M1 — custom procedural pixel-art units (palette-swap + layered parts), 3 factions x 5 types,
+  faction palettes + per-type silhouettes (b818205). 5 types w/ stats + ranged combat (1d4a48c).
+- DONE M2 (partial) — ranged archers fire arrow projectiles (1d4a48c); faction-colored death puffs (8a2639e).
+  TODO: hit sparks, king HP pips.
+- DONE M3 (partial) — faction banners over kings (9f1e9ec). TODO: territory tint, lingering corpses.
+- DONE M4 — boids-style separation so hordes form a blob/front not a point-pile (dfd815a).
+- DONE M5 — round flow: auto-restart a fresh battle 5s after victory (24e7d14).
+- TODO M6 — movement dust, hit sparks, storm-edge shimmer, tree/rock variety, day tint.
+- TODO M7 — deterministic sim (seeded Rng, fixed-timestep), split sim/render, then MULTIPLAYER-MASTERPLAN.
+- Earlier same session: emergent rivers (f0ce37e), zoom-stable pixelate (a9a4998), river tuning (af9656e),
+  horde combat (e3c3f63), storm zone (05f5cb1).
+
+Next pickup: M6 polish (hit sparks + movement dust are cheap juice), or M7 determinism if shifting toward MP.
+Tuning knobs if needed: unit scales in T[] (currently 1.45-2.7 for 24x28 sprites), RIVER_THRESH 0.12,
+storm phase 14s / shrink 0.66, separation 0.7.
