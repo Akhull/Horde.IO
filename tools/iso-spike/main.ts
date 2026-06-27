@@ -509,7 +509,17 @@ async function main(): Promise<void> {
   const CELL = 18, GW = Math.ceil(MAP / CELL) + 1;
   const gridHead = new Int32Array(GW * GW), gridNext = new Int32Array(units.length);
   const cellIdx = (gx: number, gy: number): number => Math.max(0, Math.min(GW - 1, (gy / CELL) | 0)) * GW + Math.max(0, Math.min(GW - 1, (gx / CELL) | 0));
-  const kill = (v: U): void => { v.dead = true; v.spr.destroy(); };
+  // Todes-Effekt: fraktionsfarbener Staub-Poof, wenn eine Unit fällt -> Schlachtfeld "raucht".
+  const FACTION_COL = [0x9fb8ff, 0x8fe39a, 0xe2795a]; // Menschen blau · Elfen grün · Orks rot
+  interface Puff { spr: Sprite; life: number; }
+  const puffs: Puff[] = [];
+  const puffTex = makePuffTexture(app);
+  const addPuff = (gx: number, gy: number, tint: number): void => {
+    const spr = new Sprite(puffTex); spr.anchor.set(0.5); spr.tint = tint; spr.scale.set(0.5);
+    const p = worldToIso(gx, gy); spr.x = p.x; spr.y = p.y - elevLift(sampleH(gx, gy)) - 6;
+    buckets[NB - 1].addChild(spr); puffs.push({ spr, life: 1 });
+  };
+  const kill = (v: U): void => { v.dead = true; addPuff(v.gx, v.gy, FACTION_COL[v.f]); v.spr.destroy(); };
   const findEnemy = (u: U): U | null => {
     const cx = Math.max(0, Math.min(GW - 1, (u.gx / CELL) | 0)), cy = Math.max(0, Math.min(GW - 1, (u.gy / CELL) | 0));
     let best: U | null = null, bestD = 1e9;
@@ -630,6 +640,12 @@ async function main(): Promise<void> {
       const p = worldToIso(pr.gx, pr.gy), sy = p.y - elevLift(sampleH(pr.gx, pr.gy)) - 7;
       pr.spr.x = p.x; pr.spr.y = sy; pr.spr.rotation = Math.atan2((dx + dy) * HH, (dx - dy) * HW); // iso-Flugrichtung
     }
+    // 3c) Todes-Poofs aufsteigen + verblassen
+    for (let i = puffs.length - 1; i >= 0; i--) {
+      const pf = puffs[i]; pf.life -= 0.045 * dt; pf.spr.alpha = Math.max(0, pf.life) * 0.8;
+      pf.spr.scale.set(0.5 + (1 - pf.life) * 0.6); pf.spr.y -= 0.3 * dt;
+      if (pf.life <= 0) { pf.spr.destroy(); puffs.splice(i, 1); }
+    }
     for (let i = orbs.length - 1; i >= 0; i--) {
       const o = orbs[i]; o.life -= 0.012 * dt; o.spr.y -= 0.6 * dt; o.spr.alpha = Math.max(0, o.life);
       if (o.life <= 0) { o.spr.destroy(); orbs.splice(i, 1); }
@@ -671,6 +687,15 @@ function makeArrowTexture(app: Application): Texture {
   const gr = new Graphics();
   gr.moveTo(-6, 0).lineTo(3, 0).stroke({ color: 0x4a3318, width: 2 });   // Schaft
   gr.poly([7, 0, 1, -3, 1, 3]).fill(0x2a1d0e);                            // Spitze
+  const t = app.renderer.generateTexture({ target: gr, antialias: true });
+  gr.destroy();
+  return t;
+}
+function makePuffTexture(app: Application): Texture {
+  const gr = new Graphics();
+  gr.circle(0, 0, 7).fill({ color: 0xffffff, alpha: 0.5 });
+  gr.circle(-2, -1, 4).fill({ color: 0xffffff, alpha: 0.5 });
+  gr.circle(3, 1, 4).fill({ color: 0xffffff, alpha: 0.5 });               // Wölkchen-Form
   const t = app.renderer.generateTexture({ target: gr, antialias: true });
   gr.destroy();
   return t;
