@@ -429,7 +429,14 @@ function drawKing(p: Pen, P: Palette): void {
   p.r(UCX - 3, 3, GOLD); p.r(UCX - 1, 2, GOLD); p.r(UCX + 1, 3, GOLD); p.r(UCX, 2, GOLD); // Zacken
   for (let y = 8; y <= 18; y++) p.r(UW - 5, y, P.metal[2]); p.r(UW - 5, 7, GOLD);        // Zepter
 }
-const DRAW: Record<string, (p: Pen, P: Palette) => void> = { warrior: drawWarrior, archer: drawArcher, spearman: drawSpearman, brute: drawBrute, king: drawKing };
+function drawChampion(p: Pen, P: Palette): void {
+  drawBody(p, P, 9, 9, 26);
+  for (let y = 9; y <= 13; y++) { p.m(UCX - 5, y, GOLD); p.m(UCX - 4, y, P.metal[3]); } // goldene Schulterplatten
+  for (let y = 2; y <= 18; y++) p.r(UW - 5, y, P.metal[3]);                              // großes Schwert
+  p.r(UW - 6, 15, P.metal[2]); p.r(UW - 4, 15, P.metal[2]); p.r(UW - 5, 1, GOLD); p.r(UW - 5, 18, GOLD);
+  for (let x = UCX - 2; x <= UCX; x++) p.m(x, 4, GOLD);                                  // Gold-Helmkamm
+}
+const DRAW: Record<string, (p: Pen, P: Palette) => void> = { warrior: drawWarrior, archer: drawArcher, spearman: drawSpearman, brute: drawBrute, king: drawKing, champion: drawChampion };
 // Eine Zelle (Fraktion x Typ) als roher (RGB|0)[]-Puffer inkl. Outline + Boden-Schatten.
 function renderUnitCell(faction: string, type: string): (RGB | 0)[] {
   const P = PAL[faction], buf: (RGB | 0)[] = new Array(UW * UH).fill(0);
@@ -447,7 +454,7 @@ function renderUnitCell(faction: string, type: string): (RGB | 0)[] {
 // ATLAS: alle 15 Zellen (3 Fraktionen x 5 Typen) auf EINE TextureSource backen -> ParticleContainer
 // kann ALLE Units in EINEM Draw-Call zeichnen. frame[fac*5+type] -> Sub-Texture. frameId = fac*5+ty.
 const FAC_ORDER = ["human", "elf", "orc"] as const;
-const TY_ORDER = ["warrior", "archer", "spearman", "brute", "king"] as const;
+const TY_ORDER = ["warrior", "archer", "spearman", "brute", "king", "champion"] as const;
 function buildUnitAtlas(): Texture[] {
   const COLS = FAC_ORDER.length * TY_ORDER.length, AW = COLS * UW;
   const cv = document.createElement("canvas"); cv.width = AW; cv.height = UH;
@@ -609,6 +616,7 @@ async function main(): Promise<void> {
     { hp: 58, atk: 8, range: 11, cd: 32, speed: 0.20, scale: 1.6 },   // 2 Speerträger (Reichweite)
     { hp: 135, atk: 16, range: 6, cd: 44, speed: 0.13, scale: 2.1 },  // 3 Brute (zäh, langsam)
     { hp: 340, atk: 20, range: 6, cd: 30, speed: 0.14, scale: 2.7 },  // 4 König (Anführer)
+    { hp: 240, atk: 40, range: 7, cd: 30, speed: 0.16, scale: 2.4 },  // 5 Champion (Gold-Seele; zäh+schlagkräftig)
   ];
   const T_hp = Float32Array.from(T, (s) => s.hp), T_atk = Float32Array.from(T, (s) => s.atk);
   const T_range = Float32Array.from(T, (s) => s.range), T_cd = Float32Array.from(T, (s) => s.cd);
@@ -648,7 +656,7 @@ async function main(): Promise<void> {
   // ATLAS-Frames + ParticleContainer-Pool. dynamicProperties: position(x,y) + vertex(scale/anchor) +
   // uvs(welches Frame) + color(tint/alpha) ändern sich pro Slot/Frame (Slot-Inhalt = jeweils andere Unit).
   const FRAMES = buildUnitAtlas();
-  const frameOf = (f: number, ty: number): number => f * 5 + ty;
+  const frameOf = (f: number, ty: number): number => f * 6 + ty; // 6 Typen pro Fraktion im Atlas
   const unitsPC = new ParticleContainer({ dynamicProperties: { position: true, vertex: true, uvs: true, color: true, rotation: false } });
   unitsPC.eventMode = "none"; world.addChild(unitsPC);
   const pool: Particle[] = new Array(CAP);
@@ -677,16 +685,17 @@ async function main(): Promise<void> {
   };
   // SEELEN (Kern-Loop): gefallene Units lassen NAHE dem Spieler-König eine Seele fallen; der König
   // sammelt sie ein -> seine Horde wächst (kämpfen -> Seelen -> größere Horde). Nur nahe Spawns, gedeckelt.
-  interface Soul { gx: number; gy: number; spr: Sprite; }
+  interface Soul { gx: number; gy: number; spr: Sprite; gold: boolean; }
   const souls: Soul[] = [];
   const SOUL_CAP = 500;
   const dropSoul = (gx: number, gy: number): void => {
     if (souls.length >= SOUL_CAP || playerKing < 0 || !ealive[playerKing]) return;
     const dx = gx - ex[playerKing], dy = gy - ey[playerKing];
     if (dx * dx + dy * dy > 250 * 250) return;                          // nur nahe dem Spieler -> keine Sprite-Flut
-    const spr = new Sprite(orbTex); spr.anchor.set(0.5); spr.tint = 0x8fe39a; spr.scale.set(0.42);
+    const gold = Math.random() < 0.045;                                 // seltene Gold-Seele -> Champion
+    const spr = new Sprite(orbTex); spr.anchor.set(0.5); spr.tint = gold ? 0xffd24a : 0x8fe39a; spr.scale.set(gold ? 0.62 : 0.42);
     const p = worldToIso(gx, gy); spr.x = p.x; spr.y = p.y - elevLift(sampleH(gx, gy)) - 4;
-    fxLayer.addChild(spr); souls.push({ gx, gy, spr });
+    fxLayer.addChild(spr); souls.push({ gx, gy, spr, gold });
   };
   // Seele eingesammelt -> König-XP; bei Stufenaufstieg +HP (sofort geheilt), +Schaden, +Größe (gedeckelt St. 6).
   const onPlayerSoul = (): void => {
@@ -1067,9 +1076,14 @@ async function main(): Promise<void> {
       const kx = ex[playerKing], ky = ey[playerKing], pf = efac[playerKing];
       for (let i = souls.length - 1; i >= 0; i--) {
         const s = souls[i], dx = kx - s.gx, dy = ky - s.gy, d2 = dx * dx + dy * dy;
-        if (d2 < 64) {                                                   // eingesammelt (< 8 grid) -> neuer Vasall + König-XP
-          if (freeTop > 0 || nEnt < CAP) { const r = Math.random(), ty = r < 0.78 ? 0 : r < 0.92 ? 1 : 2; spawnE(kx + (Math.random() - 0.5) * 16, ky + (Math.random() - 0.5) * 16, pf, ty, PLAYER); }
-          onPlayerSoul();
+        if (d2 < 64) {                                                   // eingesammelt (< 8 grid)
+          if (s.gold) {                                                  // Gold-Seele -> Champion beschwören (+ extra XP)
+            if (freeTop > 0 || nEnt < CAP) spawnE(kx + (Math.random() - 0.5) * 16, ky + (Math.random() - 0.5) * 16, pf, 5, PLAYER);
+            onPlayerSoul(); onPlayerSoul(); addPuff(kx, ky, 0xffd24a, 1.5);
+          } else {                                                       // grüne Seele -> Vasall + König-XP
+            if (freeTop > 0 || nEnt < CAP) { const r = Math.random(), ty = r < 0.78 ? 0 : r < 0.92 ? 1 : 2; spawnE(kx + (Math.random() - 0.5) * 16, ky + (Math.random() - 0.5) * 16, pf, ty, PLAYER); }
+            onPlayerSoul();
+          }
           s.spr.destroy(); souls.splice(i, 1); continue;
         }
         if (d2 < 6400) {                                                 // < 80 grid -> magnetisieren
