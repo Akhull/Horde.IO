@@ -350,6 +350,106 @@ function buildTerrainMesh(): Mesh {
   return new Mesh({ geometry, shader: terrainShader });
 }
 
+// ── PROZEDURALE PIXEL-ART-UNITS (Palette-Swap + Layered-Parts, canvas-2D -> Pixi v8 Texture) ──
+// 3 Fraktionen x 5 Typen = 15 Texturen, EINMAL beim Laden gebacken, von allen ~8000 Sprites geteilt.
+// Bewährt: index-color/palette-swap Team-Farben (Pokemon/Starcraft/AoE). EIGENE Assets statt Kenney-Units.
+type RGB = [number, number, number];
+const hexRGB = (h: number): RGB => [(h >> 16) & 255, (h >> 8) & 255, h & 255];
+function shade(h: number, t: number): RGB { // t<0 abdunkeln, t>0 aufhellen -> Hue wird zur Rampe
+  let [r, g, b] = hexRGB(h);
+  if (t < 0) { const k = 1 + t; r *= k; g *= k; b *= k; }
+  else { r += (255 - r) * t; g += (255 - g) * t; b += (255 - b) * t; }
+  return [Math.round(r), Math.round(g), Math.round(b)];
+}
+const ramp = (base: number): RGB[] => [shade(base, -0.5), shade(base, -0.22), hexRGB(base), shade(base, 0.34)];
+interface Palette { cloth: RGB[]; skin: RGB[]; metal: RGB[]; accent: RGB; }
+function palette(cloth: number, skin: number, accent: number, metalBase = 0x9aa3b0): Palette {
+  return { cloth: ramp(cloth), skin: ramp(skin), metal: ramp(metalBase), accent: hexRGB(accent) };
+}
+const PAL: Record<string, Palette> = {
+  human: palette(0x4f7bb0, 0xe0a07a, 0xffd24a),          // Stahlblau + Pfirsich-Haut
+  elf: palette(0x4caf6a, 0xdcc0a4, 0xeadf9a),            // Smaragd + blasse Haut
+  orc: palette(0xb0413a, 0x5e8f4f, 0xd8b34a, 0x5e636b),  // Karmesin + grüne Haut, dunkles Eisen
+};
+const OUTLINE: RGB = hexRGB(0x161a22), GOLD: RGB = hexRGB(0xffd24a);
+const UW = 24, UH = 28, UCX = UW >> 1;
+interface Pen { m: (x: number, y: number, c: RGB) => void; r: (x: number, y: number, c: RGB) => void; }
+function makePen(buf: (RGB | 0)[]): Pen {
+  const set = (x: number, y: number, c: RGB): void => { if (x >= 0 && x < UW && y >= 0 && y < UH) buf[y * UW + x] = c; };
+  const m = (x: number, y: number, c: RGB): void => { set(x, y, c); set(UW - 1 - x, y, c); }; // gespiegelt -> Körper-Symmetrie
+  return { m, r: set }; // r = roh (asymmetrische Waffen)
+}
+function drawBody(p: Pen, P: Palette, bodyW: number, torsoTop = 11, footY = 25): void {
+  const half = bodyW >> 1;
+  for (let y = 6; y <= 10; y++) for (let x = UCX - 2; x <= UCX; x++) p.m(x, y, P.skin[2]); // Kopf
+  p.m(UCX - 2, 8, P.skin[3]); p.m(UCX - 1, 7, P.skin[3]); p.r(UCX - 1, 9, OUTLINE); p.r(UCX, 9, OUTLINE);
+  for (let x = UCX - 2; x <= UCX; x++) p.m(x, 5, P.metal[2]);                            // Helm-Kappe
+  for (let y = torsoTop; y <= footY - 4; y++) {                                          // Torso (oben hell)
+    const tt = (y - torsoTop) / Math.max(1, footY - 4 - torsoTop), si = tt < 0.25 ? 3 : tt < 0.7 ? 2 : 1;
+    for (let x = UCX - half; x <= UCX + half; x++) p.m(x, y, x === UCX - half || x === UCX + half ? P.cloth[0] : P.cloth[si]);
+  }
+  for (let x = UCX - half; x <= UCX + half; x++) p.m(x, footY - 4, P.accent);            // Gürtel
+  for (let y = footY - 3; y <= footY; y++) { p.m(UCX - 2, y, P.cloth[0]); p.m(UCX, y, P.cloth[1]); } // Beine
+}
+function drawWarrior(p: Pen, P: Palette): void {
+  drawBody(p, P, 7);
+  for (let y = 13; y <= 19; y++) for (let x = 3; x <= 6; x++) p.r(x, y, x === 3 ? P.accent : P.metal[1]); // Rundschild links
+  p.r(5, 16, P.metal[3]);
+  for (let y = 4; y <= 15; y++) p.r(UW - 5, y, P.metal[3]); p.r(UW - 6, 13, P.metal[2]); p.r(UW - 4, 13, P.metal[2]); p.r(UW - 5, 16, P.accent); // Schwert rechts
+}
+function drawArcher(p: Pen, P: Palette): void {
+  drawBody(p, P, 6);
+  const bx = UW - 5, wood = P.cloth[0];
+  const arc: [number, number][] = [[bx - 1, 5], [bx, 6], [bx, 7], [bx, 8], [bx, 9], [bx, 10], [bx, 11], [bx, 12], [bx, 13], [bx, 14], [bx, 15], [bx - 1, 16]];
+  for (const [x, y] of arc) p.r(x, y, wood);                                             // Bogen-Bogen
+  for (let y = 6; y <= 15; y++) p.r(bx - 2, y, shade(0x9aa3b0, -0.1));                    // Sehne
+  p.r(bx - 3, 10, P.accent); p.r(bx - 4, 10, P.metal[2]);                                // Pfeil
+}
+function drawSpearman(p: Pen, P: Palette): void {
+  drawBody(p, P, 6);
+  const sx = UW - 6;
+  for (let y = 1; y <= 22; y++) p.r(sx, y, P.metal[2]);                                  // langer Speer (hoch raus)
+  p.r(sx, 0, P.accent); p.r(sx - 1, 2, P.accent); p.r(sx + 1, 2, P.accent);              // Speerspitze
+}
+function drawBrute(p: Pen, P: Palette): void {
+  drawBody(p, P, 9, 10, 26);
+  for (let y = 10; y <= 18; y++) p.m(UCX - 5, y, P.cloth[1]);                            // breitere Schultern
+  for (let y = 4; y <= 16; y++) p.r(UW - 4, y, P.cloth[0]);                              // Axt-Stiel
+  for (let y = 4; y <= 8; y++) for (let x = UW - 3; x <= UW - 1; x++) p.r(x, y, P.metal[2]); // Axt-Kopf
+  p.r(UW - 1, 5, P.metal[3]); p.r(UW - 1, 7, P.metal[3]);
+}
+function drawKing(p: Pen, P: Palette): void {
+  drawBody(p, P, 8, 10, 26);
+  for (let y = 11; y <= 22; y++) { p.r(UCX - 5, y, P.accent); p.r(UCX - 6, y, shade(0xd8b34a, -0.35)); } // Umhang links
+  for (let x = UCX - 3; x <= UCX + 2; x++) p.m(x, 4, GOLD);                              // Kronen-Band
+  p.r(UCX - 3, 3, GOLD); p.r(UCX - 1, 2, GOLD); p.r(UCX + 1, 3, GOLD); p.r(UCX, 2, GOLD); // Zacken
+  for (let y = 8; y <= 18; y++) p.r(UW - 5, y, P.metal[2]); p.r(UW - 5, 7, GOLD);        // Zepter
+}
+const DRAW: Record<string, (p: Pen, P: Palette) => void> = { warrior: drawWarrior, archer: drawArcher, spearman: drawSpearman, brute: drawBrute, king: drawKing };
+function makeUnitTex(faction: string, type: string): Texture {
+  const P = PAL[faction], buf: (RGB | 0)[] = new Array(UW * UH).fill(0);
+  DRAW[type](makePen(buf), P);
+  const filled = (i: number): boolean => i >= 0 && i < buf.length && buf[i] !== 0;
+  const out = buf.slice();
+  for (let y = 0; y < UH; y++) for (let x = 0; x < UW; x++) {                            // 1px Outline-Pass
+    const i = y * UW + x; if (buf[i] !== 0) continue;
+    if ((x > 0 && filled(i - 1)) || (x < UW - 1 && filled(i + 1)) || (y > 0 && filled(i - UW)) || (y < UH - 1 && filled(i + UW))) out[i] = OUTLINE;
+  }
+  const sh: [number, number, number][] = [[UCX - 3, 26, 6], [UCX - 2, 27, 4]];           // Boden-Schatten
+  for (const [sx, sy, sw] of sh) for (let x = sx; x < sx + sw; x++) { const i = sy * UW + x; if (out[i] === 0) out[i] = shade(0x161a22, 0.15); }
+  const cv = document.createElement("canvas"); cv.width = UW; cv.height = UH;
+  const ctx = cv.getContext("2d")!; ctx.imageSmoothingEnabled = false;
+  const img = ctx.createImageData(UW, UH), d = img.data;
+  for (let i = 0; i < out.length; i++) { const c = out[i]; if (c === 0) continue; const o = i * 4; d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = 255; }
+  ctx.putImageData(img, 0, 0);
+  const tex = Texture.from(cv); tex.source.scaleMode = "nearest"; return tex;
+}
+function buildUnitTextures(): Record<string, Texture> {
+  const out: Record<string, Texture> = {};
+  for (const f of ["human", "elf", "orc"]) for (const t of ["warrior", "archer", "spearman", "brute", "king"]) out[`${f}_${t}`] = makeUnitTex(f, t);
+  return out;
+}
+
 async function main(): Promise<void> {
   const params = new URLSearchParams(location.search);
   const style = params.get("style") ?? "real"; // real | pixel | voxel | cel
@@ -484,15 +584,16 @@ async function main(): Promise<void> {
   interface U { gx: number; gy: number; spr: Sprite; bk: number; f: number; ty: number; hp: number; atk: number; range: number; cd: number; cdMax: number; speed: number; flash: number; tint: number; king: boolean; dead: boolean; target: U | null; }
   let units: U[] = [];
   const T = [
-    { hp: 50, atk: 6, range: 5, cd: 26, speed: 0.22, scale: 0.40 },   // 0 Krieger (Nahkampf)
-    { hp: 30, atk: 8, range: 64, cd: 50, speed: 0.20, scale: 0.36 },  // 1 Bogenschütze (Fernkampf/Pfeile)
-    { hp: 58, atk: 8, range: 11, cd: 32, speed: 0.20, scale: 0.42 },  // 2 Speerträger (Reichweite)
-    { hp: 135, atk: 16, range: 6, cd: 44, speed: 0.13, scale: 0.55 }, // 3 Brute (zäh, langsam)
-    { hp: 340, atk: 20, range: 6, cd: 30, speed: 0.14, scale: 0.70 }, // 4 König (Anführer)
+    { hp: 50, atk: 6, range: 5, cd: 26, speed: 0.22, scale: 1.5 },    // 0 Krieger (Nahkampf)
+    { hp: 30, atk: 8, range: 64, cd: 50, speed: 0.20, scale: 1.45 },  // 1 Bogenschütze (Fernkampf/Pfeile)
+    { hp: 58, atk: 8, range: 11, cd: 32, speed: 0.20, scale: 1.6 },   // 2 Speerträger (Reichweite)
+    { hp: 135, atk: 16, range: 6, cd: 44, speed: 0.13, scale: 2.1 },  // 3 Brute (zäh, langsam)
+    { hp: 340, atk: 20, range: 6, cd: 30, speed: 0.14, scale: 2.7 },  // 4 König (Anführer)
   ];
-  const factU = [tex.humanU, tex.elfU, tex.orcU], factK = [tex.humanK, tex.elfK, tex.orcK];
-  const TYPE_TINT = [0xffffff, 0xb6e8c0, 0x9fd6ea, 0xf0bd86, 0xffe6a0]; // Platzhalter-Tönung pro Typ (bis prozedurale Sprites)
-  const unitTex = (f: number, ty: number): Texture => (ty === 4 ? factK[f] : factU[f]); // TODO: prozeduraler Generator
+  const FAC = ["human", "elf", "orc"] as const, TYNAME = ["warrior", "archer", "spearman", "brute", "king"] as const;
+  const UNIT_TEX = buildUnitTextures();                                  // 15 EIGENE Pixel-Art-Texturen (Fraktion x Typ)
+  const TYPE_TINT = [0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff];  // Fraktionsfarbe in die Textur gebacken -> kein Tint
+  const unitTex = (f: number, ty: number): Texture => UNIT_TEX[`${FAC[f]}_${TYNAME[ty]}`];
   function spawn(gx: number, gy: number, f: number, ty: number): void {
     const st = T[ty], tint = TYPE_TINT[ty];
     const spr = new Sprite(unitTex(f, ty)); spr.anchor.set(0.5, 0.82); spr.scale.set(st.scale); spr.tint = tint;
