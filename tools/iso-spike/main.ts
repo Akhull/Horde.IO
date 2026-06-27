@@ -393,164 +393,229 @@ const PAL: Record<string, Palette> = {
   dwarf: palette(0x8a4f2a, 0xb8410f, 0xd9a441, 0x7d8388), // Rost + Kupfer-Bart(skin) + Gold + Eisen
   giant: palette(0x6f5b48, 0x7d8a72, 0x6fae4a, 0x55504a), // Lederbraun + grau-grüner Stein + Moos + Steingrau
 };
-const OUTLINE: RGB = hexRGB(0x161a22), GOLD: RGB = hexRGB(0xffd24a), GLOW: RGB = hexRGB(0x9dffb0), BONE: RGB = hexRGB(0xe8e0c8);
-const UW = 24, UH = 28, UCX = UW >> 1;
-let BODY_STEP = 0; // 0/1 -> Gang-Zyklus (Beinstellung); buildUnitAtlas backt beide Frames pro Einheit
+const OUTLINE: RGB = hexRGB(0x14171f), GOLD: RGB = hexRGB(0xffd24a), GLOW: RGB = hexRGB(0x9dffb0), BONE: RGB = hexRGB(0xe8e0c8);
+// 32x40-Sprites (vorher 24x28) -> deutlich mehr Detail-Raum. UCX = Mitte (gespiegelt), HIP = Bein-Ansatz,
+// FOOT = Boden-Basislinie, SPLIT = Grenze Oberkörper/Beine (Oberkörper wird pro Pose um (lean,bob) verschoben).
+const UW = 32, UH = 40, UCX = 16, HIP = 27, FOOT = 36, SPLIT = 27;
+// ── ANIMATIONS-POSEN ── 4-Frame-Gang (0..3: Schritt/zusammen/Schritt/zusammen) + 2-Frame-Angriff
+// (4 Ausholen, 5 Schlag). buildUnitAtlas backt JEDE Einheit in allen 6 Posen; renderUnits wählt nach
+// Bewegung/Angriff. legL/legR = [x-Offset von UCX, Lift] je Bein; bob/lean verschieben den Oberkörper;
+// arm steuert die Waffe (0 Ruhe, 0.6 Ausholen, 1 Schlag).
+interface Pose { legL: [number, number]; legR: [number, number]; bob: number; arm: number; lean: number; }
+const POSES: Pose[] = [
+  { legL: [-3, 0], legR: [2, 2], bob: 0, arm: 0, lean: 0 },    // 0 Schritt: links vorn, rechts gehoben
+  { legL: [-2, 0], legR: [1, 0], bob: -1, arm: 0, lean: 0 },   // 1 zusammen (Idle/Passing) + Hoch-Bob
+  { legL: [-3, 2], legR: [2, 0], bob: 0, arm: 0, lean: 0 },    // 2 Schritt: rechts vorn, links gehoben
+  { legL: [-2, 0], legR: [1, 0], bob: -1, arm: 0, lean: 0 },   // 3 zusammen
+  { legL: [-1, 0], legR: [3, 0], bob: 0, arm: 0.6, lean: -1 }, // 4 Ausholen: Gewicht zurück, Waffe hoch
+  { legL: [-4, 0], legR: [3, 0], bob: 1, arm: 1, lean: 3 },    // 5 Schlag: Ausfallschritt vor, Waffe runter
+];
+let CUR: Pose = POSES[1];                 // aktuelle Pose beim Backen
+const FRAMES_PER = POSES.length;          // 6 Frames/Einheit
 interface Pen { m: (x: number, y: number, c: RGB) => void; r: (x: number, y: number, c: RGB) => void; }
 function makePen(buf: (RGB | 0)[]): Pen {
   const set = (x: number, y: number, c: RGB): void => { if (x >= 0 && x < UW && y >= 0 && y < UH) buf[y * UW + x] = c; };
   const m = (x: number, y: number, c: RGB): void => { set(x, y, c); set(UW - 1 - x, y, c); }; // gespiegelt -> Körper-Symmetrie
-  return { m, r: set }; // r = roh (asymmetrische Waffen)
+  return { m, r: set }; // r = roh (asymmetrische Waffen/Beine)
 }
-// ── KÖPFE (kompletter Kopf pro Fraktion — stärkster Silhouetten-Tell) ──
-function headHelmed(p: Pen, P: Palette): void { // Mensch: Stahlhelm + Nasenbügel + Wangen + Feder
-  for (let y = 3; y <= 7; y++) for (let x = UCX - 2; x <= UCX; x++) p.m(x, y, P.metal[2]);
-  p.m(UCX - 2, 4, P.metal[3]); p.r(UCX, 6, P.metal[3]); p.r(UCX, 7, P.metal[3]);
-  p.m(UCX - 2, 8, P.skin[2]); p.m(UCX - 2, 9, P.skin[2]); p.r(UCX - 1, 9, OUTLINE); p.r(UCX, 2, P.accent);
+function rline(p: Pen, x0: number, y0: number, x1: number, y1: number, c: RGB): void { // Bresenham (Klingen/Schäfte)
+  let dx = Math.abs(x1 - x0), dy = Math.abs(y1 - y0), sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1, err = dx - dy;
+  for (;;) { p.r(x0, y0, c); if (x0 === x1 && y0 === y1) break; const e2 = 2 * err; if (e2 > -dy) { err -= dy; x0 += sx; } if (e2 < dx) { err += dx; y0 += sy; } }
+}
+// ── BEINE (asymmetrisch -> echter Gang) ──
+function drawLeg(p: Pen, P: Palette, x: number, topY: number, lift: number, thick: number): void {
+  for (let y = topY + lift; y <= FOOT; y++) for (let k = 0; k < thick; k++) p.r(x + k, y, k === 0 ? P.cloth[0] : P.cloth[1]);
+  for (let k = 0; k < thick; k++) p.r(x + k, FOOT, k === thick - 1 ? P.accent : OUTLINE); // Stiefel
+}
+function drawLegs(p: Pen, P: Palette, leg: string, fy: number): void {
+  const hy = HIP + fy, stub = leg === "stub", wide = leg === "wide";
+  const spread = wide ? 1 : 0, thick = stub ? 3 : 2, top = hy + (stub ? 3 : 0);
+  drawLeg(p, P, UCX + CUR.legL[0] - spread, top, CUR.legL[1], thick);
+  drawLeg(p, P, UCX + CUR.legR[0] + spread, top, CUR.legR[1], thick);
+}
+// ── WAFFEN-POSEN (per CUR.arm) ──
+function drawSword(p: Pen, P: Palette, hx: number, hy: number, len = 11): void { // Hieb-Schwert: Ruhe/Ausholen/Schlag
+  const a = CUR.arm; let tx: number, ty: number;
+  if (a >= 0.9) { tx = hx + len - 4; ty = hy + len - 2; }        // Schlag: nach vorn-unten
+  else if (a >= 0.4) { tx = hx - 3; ty = hy - len + 1; }         // Ausholen: hoch-zurück
+  else { tx = hx + 2; ty = hy - len; }                          // Ruhe: senkrecht
+  rline(p, hx, hy, tx, ty, P.metal[3]); rline(p, hx + (tx - hx >> 2), hy + (ty - hy >> 2), tx, ty, P.metal[2]);
+  p.r(hx - 1, hy, GOLD); p.r(hx, hy, GOLD); p.r(hx + 1, hy, P.metal[1]); p.r(hx, hy + 1, P.cloth[0]); // Parier + Griff
+}
+function drawSpearWeapon(p: Pen, P: Palette): void {
+  if (CUR.arm >= 0.9) { for (let x = UCX + 1; x <= UW - 1; x++) p.r(x, 19, P.cloth[0]); p.r(UW - 1, 18, P.metal[3]); p.r(UW - 1, 19, P.metal[3]); p.r(UW - 1, 20, P.metal[3]); p.r(UW - 2, 19, P.accent); } // Stoß horizontal
+  else { for (let y = 3; y <= 26; y++) p.r(UW - 8, y, P.cloth[0]); p.r(UW - 8, 1, P.metal[3]); p.r(UW - 8, 2, P.metal[3]); p.r(UW - 9, 3, P.accent); p.r(UW - 7, 3, P.accent); } // aufrecht
+}
+// ── KÖPFE (kompletter Kopf pro Fraktion — stärkster Silhouetten-Tell), Kopfzone y≈4..15 ──
+function headHelmed(p: Pen, P: Palette): void { // Mensch: gewölbter Stahlhelm + Visier + Nasenbügel + Feder
+  for (let y = 6; y <= 12; y++) for (let x = UCX - 2; x <= UCX; x++) p.m(x, y, P.metal[1]);           // Helm-Kuppe (mittleres Stahl, nicht weiß)
+  p.m(UCX - 1, 5, P.metal[1]);                                                                        // runde Oberkante (schmaler -> kein Block)
+  for (let x = UCX - 2; x <= UCX; x++) p.m(x, 6, P.metal[2]); p.m(UCX - 2, 8, P.metal[2]);            // Stirnband + Glanzkante
+  p.m(UCX, 9, P.metal[0]); p.m(UCX, 10, P.metal[0]); p.m(UCX, 11, P.metal[0]);                        // Nasenbügel (dunkel, mittig)
+  p.r(UCX - 1, 10, OUTLINE); p.m(UCX - 2, 10, P.skin[2]); p.m(UCX - 2, 11, P.skin[2]);                // Augenschlitz + Wange
+  p.r(UCX - 2, 4, P.accent); p.r(UCX - 2, 3, P.accent); p.r(UCX - 1, 3, P.accent);                    // Gold-Feder
 }
 function headEared(p: Pen, P: Palette): void { // Elf: spitze Kapuze + Gesicht + langes Ohr
-  for (let y = 4; y <= 6; y++) for (let x = UCX - 2; x <= UCX; x++) p.m(x, y, P.cloth[1]);
-  p.m(UCX - 1, 3, P.cloth[1]);
-  for (let y = 7; y <= 9; y++) for (let x = UCX - 1; x <= UCX; x++) p.m(x, y, P.skin[2]);
-  p.r(UCX - 1, 8, OUTLINE); p.r(UCX - 3, 8, P.skin[2]); p.r(UCX - 4, 9, P.skin[3]);
+  for (let y = 5; y <= 8; y++) for (let x = UCX - 2; x <= UCX; x++) p.m(x, y, P.cloth[1]);
+  p.m(UCX - 1, 3, P.cloth[1]); p.m(UCX - 1, 4, P.cloth[2]);                                           // Kapuzenspitze
+  for (let y = 9; y <= 13; y++) for (let x = UCX - 1; x <= UCX; x++) p.m(x, y, P.skin[2]);
+  p.r(UCX - 1, 11, OUTLINE); p.r(UCX - 1, 10, P.accent);                                              // Auge
+  p.r(UCX - 3, 10, P.skin[2]); p.r(UCX - 4, 11, P.skin[3]); p.r(UCX - 4, 12, P.skin[2]);              // langes Ohr
 }
 function headTusked(p: Pen, P: Palette): void { // Ork: grüner Kopf + Hauer + Kriegsbemalung
-  for (let y = 5; y <= 10; y++) for (let x = UCX - 2; x <= UCX; x++) p.m(x, y, P.skin[2]);
-  p.r(UCX - 1, 8, OUTLINE); p.r(UCX, 8, OUTLINE); p.m(UCX - 2, 10, BONE); p.r(UCX - 2, 7, hexRGB(0xb23a2a));
+  for (let y = 6; y <= 14; y++) for (let x = UCX - 3; x <= UCX; x++) p.m(x, y, P.skin[2]);
+  for (let x = UCX - 3; x <= UCX; x++) p.m(x, 6, P.skin[1]);                                          // Stirn-Schatten
+  p.r(UCX - 1, 10, OUTLINE); p.r(UCX, 10, OUTLINE); p.r(UCX - 1, 9, hexRGB(0xffe14a));                // böse Augen
+  p.m(UCX - 2, 14, BONE); p.m(UCX - 2, 13, BONE);                                                     // Hauer
+  p.r(UCX - 3, 8, hexRGB(0xb23a2a)); p.r(UCX + 2, 8, hexRGB(0xb23a2a));                               // Kriegsbemalung
 }
 function headSkull(p: Pen, P: Palette): void { // Untot: Schädel + grün glühende Augen + Kiefer
-  for (let y = 5; y <= 10; y++) for (let x = UCX - 2; x <= UCX; x++) p.m(x, y, P.skin[3]);
-  p.r(UCX - 2, 8, GLOW); p.r(UCX + 1, 8, GLOW); p.r(UCX - 1, 10, OUTLINE); p.r(UCX, 10, OUTLINE); p.m(UCX - 2, 10, P.skin[3]);
+  for (let y = 6; y <= 13; y++) for (let x = UCX - 3; x <= UCX; x++) p.m(x, y, P.skin[3]);
+  p.r(UCX - 2, 10, GLOW); p.r(UCX + 1, 10, GLOW); p.r(UCX - 2, 9, hexRGB(0x2a6e3a)); p.r(UCX + 1, 9, hexRGB(0x2a6e3a)); // glühende Augenhöhlen
+  p.r(UCX - 1, 12, OUTLINE); p.r(UCX, 12, OUTLINE); p.m(UCX - 2, 13, P.skin[2]); p.m(UCX - 1, 13, P.skin[2]);          // Kiefer/Zähne
 }
-function headBearded(p: Pen, P: Palette): void { // Zwerg: geflügelter Helm + Augenstreif + Bart-Block
-  for (let x = UCX - 2; x <= UCX; x++) { p.m(x, 4, P.metal[1]); p.m(x, 5, P.metal[2]); }
-  p.m(UCX - 3, 5, P.accent); p.m(UCX - 2, 7, hexRGB(0xcaa07a)); p.r(UCX - 1, 7, OUTLINE); p.r(UCX, 7, OUTLINE);
-  for (let y = 8; y <= 13; y++) for (let x = UCX - 3; x <= UCX; x++) p.m(x, y, P.skin[2]);
-  p.m(UCX - 2, 9, P.skin[0]); p.m(UCX - 2, 12, P.skin[0]);
+function headBearded(p: Pen, P: Palette): void { // Zwerg: geflügelter Helm + Augenstreif + großer Bart-Block
+  for (let x = UCX - 3; x <= UCX; x++) { p.m(x, 5, P.metal[1]); p.m(x, 6, P.metal[2]); p.m(x, 7, P.metal[2]); }
+  p.m(UCX - 4, 6, P.accent); p.m(UCX - 4, 7, P.accent);                                               // Helm-Flügel
+  p.m(UCX - 2, 9, hexRGB(0xcaa07a)); p.r(UCX - 1, 9, OUTLINE); p.r(UCX, 9, OUTLINE);                  // Augenstreif
+  for (let y = 10; y <= 16; y++) for (let x = UCX - 4; x <= UCX; x++) p.m(x, y, P.skin[2]);           // Bart-Block
+  p.m(UCX - 3, 11, P.skin[0]); p.m(UCX - 2, 14, P.skin[0]); p.m(UCX - 4, 13, P.skin[1]);              // Bart-Strähnen
 }
-function headTiny(p: Pen, P: Palette): void { // Riese: winziger 2px-Kopf + Unterbiss-Hauer
-  for (let y = 7; y <= 9; y++) for (let x = UCX - 1; x <= UCX; x++) p.m(x, y, P.skin[2]);
-  p.r(UCX - 1, 8, OUTLINE); p.r(UCX - 1, 10, BONE); p.r(UCX, 10, BONE);
+function headTiny(p: Pen, P: Palette): void { // Riese: kleiner Kopf tief zwischen Schultern + Unterbiss
+  for (let y = 9; y <= 12; y++) for (let x = UCX - 2; x <= UCX; x++) p.m(x, y, P.skin[2]);
+  p.r(UCX - 1, 10, OUTLINE); p.r(UCX, 10, OUTLINE); p.m(UCX - 1, 12, BONE);                            // Augen + Unterbiss-Hauer
+  p.m(UCX - 2, 9, P.skin[1]);
 }
-// ── SIGNATUR-FEATURES (2-3 Telegraf-Pixel pro Fraktion) ──
-function sigHuman(p: Pen, P: Palette): void { for (let y = 12; y <= 17; y++) p.m(UCX - 1, y, P.accent); p.m(UCX - 1, 14, P.cloth[3]); }
-function sigElf(p: Pen, P: Palette): void { for (let y = 6; y <= 9; y++) p.r(UW - 6, y, P.accent); }
-function sigOrc(p: Pen, P: Palette): void { p.r(UCX - 3, 10, P.metal[3]); p.r(UCX + 3, 10, P.metal[3]); p.r(UCX + 2, 21, BONE); }
-function sigUndead(p: Pen, P: Palette): void { p.m(UCX - 2, 12, P.skin[3]); p.m(UCX - 2, 14, P.skin[3]); p.m(UCX - 2, 16, P.skin[3]); }
-function sigDwarf(p: Pen, P: Palette): void { p.m(UCX - 1, 14, P.accent); }
-function sigGiant(p: Pen, P: Palette): void { for (let y = 14; y <= 18; y++) p.r(UCX + 5, y, P.skin[2]); p.r(UCX + 5, 18, P.skin[1]); p.m(UCX - 4, 10, P.cloth[1]); }
-
+// ── SIGNATUR-FEATURES (Telegraf-Details pro Fraktion) ──
+function sigHuman(p: Pen, P: Palette): void { for (let y = 17; y <= 25; y++) p.m(UCX, y, P.accent); p.m(UCX, 19, GOLD); p.m(UCX, 23, GOLD); } // Gold-Wappenstreif
+function sigElf(p: Pen, P: Palette): void { for (let y = 9; y <= 16; y++) p.r(8, y, P.accent); p.r(7, 9, P.cloth[3]); p.r(7, 10, P.cloth[3]); } // Köcher am Rücken
+function sigOrc(p: Pen, P: Palette): void { p.m(UCX - 5, 17, P.metal[3]); p.m(UCX - 5, 18, P.metal[2]); p.r(UCX + 4, 16, BONE); p.r(UCX + 4, 17, BONE); } // Schulterstacheln
+function sigUndead(p: Pen, P: Palette): void { for (let y = 18; y <= 25; y += 2) { p.m(UCX - 3, y, P.skin[3]); p.m(UCX - 2, y, P.skin[2]); } } // freiliegende Rippen
+function sigDwarf(p: Pen, P: Palette): void { p.m(UCX, HIP - 2, GOLD); p.m(UCX - 2, HIP - 2, P.accent); } // Gürtelschnalle/Runen
+function sigGiant(p: Pen, P: Palette): void { for (let y = 18; y <= 27; y++) p.r(UW - 4, y, P.skin[2]); p.r(UW - 3, 27, P.skin[1]); p.r(UW - 4, 27, P.skin[1]); p.m(UCX - 5, 14, hexRGB(0x6fae4a)); } // langer Schlepp-Arm + Moos
 interface Prof { pal: Palette; w: number; scale: number; tt: number; fy: number; leg: string; head: (p: Pen, P: Palette) => void; sig: (p: Pen, P: Palette) => void; hp: number; spd: number; dmg: number; }
-function drawBody(p: Pen, P: Palette, bodyW: number, torsoTop: number, footY: number, leg: string): void {
-  const half = bodyW >> 1;
-  for (let y = torsoTop; y <= footY - 4; y++) {                                          // Torso (oben hell)
-    const tt = (y - torsoTop) / Math.max(1, footY - 4 - torsoTop), si = tt < 0.25 ? 3 : tt < 0.7 ? 2 : 1;
+function drawBody(p: Pen, P: Palette, bodyW: number, torsoTop: number, leg: string, fy: number): void {
+  const half = bodyW >> 1, btm = HIP - 1 + fy;
+  for (let y = torsoTop; y <= btm; y++) {                                                 // Torso (oben hell -> Volumen)
+    const tt = (y - torsoTop) / Math.max(1, btm - torsoTop), si = tt < 0.22 ? 3 : tt < 0.6 ? 2 : 1;
     for (let x = UCX - half; x <= UCX + half; x++) p.m(x, y, x === UCX - half || x === UCX + half ? P.cloth[0] : P.cloth[si]);
   }
-  for (let x = UCX - half; x <= UCX + half; x++) p.m(x, footY - 4, P.accent);            // Gürtel
-  if (leg === "stub") { for (let y = footY - 1; y <= footY; y++) { p.m(UCX - 2, y, P.cloth[0]); p.m(UCX, y, P.cloth[1]); } if (BODY_STEP) p.m(UCX - 3, footY, P.cloth[0]); }
-  else if (leg === "wide") { const s = BODY_STEP ? 1 : 0; for (let y = footY - 3; y <= footY; y++) { p.m(UCX - 3 - s, y, P.cloth[0]); p.m(UCX - s, y, P.cloth[1]); } }
-  else if (BODY_STEP === 0) { for (let y = footY - 3; y <= footY; y++) { p.m(UCX - 2, y, P.cloth[0]); p.m(UCX, y, P.cloth[1]); } }
-  else { for (let y = footY - 3; y <= footY; y++) { p.m(UCX - 3, y, P.cloth[0]); p.m(UCX + 1, y, P.cloth[1]); } }
+  for (let x = UCX - half; x <= UCX + half; x++) p.m(x, btm, P.accent);                   // Gürtel (maskiert Bein-Übergang)
+  drawLegs(p, P, leg, fy);
 }
 function drawWarrior(p: Pen, pr: Prof): void {
-  const P = pr.pal; drawBody(p, P, 7 + pr.w, 11 + pr.tt, 25 + pr.fy, pr.leg); pr.head(p, P);
-  for (let y = 13; y <= 19; y++) for (let x = 3; x <= 6; x++) p.r(x, y, x === 3 ? P.accent : P.metal[1]); // Schild links
-  p.r(5, 16, P.metal[3]);
-  for (let y = 4; y <= 15; y++) p.r(UW - 5, y, P.metal[3]); p.r(UW - 6, 13, P.metal[2]); p.r(UW - 4, 13, P.metal[2]); p.r(UW - 5, 16, P.accent); // Schwert
-  pr.sig(p, P);
+  const P = pr.pal; drawBody(p, P, 9 + pr.w, 16 + pr.tt, pr.leg, pr.fy); pr.head(p, P);
+  for (let y = 18; y <= 26; y++) for (let x = 5; x <= 8; x++) p.r(x, y, x === 5 ? P.accent : x === 8 ? P.metal[0] : P.metal[1]); // Rundschild links
+  p.r(7, 22, P.metal[3]); p.r(6, 20, P.metal[3]);                                          // Schild-Buckel
+  drawSword(p, P, UW - 9, 18); pr.sig(p, P);
 }
 function drawArcher(p: Pen, pr: Prof): void {
-  const P = pr.pal; drawBody(p, P, 6 + pr.w, 11 + pr.tt, 25 + pr.fy, pr.leg); pr.head(p, P);
-  const bx = UW - 5, wood = P.cloth[0];
-  const arc: [number, number][] = [[bx - 1, 5], [bx, 6], [bx, 7], [bx, 8], [bx, 9], [bx, 10], [bx, 11], [bx, 12], [bx, 13], [bx, 14], [bx, 15], [bx - 1, 16]];
-  for (const [x, y] of arc) p.r(x, y, wood);
-  for (let y = 6; y <= 15; y++) p.r(bx - 2, y, shade(0x9aa3b0, -0.1));
-  p.r(bx - 3, 10, P.accent); p.r(bx - 4, 10, P.metal[2]); pr.sig(p, P);
+  const P = pr.pal; drawBody(p, P, 8 + pr.w, 16 + pr.tt, pr.leg, pr.fy); pr.head(p, P);
+  const bx = UW - 6, wood = P.cloth[0], a = CUR.arm;
+  const arc: [number, number][] = [[bx - 1, 7], [bx, 8], [bx + 1, 10], [bx + 1, 13], [bx + 1, 16], [bx, 19], [bx - 1, 21]];
+  for (const [x, y] of arc) { p.r(x, y, wood); p.r(x, y + 1, shade(0x6a4a2a, -0.1)); }
+  if (a >= 0.4) { rline(p, bx, 8, bx - 4, 14, P.skin[3]); rline(p, bx - 4, 14, bx, 21, P.skin[3]); for (let x = UCX + 1; x <= bx - 3; x++) p.r(x, 14, P.metal[2]); p.r(UCX, 14, P.accent); } // gespannte Sehne + Pfeil
+  else for (let y = 8; y <= 20; y++) p.r(bx + 1, y, shade(0xcfd6e0, -0.05)); // entspannte Sehne
+  pr.sig(p, P);
 }
 function drawSpearman(p: Pen, pr: Prof): void {
-  const P = pr.pal; drawBody(p, P, 6 + pr.w, 11 + pr.tt, 25 + pr.fy, pr.leg); pr.head(p, P);
-  const sx = UW - 6;
-  for (let y = 1; y <= 22; y++) p.r(sx, y, P.metal[2]); p.r(sx, 0, P.accent); p.r(sx - 1, 2, P.accent); p.r(sx + 1, 2, P.accent); pr.sig(p, P);
+  const P = pr.pal; drawBody(p, P, 8 + pr.w, 16 + pr.tt, pr.leg, pr.fy); pr.head(p, P);
+  drawSpearWeapon(p, P); pr.sig(p, P);
 }
 function drawBrute(p: Pen, pr: Prof): void {
-  const P = pr.pal; drawBody(p, P, 9 + pr.w, 10 + pr.tt, 26 + pr.fy, pr.leg); pr.head(p, P);
-  for (let y = 10; y <= 18; y++) p.m(UCX - 5, y, P.cloth[1]);
-  for (let y = 4; y <= 16; y++) p.r(UW - 4, y, P.cloth[0]);
-  for (let y = 4; y <= 8; y++) for (let x = UW - 3; x <= UW - 1; x++) p.r(x, y, P.metal[2]);
-  p.r(UW - 1, 5, P.metal[3]); p.r(UW - 1, 7, P.metal[3]); pr.sig(p, P);
+  const P = pr.pal; drawBody(p, P, 12 + pr.w, 15 + pr.tt, pr.leg, pr.fy); pr.head(p, P);
+  for (let y = 15; y <= 24; y++) p.m(UCX - 6, y, P.cloth[1]); p.m(UCX - 6, 16, P.cloth[2]);            // wuchtige Schultern
+  const hx = UW - 6, hy = 20;                                                                           // Keule rechts
+  if (CUR.arm >= 0.9) { for (let y = hy; y <= hy + 8; y++) for (let x = UW - 6; x <= UW - 2; x++) p.r(x, y, P.cloth[0]); for (let x = UW - 6; x <= UW - 2; x++) { p.r(x, hy + 8, P.metal[2]); p.r(x, hy + 9, P.metal[1]); } }
+  else { for (let y = 6; y <= hy; y++) p.r(hx, y, P.cloth[0]); for (let y = 4; y <= 9; y++) for (let x = UW - 4; x <= UW - 1; x++) p.r(x, y, P.metal[2]); p.r(UW - 1, 5, P.metal[3]); p.r(UW - 1, 8, P.metal[3]); }
+  pr.sig(p, P);
 }
 function drawKing(p: Pen, pr: Prof): void {
-  const P = pr.pal; drawBody(p, P, 8 + pr.w, 10 + pr.tt, 26 + pr.fy, pr.leg); pr.head(p, P);
-  for (let y = 11; y <= 22; y++) { p.r(UCX - 5, y, P.accent); p.r(UCX - 6, y, shade(0xd8b34a, -0.35)); } // Umhang
-  for (let x = UCX - 3; x <= UCX + 2; x++) p.m(x, 1, GOLD);                              // Kronen-Band über dem Kopf
-  p.r(UCX - 3, 0, GOLD); p.r(UCX - 1, 0, GOLD); p.r(UCX + 1, 0, GOLD);
-  for (let y = 8; y <= 18; y++) p.r(UW - 5, y, P.metal[2]); p.r(UW - 5, 7, GOLD); pr.sig(p, P); // Zepter
+  const P = pr.pal; drawBody(p, P, 11 + pr.w, 15 + pr.tt, pr.leg, pr.fy); pr.head(p, P);
+  for (let y = 16; y <= 30; y++) { p.r(UCX - 7, y, P.accent); p.r(UCX - 8, y, shade(0xd8b34a, -0.4)); }  // wallender Umhang
+  for (let x = UCX - 3; x <= UCX + 2; x++) p.m(x, 1, GOLD); p.r(UCX - 3, 0, GOLD); p.r(UCX - 1, 0, GOLD); p.r(UCX + 1, 0, GOLD); // Krone
+  drawSword(p, P, UW - 9, 18, 13); p.r(UW - 9, 6, GOLD); pr.sig(p, P);                                   // großes Königsschwert
 }
 function drawChampion(p: Pen, pr: Prof): void {
-  const P = pr.pal; drawBody(p, P, 9 + pr.w, 9 + pr.tt, 26 + pr.fy, pr.leg); pr.head(p, P);
-  for (let y = 9; y <= 13; y++) { p.m(UCX - 5, y, GOLD); p.m(UCX - 4, y, P.metal[3]); } // Gold-Schultern
-  for (let y = 2; y <= 18; y++) p.r(UW - 5, y, P.metal[3]);
-  p.r(UW - 6, 15, P.metal[2]); p.r(UW - 4, 15, P.metal[2]); p.r(UW - 5, 1, GOLD); p.r(UW - 5, 18, GOLD); pr.sig(p, P);
+  const P = pr.pal; drawBody(p, P, 12 + pr.w, 14 + pr.tt, pr.leg, pr.fy); pr.head(p, P);
+  for (let y = 13; y <= 18; y++) { p.m(UCX - 6, y, GOLD); p.m(UCX - 5, y, P.metal[3]); }                 // Gold-Pauldrons
+  drawSword(p, P, UW - 8, 17, 15); p.r(UW - 8, 2, GOLD); pr.sig(p, P);                                    // Großschwert
 }
 const DRAW: Record<string, (p: Pen, pr: Prof) => void> = { warrior: drawWarrior, archer: drawArcher, spearman: drawSpearman, brute: drawBrute, king: drawKing, champion: drawChampion };
 const PROF: Record<string, Prof> = {
   human: { pal: PAL.human, w: 0, scale: 1.0, tt: 0, fy: 0, leg: "normal", head: headHelmed, sig: sigHuman, hp: 1.1, spd: 0.9, dmg: 1.1 },
   elf: { pal: PAL.elf, w: -1, scale: 1.0, tt: -1, fy: 0, leg: "normal", head: headEared, sig: sigElf, hp: 0.9, spd: 1.15, dmg: 1.05 },
-  orc: { pal: PAL.orc, w: 2, scale: 1.08, tt: 1, fy: 0, leg: "wide", head: headTusked, sig: sigOrc, hp: 1.15, spd: 0.9, dmg: 1.1 },
-  undead: { pal: PAL.undead, w: -2, scale: 0.92, tt: 1, fy: 0, leg: "normal", head: headSkull, sig: sigUndead, hp: 0.85, spd: 1.0, dmg: 0.9 },
-  dwarf: { pal: PAL.dwarf, w: 4, scale: 0.85, tt: 2, fy: -3, leg: "wide", head: headBearded, sig: sigDwarf, hp: 1.15, spd: 0.88, dmg: 1.12 },
-  giant: { pal: PAL.giant, w: 3, scale: 1.4, tt: -1, fy: 0, leg: "stub", head: headTiny, sig: sigGiant, hp: 1.15, spd: 0.85, dmg: 1.12 },
+  orc: { pal: PAL.orc, w: 3, scale: 1.08, tt: 1, fy: 0, leg: "wide", head: headTusked, sig: sigOrc, hp: 1.15, spd: 0.9, dmg: 1.1 },
+  undead: { pal: PAL.undead, w: -2, scale: 0.92, tt: 0, fy: 0, leg: "normal", head: headSkull, sig: sigUndead, hp: 0.85, spd: 1.0, dmg: 0.9 },
+  dwarf: { pal: PAL.dwarf, w: 5, scale: 0.85, tt: 3, fy: -4, leg: "wide", head: headBearded, sig: sigDwarf, hp: 1.15, spd: 0.88, dmg: 1.12 },
+  giant: { pal: PAL.giant, w: 4, scale: 1.4, tt: -2, fy: 1, leg: "stub", head: headTiny, sig: sigGiant, hp: 1.15, spd: 0.85, dmg: 1.12 },
 };
-// Eine Zelle (Fraktion x Typ) als roher (RGB|0)[]-Puffer inkl. Outline + Boden-Schatten.
+// Eine Zelle (Fraktion x Typ x Pose) als roher (RGB|0)[]-Puffer: zeichnen -> Oberkörper um (lean,bob)
+// verschieben -> Rim-Light (obere Kanten) -> 1px-Outline -> Boden-Schatten.
 function renderUnitCell(faction: string, type: string): (RGB | 0)[] {
-  const buf: (RGB | 0)[] = new Array(UW * UH).fill(0);
+  let buf: (RGB | 0)[] = new Array(UW * UH).fill(0);
   DRAW[type](makePen(buf), PROF[faction]);
-  const filled = (i: number): boolean => i >= 0 && i < buf.length && buf[i] !== 0;
+  if (CUR.lean || CUR.bob) {                                                              // Oberkörper (rows<SPLIT) translatieren
+    const sh: (RGB | 0)[] = new Array(UW * UH).fill(0);
+    for (let y = 0; y < UH; y++) for (let x = 0; x < UW; x++) {
+      const c = buf[y * UW + x]; if (c === 0) continue;
+      if (y < SPLIT) { const nx = x + CUR.lean, ny = y + CUR.bob; if (nx >= 0 && nx < UW && ny >= 0 && ny < UH) sh[ny * UW + nx] = c; }
+      else sh[y * UW + x] = c;
+    }
+    buf = sh;
+  }
   const out = buf.slice();
-  for (let y = 0; y < UH; y++) for (let x = 0; x < UW; x++) {                            // 1px Outline-Pass
+  for (let y = 1; y < UH; y++) for (let x = 0; x < UW; x++) {                              // Rim-Light: obere Kante aufhellen
+    const i = y * UW + x, c = buf[i]; if (c === 0) continue;
+    if (buf[(y - 1) * UW + x] === 0) out[i] = [Math.min(255, c[0] + 30), Math.min(255, c[1] + 30), Math.min(255, c[2] + 26)];
+  }
+  const filled = (i: number): boolean => i >= 0 && i < buf.length && buf[i] !== 0;
+  for (let y = 0; y < UH; y++) for (let x = 0; x < UW; x++) {                              // 1px Outline-Pass
     const i = y * UW + x; if (buf[i] !== 0) continue;
     if ((x > 0 && filled(i - 1)) || (x < UW - 1 && filled(i + 1)) || (y > 0 && filled(i - UW)) || (y < UH - 1 && filled(i + UW))) out[i] = OUTLINE;
   }
-  const sh: [number, number, number][] = [[UCX - 3, 26, 6], [UCX - 2, 27, 4]];           // Boden-Schatten
-  for (const [sx, sy, sw] of sh) for (let x = sx; x < sx + sw; x++) { const i = sy * UW + x; if (out[i] === 0) out[i] = shade(0x161a22, 0.15); }
+  const shadow: [number, number, number][] = [[UCX - 5, 37, 11], [UCX - 3, 38, 7]];        // weicher Boden-Schatten (Ellipse)
+  for (const [sx, sy, sw] of shadow) for (let x = sx; x < sx + sw; x++) { const i = sy * UW + x; if (out[i] === 0) out[i] = shade(0x0c0e14, 0.14); }
   return out;
 }
-// ATLAS: 3 Fraktionen x 6 Typen x 2 Gang-Frames = 36 Zellen auf EINE TextureSource -> ParticleContainer
-// zeichnet ALLE Units in EINEM Draw-Call. Layout: ((fac*6 + type)*2 + step). frameOf(f,ty)*2 + ph.
+// ATLAS: 6 Fraktionen x 6 Typen x 6 Posen = 216 Zellen auf EINE TextureSource -> ParticleContainer
+// zeichnet ALLE Units in EINEM Draw-Call. GRID-Layout (statt einer 6900px-Reihe -> unter GPU-Textur-Limit).
+// Frame-Index uf = (fac*6 + type)*6 + pose; Spalte = uf%COLS, Zeile = uf/COLS. Deko folgt in eigener Reihe.
 const FAC_ORDER = ["human", "elf", "orc", "undead", "dwarf", "giant"] as const;
 const TY_ORDER = ["warrior", "archer", "spearman", "brute", "king", "champion"] as const;
-const ANIM = 2; // Frames pro Einheit (Gang-Zyklus)
-const UNIT_FRAMES = FAC_ORDER.length * TY_ORDER.length * ANIM; // 36 Unit-Zellen, danach Deko-Frames
-// Atlas: 36 Unit-Zellen + Deko (Bäume/Steine/Gebäude) auf EINE Source -> Deko sortiert IM SELBEN
+const UNIT_FRAMES = FAC_ORDER.length * TY_ORDER.length * FRAMES_PER; // 216 Unit-Zellen, danach Deko-Frames
+const unitFrame = (f: number, ty: number, pose: number): number => (f * TY_ORDER.length + ty) * FRAMES_PER + pose;
+const ATLAS_COLS = 32;                                              // 32*32 = 1024px breit
+const ATLAS_ROWS = Math.ceil(UNIT_FRAMES / ATLAS_COLS);            // 7 Zeilen
+// Atlas: Unit-Grid oben + Deko (Bäume/Steine/Gebäude) in einer Reihe darunter -> Deko sortiert IM SELBEN
 // Counting-Sort wie die Units (globale Z-Regel: tiefer im Bild = vorne gilt auch für Deko<->Units).
 function buildUnitAtlas(decor: { tex: Texture }[]): Texture[] {
   // Deko in NATIVER Auflösung backen (volle Qualität); Größe kommt per Particle-scale (DECOR_SCALE).
   const dW = decor.map((dd) => Math.max(1, Math.round(dd.tex.width))), dH = decor.map((dd) => Math.max(1, Math.round(dd.tex.height)));
-  const unitW = UNIT_FRAMES * UW, AW = unitW + dW.reduce((a, b) => a + b, 0);
-  const AH = Math.max(UH, ...dH);
+  const gridW = ATLAS_COLS * UW, gridH = ATLAS_ROWS * UH;
+  const decorRowW = dW.reduce((a, b) => a + b, 0), decorH = Math.max(1, ...dH);
+  const AW = Math.max(gridW, decorRowW), AH = gridH + decorH;
   const cv = document.createElement("canvas"); cv.width = AW; cv.height = AH;
   const ctx = cv.getContext("2d")!; ctx.imageSmoothingEnabled = false;
-  const img = ctx.createImageData(unitW, UH), d = img.data;
-  let col = 0;
-  for (const f of FAC_ORDER) for (const t of TY_ORDER) for (let step = 0; step < ANIM; step++) {
-    BODY_STEP = step;
-    const cell = renderUnitCell(f, t), ox = col * UW;
+  const img = ctx.createImageData(gridW, gridH), d = img.data;
+  for (let f = 0; f < FAC_ORDER.length; f++) for (let t = 0; t < TY_ORDER.length; t++) for (let pose = 0; pose < FRAMES_PER; pose++) {
+    CUR = POSES[pose];
+    const cell = renderUnitCell(FAC_ORDER[f], TY_ORDER[t]);
+    const uf = unitFrame(f, t, pose), ox = (uf % ATLAS_COLS) * UW, oy = ((uf / ATLAS_COLS) | 0) * UH;
     for (let y = 0; y < UH; y++) for (let x = 0; x < UW; x++) {
       const c = cell[y * UW + x]; if (c === 0) continue;
-      const o = (y * unitW + ox + x) * 4; d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = 255;
+      const o = ((oy + y) * gridW + ox + x) * 4; d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = 255;
     }
-    col++;
   }
-  ctx.putImageData(img, 0, 0); // Units als ImageData; Deko danach per drawImage in eigene Spalten
+  ctx.putImageData(img, 0, 0); // Units als ImageData; Deko danach per drawImage in die Reihe darunter
   const decorRect: Rectangle[] = [];
-  let dx = unitW;
-  for (let j = 0; j < decor.length; j++) { ctx.drawImage(decor[j].tex.source.resource as CanvasImageSource, dx, 0, dW[j], dH[j]); decorRect.push(new Rectangle(dx, 0, dW[j], dH[j])); dx += dW[j]; }
+  let dx = 0;
+  for (let j = 0; j < decor.length; j++) { ctx.drawImage(decor[j].tex.source.resource as CanvasImageSource, dx, gridH, dW[j], dH[j]); decorRect.push(new Rectangle(dx, gridH, dW[j], dH[j])); dx += dW[j]; }
   const src = Texture.from(cv).source; src.scaleMode = "nearest";
   const frames: Texture[] = [];
-  for (let i = 0; i < UNIT_FRAMES; i++) frames.push(new Texture({ source: src, frame: new Rectangle(i * UW, 0, UW, UH) }));
+  for (let uf = 0; uf < UNIT_FRAMES; uf++) frames.push(new Texture({ source: src, frame: new Rectangle((uf % ATLAS_COLS) * UW, ((uf / ATLAS_COLS) | 0) * UH, UW, UH) }));
   for (const r of decorRect) frames.push(new Texture({ source: src, frame: r }));
-  return frames; // 0..35 Units ((fac*6+type)*2+step), 36+ Deko
+  return frames; // 0..215 Units (unitFrame(f,ty,pose)), 216+ Deko
 }
 
 // ── AUDIO ─────────────────────────────────────────────────────────────────────────────────────
@@ -824,7 +889,8 @@ async function main(): Promise<void> {
   ];
   const DECOR_ANCHOR = DECOR_SPEC.map((s) => s.anchorY), DECOR_SCALE = DECOR_SPEC.map((s) => s.scale);
   const FRAMES = buildUnitAtlas(DECOR_SPEC);
-  const frameOf = (f: number, ty: number): number => f * 6 + ty; // 6 Typen pro Fraktion im Atlas
+  const UNIT_DRAW = 0.72;        // 32x40-Sprites sind ~1.43x höher als die alten 28px -> Anzeige runterskalieren, On-Screen-Größe ~wie vorher
+  const ANCHOR_Y = FOOT / UH;    // Fuß-Anker (0.9) statt fixem 0.82
   const unitsPC = new ParticleContainer({ dynamicProperties: { position: true, vertex: true, uvs: true, color: true, rotation: false } });
   unitsPC.eventMode = "none"; world.addChild(unitsPC);
   const pool: Particle[] = new Array(CAP);
@@ -1098,12 +1164,13 @@ async function main(): Promise<void> {
       if (di) {                                                                          // DEKO: eigener Frame/Anker/Skala, keine Anim
         const j = di - 1, dsc = DECOR_SCALE[j];
         p.texture = FRAMES[UNIT_FRAMES + j]; p.anchorY = DECOR_ANCHOR[j]; p.scaleX = dsc; p.scaleY = dsc; p.tint = 0xffffff; p.alpha = 1;
-      } else {                                                                           // UNIT: Typ-Skala × Fraktions-Skala, Gang-Frame, Tönung
-        const sc = T_scale[etype[u]] * FAC_SCALE[efac[u]] * (u === playerKing ? playerSizeMult : 1);
-        p.anchorY = 0.82; p.scaleX = sc; p.scaleY = sc;
-        const moving = Math.abs(ex[u] - prevX[u]) + Math.abs(ey[u] - prevY[u]) > 0.05;    // Gang-Frame nur in Bewegung
-        const ph = moving ? (((time * 7 + u) | 0) & 1) : 0;
-        p.texture = FRAMES[frameOf(efac[u], etype[u]) * 2 + ph];
+      } else {                                                                           // UNIT: Typ-Skala × Fraktions-Skala, Anim-Frame, Tönung
+        const sc = T_scale[etype[u]] * FAC_SCALE[efac[u]] * UNIT_DRAW * (u === playerKing ? playerSizeMult : 1);
+        p.anchorY = ANCHOR_Y; p.scaleX = sc; p.scaleY = sc;
+        let fr: number;                                                                   // Pose: Angriff (Schlag 5 -> Recover 4) > Gang (0..3) > Idle (1)
+        if (eatk[u] > 0) fr = eatk[u] > 2.5 ? 5 : 4;
+        else { const moving = Math.abs(ex[u] - prevX[u]) + Math.abs(ey[u] - prevY[u]) > 0.05; fr = moving ? (((time * 8 + u * 0.7) | 0) & 3) : 1; }
+        p.texture = FRAMES[unitFrame(efac[u], etype[u], fr)];
         p.tint = eflash[u] > 0 ? 0xff5555 : u === playerKing && shieldTimer > 0 ? 0x8fc4ff : 0xffffff; p.alpha = 1;
       }
     }
@@ -1174,7 +1241,7 @@ async function main(): Promise<void> {
         const rng = ty === 5 && efac[i] === 1 ? 28 : T_range[ty];                          // Elf-Champion: große Reichweite
         if (d <= rng) {                                                                   // in Reichweite -> angreifen (auch Spieler)
           ecd[i] -= DT_FIX;
-          if (ecd[i] <= 0) { ecd[i] = T_cd[ty]; if (eranged[i]) fireArrow(i, tg); else { eatk[i] = 5; audio.play("melee", ex[i], ey[i]); ehp[tg] -= T_atk[ty] * FAC_DMG[efac[i]] * (isPlayer ? playerDmgMult * (buffDmg > 0 ? 1.5 : 1) : 1) * (tg === playerKing && shieldTimer > 0 ? 0.5 : 1); eflash[tg] = 6; if (ty === 5 && efac[i] === 2) cleave(i, tg); if (ehp[tg] <= 0) killE(tg); } } // Ork-Champion: Cleave
+          if (ecd[i] <= 0) { ecd[i] = T_cd[ty]; if (eranged[i]) { fireArrow(i, tg); eatk[i] = 4; } else { eatk[i] = 5; audio.play("melee", ex[i], ey[i]); ehp[tg] -= T_atk[ty] * FAC_DMG[efac[i]] * (isPlayer ? playerDmgMult * (buffDmg > 0 ? 1.5 : 1) : 1) * (tg === playerKing && shieldTimer > 0 ? 0.5 : 1); eflash[tg] = 6; if (ty === 5 && efac[i] === 2) cleave(i, tg); if (ehp[tg] <= 0) killE(tg); } } // Ork-Champion: Cleave
           if (eranged[i] && d < 16 && !isPlayer) { mvx = -dx / d * sp; mvy = -dy / d * sp; } // Fernkämpfer kitet
         } else if (!isPlayer) { mvx = dx / d * sp; mvy = dy / d * sp; }                   // hinlaufen (Spieler steuert selbst)
       }
