@@ -662,6 +662,19 @@ async function main(): Promise<void> {
     const p = worldToIso(gx, gy); spr.x = p.x; spr.y = p.y - elevLift(sampleH(gx, gy)) - 6;
     fxLayer.addChild(spr); puffs.push({ spr, life: 1 });
   };
+  // SEELEN (Kern-Loop): gefallene Units lassen NAHE dem Spieler-König eine Seele fallen; der König
+  // sammelt sie ein -> seine Horde wächst (kämpfen -> Seelen -> größere Horde). Nur nahe Spawns, gedeckelt.
+  interface Soul { gx: number; gy: number; spr: Sprite; }
+  const souls: Soul[] = [];
+  const SOUL_CAP = 500;
+  const dropSoul = (gx: number, gy: number): void => {
+    if (souls.length >= SOUL_CAP || playerKing < 0 || !ealive[playerKing]) return;
+    const dx = gx - ex[playerKing], dy = gy - ey[playerKing];
+    if (dx * dx + dy * dy > 250 * 250) return;                          // nur nahe dem Spieler -> keine Sprite-Flut
+    const spr = new Sprite(orbTex); spr.anchor.set(0.5); spr.tint = 0x8fe39a; spr.scale.set(0.42);
+    const p = worldToIso(gx, gy); spr.x = p.x; spr.y = p.y - elevLift(sampleH(gx, gy)) - 4;
+    fxLayer.addChild(spr); souls.push({ gx, gy, spr });
+  };
   const spawnE = (gx: number, gy: number, f: number, ty: number, owner: number): number => {
     const i = freeTop > 0 ? freeStack[--freeTop] : nEnt++;
     ex[i] = gx; ey[i] = gy; prevX[i] = gx; prevY[i] = gy; ehp[i] = T_hp[ty]; emaxhp[i] = T_hp[ty]; ecd[i] = Math.random() * T_cd[ty]; eflash[i] = 0; eatk[i] = 0;
@@ -669,7 +682,7 @@ async function main(): Promise<void> {
     const p = worldToIso(gx, gy); screenX[i] = p.x; footY[i] = p.y - elevLift(sampleH(gx, gy));
     return i;
   };
-  const killE = (i: number): void => { if (!ealive[i]) return; ealive[i] = 0; etarget[i] = -1; if (eking[i]) kingIdx[eowner[i]] = -1; addPuff(ex[i], ey[i], FACTION_COL[efac[i]]); freeStack[freeTop++] = i; };
+  const killE = (i: number): void => { if (!ealive[i]) return; ealive[i] = 0; etarget[i] = -1; if (eking[i]) kingIdx[eowner[i]] = -1; addPuff(ex[i], ey[i], FACTION_COL[efac[i]]); dropSoul(ex[i], ey[i]); freeStack[freeTop++] = i; };
   // Adaptiv: erst inneres 3x3 (deckt Nahkampf), nur bei leer den äußeren 5x5-Ring -> meist 9 statt 25 Zellen.
   // FFA: Feind = anderer Owner (König-Team), nicht andere Fraktion -> mehrere Könige derselben Rasse sind Rivalen.
   const findEnemy = (i: number): number => {
@@ -725,6 +738,7 @@ async function main(): Promise<void> {
     for (const kf of kingFX) { kf.banner.destroy(); kf.bg.destroy(); kf.fill.destroy(); }
     kingFX.length = 0;
     for (const a of arrows) a.spr.destroy(); arrows.length = 0;
+    for (const s of souls) s.spr.destroy(); souls.length = 0;
     nEnt = 0; freeTop = 0; ealive.fill(0); kingIdx.fill(-1);
     for (const p of pool) p.alpha = 0; lastDrawn = 0;
     zoneR = 320; zoneTarget = 320; zoneTimer = 0; drawZone();
@@ -940,9 +954,28 @@ async function main(): Promise<void> {
       const o = orbs[i]; o.life -= 0.012 * dtR; o.spr.y -= 0.6 * dtR; o.spr.alpha = Math.max(0, o.life);
       if (o.life <= 0) { o.spr.destroy(); orbs.splice(i, 1); }
     }
+    // SEELEN: zum Spieler-König magnetisieren (Sog) + einsammeln -> neuer Vasall (Horde wächst).
+    if (playerKing >= 0 && ealive[playerKing] === 1) {
+      const kx = ex[playerKing], ky = ey[playerKing], pf = efac[playerKing];
+      for (let i = souls.length - 1; i >= 0; i--) {
+        const s = souls[i], dx = kx - s.gx, dy = ky - s.gy, d2 = dx * dx + dy * dy;
+        if (d2 < 64) {                                                   // eingesammelt (< 8 grid)
+          if (freeTop > 0 || nEnt < CAP) { const r = Math.random(), ty = r < 0.78 ? 0 : r < 0.92 ? 1 : 2; spawnE(kx + (Math.random() - 0.5) * 16, ky + (Math.random() - 0.5) * 16, pf, ty, PLAYER); }
+          s.spr.destroy(); souls.splice(i, 1); continue;
+        }
+        if (d2 < 6400) {                                                 // < 80 grid -> magnetisieren
+          const d = Math.sqrt(d2) || 1, pull = 2.8 * dtR;
+          s.gx += dx / d * pull; s.gy += dy / d * pull;
+          const p = worldToIso(s.gx, s.gy); s.spr.x = p.x; s.spr.y = p.y - elevLift(sampleH(s.gx, s.gy)) - 4;
+        }
+      }
+    }
     // KAMERA folgt dem Spieler-König (geglättet); beim Rundenstart hart snappen. Vor der Projektion,
-    // damit der Frustum-Cull die gefolgte Kamera nutzt.
-    if (playerKing >= 0 && ealive[playerKing]) {
+    // damit der Frustum-Cull die gefolgte Kamera nutzt. Spieler tot -> einem lebenden König zuschauen.
+    let camTarget = playerKing >= 0 && ealive[playerKing] === 1 ? playerKing : -1;
+    if (camTarget < 0) for (let p = 0; p < PLAYERS; p++) if (kingIdx[p] >= 0) { camTarget = kingIdx[p]; break; }
+    if (camTarget >= 0) {
+      const playerKing = camTarget; // ab hier: Kamera-Ziel (Spieler oder zugeschauter König)
       const ix = prevX[playerKing] + (ex[playerKing] - prevX[playerKing]) * alpha, iy = prevY[playerKing] + (ey[playerKing] - prevY[playerKing]) * alpha;
       const psx = (ix - iy) * HW, psy = (ix + iy) * HH - elevLift(sampleH(ix, iy)), sc0 = world.scale.x;
       const tx = app.screen.width / 2 - psx * sc0, ty = app.screen.height / 2 - psy * sc0;
