@@ -383,12 +383,17 @@ interface Palette { cloth: RGB[]; skin: RGB[]; metal: RGB[]; accent: RGB; }
 function palette(cloth: number, skin: number, accent: number, metalBase = 0x9aa3b0): Palette {
   return { cloth: ramp(cloth), skin: ramp(skin), metal: ramp(metalBase), accent: hexRGB(accent) };
 }
+// 6 FRAKTIONEN mit EIGENER Identität (Palette + Körper-Profil + Kopf + Signatur) — nicht nur Recolor.
+// human Argent Crown · elf Sylvan Wardens · orc Broken Tusk · undead Pale Legion · dwarf Ironbeards · giant Trollkin.
 const PAL: Record<string, Palette> = {
-  human: palette(0x4f7bb0, 0xe0a07a, 0xffd24a),          // Stahlblau + Pfirsich-Haut
-  elf: palette(0x4caf6a, 0xdcc0a4, 0xeadf9a),            // Smaragd + blasse Haut
-  orc: palette(0xb0413a, 0x5e8f4f, 0xd8b34a, 0x5e636b),  // Karmesin + grüne Haut, dunkles Eisen
+  human: palette(0x35508f, 0xe6b088, 0xffcf3d, 0xc4ccd8), // Königsblau + helle Haut + Gold + helles Stahl
+  elf: palette(0x2f7d4f, 0xe6d2b8, 0xe8d27a, 0x8c9a82),   // Blattgrün + Elfenbein + Pale-Gold + Salbei-Metall
+  orc: palette(0x6e5740, 0x4e6e38, 0xb23a2a, 0x3a3d40),   // Lederbraun + Moosgrün-Haut + Blut + fast-schwarzes Eisen
+  undead: palette(0x3c4636, 0x9aa890, 0x6cff8a, 0x6b7d68), // Oliv-Lumpen + Knochen + Nekro-Grün + Grünspan
+  dwarf: palette(0x8a4f2a, 0xb8410f, 0xd9a441, 0x7d8388), // Rost + Kupfer-Bart(skin) + Gold + Eisen
+  giant: palette(0x6f5b48, 0x7d8a72, 0x6fae4a, 0x55504a), // Lederbraun + grau-grüner Stein + Moos + Steingrau
 };
-const OUTLINE: RGB = hexRGB(0x161a22), GOLD: RGB = hexRGB(0xffd24a);
+const OUTLINE: RGB = hexRGB(0x161a22), GOLD: RGB = hexRGB(0xffd24a), GLOW: RGB = hexRGB(0x9dffb0), BONE: RGB = hexRGB(0xe8e0c8);
 const UW = 24, UH = 28, UCX = UW >> 1;
 let BODY_STEP = 0; // 0/1 -> Gang-Zyklus (Beinstellung); buildUnitAtlas backt beide Frames pro Einheit
 interface Pen { m: (x: number, y: number, c: RGB) => void; r: (x: number, y: number, c: RGB) => void; }
@@ -397,66 +402,110 @@ function makePen(buf: (RGB | 0)[]): Pen {
   const m = (x: number, y: number, c: RGB): void => { set(x, y, c); set(UW - 1 - x, y, c); }; // gespiegelt -> Körper-Symmetrie
   return { m, r: set }; // r = roh (asymmetrische Waffen)
 }
-function drawBody(p: Pen, P: Palette, bodyW: number, torsoTop = 11, footY = 25): void {
+// ── KÖPFE (kompletter Kopf pro Fraktion — stärkster Silhouetten-Tell) ──
+function headHelmed(p: Pen, P: Palette): void { // Mensch: Stahlhelm + Nasenbügel + Wangen + Feder
+  for (let y = 3; y <= 7; y++) for (let x = UCX - 2; x <= UCX; x++) p.m(x, y, P.metal[2]);
+  p.m(UCX - 2, 4, P.metal[3]); p.r(UCX, 6, P.metal[3]); p.r(UCX, 7, P.metal[3]);
+  p.m(UCX - 2, 8, P.skin[2]); p.m(UCX - 2, 9, P.skin[2]); p.r(UCX - 1, 9, OUTLINE); p.r(UCX, 2, P.accent);
+}
+function headEared(p: Pen, P: Palette): void { // Elf: spitze Kapuze + Gesicht + langes Ohr
+  for (let y = 4; y <= 6; y++) for (let x = UCX - 2; x <= UCX; x++) p.m(x, y, P.cloth[1]);
+  p.m(UCX - 1, 3, P.cloth[1]);
+  for (let y = 7; y <= 9; y++) for (let x = UCX - 1; x <= UCX; x++) p.m(x, y, P.skin[2]);
+  p.r(UCX - 1, 8, OUTLINE); p.r(UCX - 3, 8, P.skin[2]); p.r(UCX - 4, 9, P.skin[3]);
+}
+function headTusked(p: Pen, P: Palette): void { // Ork: grüner Kopf + Hauer + Kriegsbemalung
+  for (let y = 5; y <= 10; y++) for (let x = UCX - 2; x <= UCX; x++) p.m(x, y, P.skin[2]);
+  p.r(UCX - 1, 8, OUTLINE); p.r(UCX, 8, OUTLINE); p.m(UCX - 2, 10, BONE); p.r(UCX - 2, 7, hexRGB(0xb23a2a));
+}
+function headSkull(p: Pen, P: Palette): void { // Untot: Schädel + grün glühende Augen + Kiefer
+  for (let y = 5; y <= 10; y++) for (let x = UCX - 2; x <= UCX; x++) p.m(x, y, P.skin[3]);
+  p.r(UCX - 2, 8, GLOW); p.r(UCX + 1, 8, GLOW); p.r(UCX - 1, 10, OUTLINE); p.r(UCX, 10, OUTLINE); p.m(UCX - 2, 10, P.skin[3]);
+}
+function headBearded(p: Pen, P: Palette): void { // Zwerg: geflügelter Helm + Augenstreif + Bart-Block
+  for (let x = UCX - 2; x <= UCX; x++) { p.m(x, 4, P.metal[1]); p.m(x, 5, P.metal[2]); }
+  p.m(UCX - 3, 5, P.accent); p.m(UCX - 2, 7, hexRGB(0xcaa07a)); p.r(UCX - 1, 7, OUTLINE); p.r(UCX, 7, OUTLINE);
+  for (let y = 8; y <= 13; y++) for (let x = UCX - 3; x <= UCX; x++) p.m(x, y, P.skin[2]);
+  p.m(UCX - 2, 9, P.skin[0]); p.m(UCX - 2, 12, P.skin[0]);
+}
+function headTiny(p: Pen, P: Palette): void { // Riese: winziger 2px-Kopf + Unterbiss-Hauer
+  for (let y = 7; y <= 9; y++) for (let x = UCX - 1; x <= UCX; x++) p.m(x, y, P.skin[2]);
+  p.r(UCX - 1, 8, OUTLINE); p.r(UCX - 1, 10, BONE); p.r(UCX, 10, BONE);
+}
+// ── SIGNATUR-FEATURES (2-3 Telegraf-Pixel pro Fraktion) ──
+function sigHuman(p: Pen, P: Palette): void { for (let y = 12; y <= 17; y++) p.m(UCX - 1, y, P.accent); p.m(UCX - 1, 14, P.cloth[3]); }
+function sigElf(p: Pen, P: Palette): void { for (let y = 6; y <= 9; y++) p.r(UW - 6, y, P.accent); }
+function sigOrc(p: Pen, P: Palette): void { p.r(UCX - 3, 10, P.metal[3]); p.r(UCX + 3, 10, P.metal[3]); p.r(UCX + 2, 21, BONE); }
+function sigUndead(p: Pen, P: Palette): void { p.m(UCX - 2, 12, P.skin[3]); p.m(UCX - 2, 14, P.skin[3]); p.m(UCX - 2, 16, P.skin[3]); }
+function sigDwarf(p: Pen, P: Palette): void { p.m(UCX - 1, 14, P.accent); }
+function sigGiant(p: Pen, P: Palette): void { for (let y = 14; y <= 18; y++) p.r(UCX + 5, y, P.skin[2]); p.r(UCX + 5, 18, P.skin[1]); p.m(UCX - 4, 10, P.cloth[1]); }
+
+interface Prof { pal: Palette; w: number; scale: number; tt: number; fy: number; leg: string; head: (p: Pen, P: Palette) => void; sig: (p: Pen, P: Palette) => void; hp: number; spd: number; dmg: number; }
+function drawBody(p: Pen, P: Palette, bodyW: number, torsoTop: number, footY: number, leg: string): void {
   const half = bodyW >> 1;
-  for (let y = 6; y <= 10; y++) for (let x = UCX - 2; x <= UCX; x++) p.m(x, y, P.skin[2]); // Kopf
-  p.m(UCX - 2, 8, P.skin[3]); p.m(UCX - 1, 7, P.skin[3]); p.r(UCX - 1, 9, OUTLINE); p.r(UCX, 9, OUTLINE);
-  for (let x = UCX - 2; x <= UCX; x++) p.m(x, 5, P.metal[2]);                            // Helm-Kappe
   for (let y = torsoTop; y <= footY - 4; y++) {                                          // Torso (oben hell)
     const tt = (y - torsoTop) / Math.max(1, footY - 4 - torsoTop), si = tt < 0.25 ? 3 : tt < 0.7 ? 2 : 1;
     for (let x = UCX - half; x <= UCX + half; x++) p.m(x, y, x === UCX - half || x === UCX + half ? P.cloth[0] : P.cloth[si]);
   }
   for (let x = UCX - half; x <= UCX + half; x++) p.m(x, footY - 4, P.accent);            // Gürtel
-  // Beine: Gang-Zyklus über BODY_STEP — Frame 0 Stand (eng), Frame 1 Schritt (gespreizt) -> wirkt wie Laufen.
-  if (BODY_STEP === 0) { for (let y = footY - 3; y <= footY; y++) { p.m(UCX - 2, y, P.cloth[0]); p.m(UCX, y, P.cloth[1]); } }
+  if (leg === "stub") { for (let y = footY - 1; y <= footY; y++) { p.m(UCX - 2, y, P.cloth[0]); p.m(UCX, y, P.cloth[1]); } if (BODY_STEP) p.m(UCX - 3, footY, P.cloth[0]); }
+  else if (leg === "wide") { const s = BODY_STEP ? 1 : 0; for (let y = footY - 3; y <= footY; y++) { p.m(UCX - 3 - s, y, P.cloth[0]); p.m(UCX - s, y, P.cloth[1]); } }
+  else if (BODY_STEP === 0) { for (let y = footY - 3; y <= footY; y++) { p.m(UCX - 2, y, P.cloth[0]); p.m(UCX, y, P.cloth[1]); } }
   else { for (let y = footY - 3; y <= footY; y++) { p.m(UCX - 3, y, P.cloth[0]); p.m(UCX + 1, y, P.cloth[1]); } }
 }
-function drawWarrior(p: Pen, P: Palette): void {
-  drawBody(p, P, 7);
-  for (let y = 13; y <= 19; y++) for (let x = 3; x <= 6; x++) p.r(x, y, x === 3 ? P.accent : P.metal[1]); // Rundschild links
+function drawWarrior(p: Pen, pr: Prof): void {
+  const P = pr.pal; drawBody(p, P, 7 + pr.w, 11 + pr.tt, 25 + pr.fy, pr.leg); pr.head(p, P);
+  for (let y = 13; y <= 19; y++) for (let x = 3; x <= 6; x++) p.r(x, y, x === 3 ? P.accent : P.metal[1]); // Schild links
   p.r(5, 16, P.metal[3]);
-  for (let y = 4; y <= 15; y++) p.r(UW - 5, y, P.metal[3]); p.r(UW - 6, 13, P.metal[2]); p.r(UW - 4, 13, P.metal[2]); p.r(UW - 5, 16, P.accent); // Schwert rechts
+  for (let y = 4; y <= 15; y++) p.r(UW - 5, y, P.metal[3]); p.r(UW - 6, 13, P.metal[2]); p.r(UW - 4, 13, P.metal[2]); p.r(UW - 5, 16, P.accent); // Schwert
+  pr.sig(p, P);
 }
-function drawArcher(p: Pen, P: Palette): void {
-  drawBody(p, P, 6);
+function drawArcher(p: Pen, pr: Prof): void {
+  const P = pr.pal; drawBody(p, P, 6 + pr.w, 11 + pr.tt, 25 + pr.fy, pr.leg); pr.head(p, P);
   const bx = UW - 5, wood = P.cloth[0];
   const arc: [number, number][] = [[bx - 1, 5], [bx, 6], [bx, 7], [bx, 8], [bx, 9], [bx, 10], [bx, 11], [bx, 12], [bx, 13], [bx, 14], [bx, 15], [bx - 1, 16]];
-  for (const [x, y] of arc) p.r(x, y, wood);                                             // Bogen-Bogen
-  for (let y = 6; y <= 15; y++) p.r(bx - 2, y, shade(0x9aa3b0, -0.1));                    // Sehne
-  p.r(bx - 3, 10, P.accent); p.r(bx - 4, 10, P.metal[2]);                                // Pfeil
+  for (const [x, y] of arc) p.r(x, y, wood);
+  for (let y = 6; y <= 15; y++) p.r(bx - 2, y, shade(0x9aa3b0, -0.1));
+  p.r(bx - 3, 10, P.accent); p.r(bx - 4, 10, P.metal[2]); pr.sig(p, P);
 }
-function drawSpearman(p: Pen, P: Palette): void {
-  drawBody(p, P, 6);
+function drawSpearman(p: Pen, pr: Prof): void {
+  const P = pr.pal; drawBody(p, P, 6 + pr.w, 11 + pr.tt, 25 + pr.fy, pr.leg); pr.head(p, P);
   const sx = UW - 6;
-  for (let y = 1; y <= 22; y++) p.r(sx, y, P.metal[2]);                                  // langer Speer (hoch raus)
-  p.r(sx, 0, P.accent); p.r(sx - 1, 2, P.accent); p.r(sx + 1, 2, P.accent);              // Speerspitze
+  for (let y = 1; y <= 22; y++) p.r(sx, y, P.metal[2]); p.r(sx, 0, P.accent); p.r(sx - 1, 2, P.accent); p.r(sx + 1, 2, P.accent); pr.sig(p, P);
 }
-function drawBrute(p: Pen, P: Palette): void {
-  drawBody(p, P, 9, 10, 26);
-  for (let y = 10; y <= 18; y++) p.m(UCX - 5, y, P.cloth[1]);                            // breitere Schultern
-  for (let y = 4; y <= 16; y++) p.r(UW - 4, y, P.cloth[0]);                              // Axt-Stiel
-  for (let y = 4; y <= 8; y++) for (let x = UW - 3; x <= UW - 1; x++) p.r(x, y, P.metal[2]); // Axt-Kopf
-  p.r(UW - 1, 5, P.metal[3]); p.r(UW - 1, 7, P.metal[3]);
+function drawBrute(p: Pen, pr: Prof): void {
+  const P = pr.pal; drawBody(p, P, 9 + pr.w, 10 + pr.tt, 26 + pr.fy, pr.leg); pr.head(p, P);
+  for (let y = 10; y <= 18; y++) p.m(UCX - 5, y, P.cloth[1]);
+  for (let y = 4; y <= 16; y++) p.r(UW - 4, y, P.cloth[0]);
+  for (let y = 4; y <= 8; y++) for (let x = UW - 3; x <= UW - 1; x++) p.r(x, y, P.metal[2]);
+  p.r(UW - 1, 5, P.metal[3]); p.r(UW - 1, 7, P.metal[3]); pr.sig(p, P);
 }
-function drawKing(p: Pen, P: Palette): void {
-  drawBody(p, P, 8, 10, 26);
-  for (let y = 11; y <= 22; y++) { p.r(UCX - 5, y, P.accent); p.r(UCX - 6, y, shade(0xd8b34a, -0.35)); } // Umhang links
-  for (let x = UCX - 3; x <= UCX + 2; x++) p.m(x, 4, GOLD);                              // Kronen-Band
-  p.r(UCX - 3, 3, GOLD); p.r(UCX - 1, 2, GOLD); p.r(UCX + 1, 3, GOLD); p.r(UCX, 2, GOLD); // Zacken
-  for (let y = 8; y <= 18; y++) p.r(UW - 5, y, P.metal[2]); p.r(UW - 5, 7, GOLD);        // Zepter
+function drawKing(p: Pen, pr: Prof): void {
+  const P = pr.pal; drawBody(p, P, 8 + pr.w, 10 + pr.tt, 26 + pr.fy, pr.leg); pr.head(p, P);
+  for (let y = 11; y <= 22; y++) { p.r(UCX - 5, y, P.accent); p.r(UCX - 6, y, shade(0xd8b34a, -0.35)); } // Umhang
+  for (let x = UCX - 3; x <= UCX + 2; x++) p.m(x, 1, GOLD);                              // Kronen-Band über dem Kopf
+  p.r(UCX - 3, 0, GOLD); p.r(UCX - 1, 0, GOLD); p.r(UCX + 1, 0, GOLD);
+  for (let y = 8; y <= 18; y++) p.r(UW - 5, y, P.metal[2]); p.r(UW - 5, 7, GOLD); pr.sig(p, P); // Zepter
 }
-function drawChampion(p: Pen, P: Palette): void {
-  drawBody(p, P, 9, 9, 26);
-  for (let y = 9; y <= 13; y++) { p.m(UCX - 5, y, GOLD); p.m(UCX - 4, y, P.metal[3]); } // goldene Schulterplatten
-  for (let y = 2; y <= 18; y++) p.r(UW - 5, y, P.metal[3]);                              // großes Schwert
-  p.r(UW - 6, 15, P.metal[2]); p.r(UW - 4, 15, P.metal[2]); p.r(UW - 5, 1, GOLD); p.r(UW - 5, 18, GOLD);
-  for (let x = UCX - 2; x <= UCX; x++) p.m(x, 4, GOLD);                                  // Gold-Helmkamm
+function drawChampion(p: Pen, pr: Prof): void {
+  const P = pr.pal; drawBody(p, P, 9 + pr.w, 9 + pr.tt, 26 + pr.fy, pr.leg); pr.head(p, P);
+  for (let y = 9; y <= 13; y++) { p.m(UCX - 5, y, GOLD); p.m(UCX - 4, y, P.metal[3]); } // Gold-Schultern
+  for (let y = 2; y <= 18; y++) p.r(UW - 5, y, P.metal[3]);
+  p.r(UW - 6, 15, P.metal[2]); p.r(UW - 4, 15, P.metal[2]); p.r(UW - 5, 1, GOLD); p.r(UW - 5, 18, GOLD); pr.sig(p, P);
 }
-const DRAW: Record<string, (p: Pen, P: Palette) => void> = { warrior: drawWarrior, archer: drawArcher, spearman: drawSpearman, brute: drawBrute, king: drawKing, champion: drawChampion };
+const DRAW: Record<string, (p: Pen, pr: Prof) => void> = { warrior: drawWarrior, archer: drawArcher, spearman: drawSpearman, brute: drawBrute, king: drawKing, champion: drawChampion };
+const PROF: Record<string, Prof> = {
+  human: { pal: PAL.human, w: 0, scale: 1.0, tt: 0, fy: 0, leg: "normal", head: headHelmed, sig: sigHuman, hp: 1.1, spd: 0.9, dmg: 1.1 },
+  elf: { pal: PAL.elf, w: -1, scale: 1.0, tt: -1, fy: 0, leg: "normal", head: headEared, sig: sigElf, hp: 0.9, spd: 1.15, dmg: 1.05 },
+  orc: { pal: PAL.orc, w: 2, scale: 1.08, tt: 1, fy: 0, leg: "wide", head: headTusked, sig: sigOrc, hp: 1.15, spd: 0.9, dmg: 1.1 },
+  undead: { pal: PAL.undead, w: -2, scale: 0.92, tt: 1, fy: 0, leg: "normal", head: headSkull, sig: sigUndead, hp: 0.85, spd: 1.0, dmg: 0.9 },
+  dwarf: { pal: PAL.dwarf, w: 4, scale: 0.85, tt: 2, fy: -3, leg: "wide", head: headBearded, sig: sigDwarf, hp: 1.15, spd: 0.88, dmg: 1.12 },
+  giant: { pal: PAL.giant, w: 3, scale: 1.4, tt: -1, fy: 0, leg: "stub", head: headTiny, sig: sigGiant, hp: 1.15, spd: 0.85, dmg: 1.12 },
+};
 // Eine Zelle (Fraktion x Typ) als roher (RGB|0)[]-Puffer inkl. Outline + Boden-Schatten.
 function renderUnitCell(faction: string, type: string): (RGB | 0)[] {
-  const P = PAL[faction], buf: (RGB | 0)[] = new Array(UW * UH).fill(0);
-  DRAW[type](makePen(buf), P);
+  const buf: (RGB | 0)[] = new Array(UW * UH).fill(0);
+  DRAW[type](makePen(buf), PROF[faction]);
   const filled = (i: number): boolean => i >= 0 && i < buf.length && buf[i] !== 0;
   const out = buf.slice();
   for (let y = 0; y < UH; y++) for (let x = 0; x < UW; x++) {                            // 1px Outline-Pass
@@ -469,7 +518,7 @@ function renderUnitCell(faction: string, type: string): (RGB | 0)[] {
 }
 // ATLAS: 3 Fraktionen x 6 Typen x 2 Gang-Frames = 36 Zellen auf EINE TextureSource -> ParticleContainer
 // zeichnet ALLE Units in EINEM Draw-Call. Layout: ((fac*6 + type)*2 + step). frameOf(f,ty)*2 + ph.
-const FAC_ORDER = ["human", "elf", "orc"] as const;
+const FAC_ORDER = ["human", "elf", "orc", "undead", "dwarf", "giant"] as const;
 const TY_ORDER = ["warrior", "archer", "spearman", "brute", "king", "champion"] as const;
 const ANIM = 2; // Frames pro Einheit (Gang-Zyklus)
 const UNIT_FRAMES = FAC_ORDER.length * TY_ORDER.length * ANIM; // 36 Unit-Zellen, danach Deko-Frames
@@ -625,9 +674,10 @@ async function main(): Promise<void> {
   const T_hp = Float32Array.from(T, (s) => s.hp), T_atk = Float32Array.from(T, (s) => s.atk);
   const T_range = Float32Array.from(T, (s) => s.range), T_cd = Float32Array.from(T, (s) => s.cd);
   const T_speed = Float32Array.from(T, (s) => s.speed), T_scale = Float32Array.from(T, (s) => s.scale);
-  const FACTION_COL = [0x9fb8ff, 0x8fe39a, 0xe2795a]; // Menschen blau · Elfen grün · Orks rot
-  // Fraktions-Identität (±10% wie im Original): Mensch ausgewogen · Elf schnell/fragil · Ork zäh/stark.
-  const FAC_HP = Float32Array.of(1.0, 0.9, 1.1), FAC_SPD = Float32Array.of(1.0, 1.1, 0.95), FAC_DMG = Float32Array.of(1.0, 1.0, 1.1);
+  const FACTION_COL = [0x9fb8ff, 0x8fe39a, 0xe2795a, 0xb6f0c0, 0xe8a24a, 0x9aa890]; // blau·grün·rot·nekro-grün·kupfer·stein
+  // Fraktions-Identität (Werte aus den Profilen): hp/speed/damage-Mults + Anzeige-Skala je Fraktion.
+  const FAC_HP = Float32Array.from(FAC_ORDER, (f) => PROF[f].hp), FAC_SPD = Float32Array.from(FAC_ORDER, (f) => PROF[f].spd);
+  const FAC_DMG = Float32Array.from(FAC_ORDER, (f) => PROF[f].dmg), FAC_SCALE = Float32Array.from(FAC_ORDER, (f) => PROF[f].scale);
 
   // Unit-Anzahl per ?units=N skalierbar (Benchmark) — Default = 16 Horden wie bisher.
   const reqUnits = Math.max(PLAYERS * 4, parseInt(params.get("units") ?? "", 10) || PLAYERS * (HORDE + 1));
@@ -648,7 +698,7 @@ async function main(): Promise<void> {
   const kingIdx = new Int32Array(PLAYERS).fill(-1); // Entity-ID des Königs je Owner (-1 = tot) -> Horde folgt IHM
   let playerKing = -1, camInit = false, pkvx = 0, pkvy = 0; // pkvx/y = geglättete Königs-Geschwindigkeit (Smoothing)
   let playerActive = false;                          // false = Menü-Vorschau-Auto-Battle; true = Spieler steuert
-  let playerFaction = Math.max(0, Math.min(2, parseInt(params.get("fac") ?? "", 10) || 0)); // 0 Mensch 1 Elf 2 Ork
+  let playerFaction = Math.max(0, Math.min(5, parseInt(params.get("fac") ?? "", 10) || 0)); // 0-5: Mensch/Elf/Ork/Untot/Zwerg/Riese
   let difficulty = 1;                                // 0 Leicht .. 3 Hardcore
   const DIFF = [{ label: "Leicht", hp: 1.7 }, { label: "Normal", hp: 1.0 }, { label: "Schwer", hp: 0.72 }, { label: "Hardcore", hp: 0.5 }];
   let gameState: "menu" | "playing" | "over" = "menu";
@@ -875,7 +925,7 @@ async function main(): Promise<void> {
     const perHorde = Math.max(1, Math.floor((reqUnits - PLAYERS) / PLAYERS));
     const spreadR = Math.min(110, Math.max(8, Math.sqrt(perHorde) * 1.5)); // Streuung skaliert mit Hordengröße -> keine 1000+-Units-pro-Zelle (findEnemy/Separation bezahlbar)
     for (let pi = 0; pi < PLAYERS; pi++) {
-      const f = pi === PLAYER ? playerFaction : pi % 3, c = placeOnLand(); // owner = pi (König-Team); Spieler bekommt gewählte Fraktion
+      const f = pi === PLAYER ? playerFaction : pi % 6, c = placeOnLand(); // owner = pi (König-Team); Spieler bekommt gewählte Fraktion
       const king = spawnE(c.gx, c.gy, f, 4, pi); kingIdx[pi] = king; addKingFX(king, f);
       if (pi === PLAYER) { emaxhp[king] *= DIFF[difficulty].hp; ehp[king] = emaxhp[king]; } // Schwierigkeit -> Spieler-König-HP
       for (let i = 0; i < perHorde; i++) {
@@ -945,8 +995,8 @@ async function main(): Promise<void> {
       if (di) {                                                                          // DEKO: eigener Frame/Anker/Skala, keine Anim
         const j = di - 1, dsc = DECOR_SCALE[j];
         p.texture = FRAMES[UNIT_FRAMES + j]; p.anchorY = DECOR_ANCHOR[j]; p.scaleX = dsc; p.scaleY = dsc; p.tint = 0xffffff; p.alpha = 1;
-      } else {                                                                           // UNIT: Typ-Skala, Gang-Frame, Tönung
-        const sc = T_scale[etype[u]] * (u === playerKing ? playerSizeMult : 1);
+      } else {                                                                           // UNIT: Typ-Skala × Fraktions-Skala, Gang-Frame, Tönung
+        const sc = T_scale[etype[u]] * FAC_SCALE[efac[u]] * (u === playerKing ? playerSizeMult : 1);
         p.anchorY = 0.82; p.scaleX = sc; p.scaleY = sc;
         const moving = Math.abs(ex[u] - prevX[u]) + Math.abs(ey[u] - prevY[u]) > 0.05;    // Gang-Frame nur in Bewegung
         const ph = moving ? (((time * 7 + u) | 0) & 1) : 0;
@@ -1090,7 +1140,7 @@ async function main(): Promise<void> {
   };
 
   // ── MENÜ + SPIEL-ZUSTAND (DOM-Overlay über dem Canvas; Vorschau-Auto-Battle läuft dahinter) ──
-  const FAC_NAMES = ["Menschen", "Elfen", "Orks"];
+  const FAC_NAMES = ["Menschen", "Elfen", "Orks", "Untote", "Zwerge", "Riesen"];
   const mstyle = document.createElement("style");
   mstyle.textContent = `
     #menu{position:fixed;inset:0;z-index:20;display:flex;align-items:center;justify-content:center;font:14px/1.5 monospace;color:#cfe;background:rgba(4,10,20,.5);}
