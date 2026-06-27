@@ -614,6 +614,8 @@ async function main(): Promise<void> {
   const T_range = Float32Array.from(T, (s) => s.range), T_cd = Float32Array.from(T, (s) => s.cd);
   const T_speed = Float32Array.from(T, (s) => s.speed), T_scale = Float32Array.from(T, (s) => s.scale);
   const FACTION_COL = [0x9fb8ff, 0x8fe39a, 0xe2795a]; // Menschen blau · Elfen grün · Orks rot
+  // Fraktions-Identität (±10% wie im Original): Mensch ausgewogen · Elf schnell/fragil · Ork zäh/stark.
+  const FAC_HP = Float32Array.of(1.0, 0.9, 1.1), FAC_SPD = Float32Array.of(1.0, 1.1, 0.95), FAC_DMG = Float32Array.of(1.0, 1.0, 1.1);
 
   // Unit-Anzahl per ?units=N skalierbar (Benchmark) — Default = 16 Horden wie bisher.
   const reqUnits = Math.max(PLAYERS * 4, parseInt(params.get("units") ?? "", 10) || PLAYERS * (HORDE + 1));
@@ -634,6 +636,9 @@ async function main(): Promise<void> {
   let difficulty = 1;                                // 0 Leicht .. 3 Hardcore
   const DIFF = [{ label: "Leicht", hp: 1.7 }, { label: "Normal", hp: 1.0 }, { label: "Schwer", hp: 0.72 }, { label: "Hardcore", hp: 0.5 }];
   let gameState: "menu" | "playing" | "over" = "menu";
+  // König-Progression: der Spieler-König levelt aus eingesammelten Seelen (mehr HP/Schaden/Größe).
+  let playerXP = 0, playerLevel = 1, playerSizeMult = 1, playerDmgMult = 1;
+  const XP_TO_NEXT = [0, 6, 10, 16, 24, 34]; // Index = aktuelle Stufe -> XP bis zur nächsten (Deckel Stufe 6)
   let nEnt = 0;                                                         // höchster je belegter Index +1
   const freeStack = new Int32Array(CAP); let freeTop = 0;               // O(1) Tod/Spawn (keine .filter-Kompaktierung)
 
@@ -680,14 +685,23 @@ async function main(): Promise<void> {
     const p = worldToIso(gx, gy); spr.x = p.x; spr.y = p.y - elevLift(sampleH(gx, gy)) - 4;
     fxLayer.addChild(spr); souls.push({ gx, gy, spr });
   };
+  // Seele eingesammelt -> König-XP; bei Stufenaufstieg +HP (sofort geheilt), +Schaden, +Größe (gedeckelt St. 6).
+  const onPlayerSoul = (): void => {
+    playerXP++;
+    while (playerLevel < 6 && playerXP >= XP_TO_NEXT[playerLevel]) {
+      playerXP -= XP_TO_NEXT[playerLevel]; playerLevel++;
+      playerSizeMult = Math.min(1.3, 1 + (playerLevel - 1) * 0.05); playerDmgMult = 1 + (playerLevel - 1) * 0.08;
+      if (playerKing >= 0 && ealive[playerKing]) { emaxhp[playerKing] += 28; ehp[playerKing] = Math.min(emaxhp[playerKing], ehp[playerKing] + 28); addPuff(ex[playerKing], ey[playerKing], 0xffd24a, 1.2); }
+    }
+  };
   const spawnE = (gx: number, gy: number, f: number, ty: number, owner: number): number => {
     const i = freeTop > 0 ? freeStack[--freeTop] : nEnt++;
-    ex[i] = gx; ey[i] = gy; prevX[i] = gx; prevY[i] = gy; ehp[i] = T_hp[ty]; emaxhp[i] = T_hp[ty]; ecd[i] = Math.random() * T_cd[ty]; eflash[i] = 0; eatk[i] = 0;
+    ex[i] = gx; ey[i] = gy; prevX[i] = gx; prevY[i] = gy; emaxhp[i] = T_hp[ty] * FAC_HP[f]; ehp[i] = emaxhp[i]; ecd[i] = Math.random() * T_cd[ty]; eflash[i] = 0; eatk[i] = 0;
     efac[i] = f; etype[i] = ty; eowner[i] = owner; eking[i] = ty === 4 ? 1 : 0; eranged[i] = T_range[ty] > 20 ? 1 : 0; ealive[i] = 1; etarget[i] = -1;
     const p = worldToIso(gx, gy); screenX[i] = p.x; footY[i] = p.y - elevLift(sampleH(gx, gy));
     return i;
   };
-  const killE = (i: number): void => { if (!ealive[i]) return; ealive[i] = 0; etarget[i] = -1; if (eking[i]) kingIdx[eowner[i]] = -1; addPuff(ex[i], ey[i], FACTION_COL[efac[i]]); dropSoul(ex[i], ey[i]); freeStack[freeTop++] = i; };
+  const killE = (i: number): void => { if (!ealive[i]) return; ealive[i] = 0; etarget[i] = -1; if (eking[i]) kingIdx[eowner[i]] = -1; addPuff(ex[i], ey[i], FACTION_COL[efac[i]]); if (Math.random() < 0.5) dropSoul(ex[i], ey[i]); freeStack[freeTop++] = i; };
   // Adaptiv: erst inneres 3x3 (deckt Nahkampf), nur bei leer den äußeren 5x5-Ring -> meist 9 statt 25 Zellen.
   // FFA: Feind = anderer Owner (König-Team), nicht andere Fraktion -> mehrere Könige derselben Rasse sind Rivalen.
   const findEnemy = (i: number): number => {
@@ -736,7 +750,7 @@ async function main(): Promise<void> {
     if (arrows.length >= ARROW_CAP) return;
     const dx = ex[tgt] - ex[i], dy = ey[tgt] - ey[i], d = Math.hypot(dx, dy) || 1;
     const spr = new Sprite(arrowTex); spr.anchor.set(0.5); arrowsLayer.addChild(spr);
-    arrows.push({ sx: ex[i], sy: ey[i], tx: ex[tgt], ty: ey[tgt], gx: ex[i], gy: ey[i], tgt, dmg: T_atk[etype[i]], age: 0, T: Math.max(0.28, d * 0.02 + 0.12), apex: Math.min(60, 12 + d * 1.1), spr, psx: 0, psy: 0 });
+    arrows.push({ sx: ex[i], sy: ey[i], tx: ex[tgt], ty: ey[tgt], gx: ex[i], gy: ey[i], tgt, dmg: T_atk[etype[i]] * FAC_DMG[efac[i]] * (playerActive && i === playerKing ? playerDmgMult : 1), age: 0, T: Math.max(0.28, d * 0.02 + 0.12), apex: Math.min(60, 12 + d * 1.1), spr, psx: 0, psy: 0 });
   };
   // RUNDE: PLAYERS Horden frisch spawnen (Gesamtzahl = reqUnits) + Sturm zurücksetzen.
   const newRound = (): void => {
@@ -761,6 +775,7 @@ async function main(): Promise<void> {
       }
     }
     playerKing = kingIdx[PLAYER]; camInit = false;                       // Kamera beim Rundenstart auf Spieler-König snappen
+    playerXP = 0; playerLevel = 1; playerSizeMult = 1; playerDmgMult = 1; // König-Progression zurücksetzen
   };
   let lastDrawn = 0;
 
@@ -811,7 +826,7 @@ async function main(): Promise<void> {
     let a = 0; for (let b = 0; b < KSORT; b++) { const c = sortCnt[b]; sortCnt[b] = a; a += c; }
     for (let i = 0; i < nEnt; i++) { if (!evis[i]) continue; let b = ((footY[i] - Y_MIN) * invSpan) | 0; b = b < 0 ? 0 : b >= KSORT ? KSORT - 1 : b; sortOrder[sortCnt[b]++] = i; }
     for (let k = 0; k < n; k++) {
-      const u = sortOrder[k], p = pool[k], sc = T_scale[etype[u]];
+      const u = sortOrder[k], p = pool[k], sc = T_scale[etype[u]] * (u === playerKing ? playerSizeMult : 1);
       p.x = screenX[u]; p.y = footY[u]; p.scaleX = sc; p.scaleY = sc;
       p.texture = FRAMES[frameOf(efac[u], etype[u])];
       p.tint = eflash[u] > 0 ? 0xff5555 : 0xffffff; p.alpha = 1;
@@ -853,7 +868,7 @@ async function main(): Promise<void> {
     // 2) Kampf + Bewegung (SoA, Index i)
     for (let i = 0; i < nEnt; i++) {
       if (!ealive[i]) continue;
-      const ty = etype[i], sp = T_speed[ty], isPlayer = playerActive && i === playerKing;
+      const ty = etype[i], sp = T_speed[ty] * FAC_SPD[efac[i]], isPlayer = playerActive && i === playerKing;
       let tg = etarget[i];
       if (tg < 0 || !ealive[tg] || i % 32 === simFrame % 32) { const e = findEnemy(i); if (e >= 0) { etarget[i] = e; tg = e; } else if (tg >= 0 && !ealive[tg]) { etarget[i] = -1; tg = -1; } }
       let mvx = 0, mvy = 0;
@@ -861,7 +876,7 @@ async function main(): Promise<void> {
         const dx = ex[tg] - ex[i], dy = ey[tg] - ey[i], d = Math.sqrt(dx * dx + dy * dy) || 1;
         if (d <= T_range[ty]) {                                                           // in Reichweite -> angreifen (auch Spieler)
           ecd[i] -= DT_FIX;
-          if (ecd[i] <= 0) { ecd[i] = T_cd[ty]; if (eranged[i]) fireArrow(i, tg); else { eatk[i] = 5; ehp[tg] -= T_atk[ty]; eflash[tg] = 6; if (ehp[tg] <= 0) killE(tg); } }
+          if (ecd[i] <= 0) { ecd[i] = T_cd[ty]; if (eranged[i]) fireArrow(i, tg); else { eatk[i] = 5; ehp[tg] -= T_atk[ty] * FAC_DMG[efac[i]] * (isPlayer ? playerDmgMult : 1); eflash[tg] = 6; if (ehp[tg] <= 0) killE(tg); } }
           if (eranged[i] && d < 16 && !isPlayer) { mvx = -dx / d * sp; mvy = -dy / d * sp; } // Bogenschütze kitet
         } else if (!isPlayer) { mvx = dx / d * sp; mvy = dy / d * sp; }                   // hinlaufen (Spieler steuert selbst)
       }
@@ -1006,8 +1021,9 @@ async function main(): Promise<void> {
       const kx = ex[playerKing], ky = ey[playerKing], pf = efac[playerKing];
       for (let i = souls.length - 1; i >= 0; i--) {
         const s = souls[i], dx = kx - s.gx, dy = ky - s.gy, d2 = dx * dx + dy * dy;
-        if (d2 < 64) {                                                   // eingesammelt (< 8 grid)
+        if (d2 < 64) {                                                   // eingesammelt (< 8 grid) -> neuer Vasall + König-XP
           if (freeTop > 0 || nEnt < CAP) { const r = Math.random(), ty = r < 0.78 ? 0 : r < 0.92 ? 1 : 2; spawnE(kx + (Math.random() - 0.5) * 16, ky + (Math.random() - 0.5) * 16, pf, ty, PLAYER); }
+          onPlayerSoul();
           s.spr.destroy(); souls.splice(i, 1); continue;
         }
         if (d2 < 6400) {                                                 // < 80 grid -> magnetisieren
@@ -1063,7 +1079,7 @@ async function main(): Promise<void> {
       let kingsAlive = 0; for (let p = 0; p < PLAYERS; p++) if (kingIdx[p] >= 0) kingsAlive++;
       let total = 0, myHorde = 0; for (let i = 0; i < nEnt; i++) if (ealive[i]) { total++; if (eowner[i] === PLAYER) myHorde++; }
       const pAlive = playerKing >= 0 && ealive[playerKing] === 1;
-      const me = pAlive ? `Du: ${Math.max(0, ehp[playerKing]) | 0} HP · Horde ${myHorde}` : `besiegt (Zuschauer)`;
+      const me = pAlive ? `Du: Lv${playerLevel} · ${Math.max(0, ehp[playerKing]) | 0}/${emaxhp[playerKing] | 0} HP · Horde ${myHorde}` : `besiegt (Zuschauer)`;
       hud.textContent = `Horde.IO — ${me} · Könige ${kingsAlive}/${PLAYERS} · ${total} Units · WASD bewegen · ${app.ticker.FPS.toFixed(0)} FPS (sim ${simMs.toFixed(1)}/sort ${sortMs.toFixed(1)}) · Sturm R${zoneR | 0}`;
       const roundOver = kingsAlive <= 1;
       if (playerActive && gameState === "playing" && (roundOver || !pAlive)) {
