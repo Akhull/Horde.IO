@@ -720,7 +720,7 @@ async function main(): Promise<void> {
   const spawnE = (gx: number, gy: number, f: number, ty: number, owner: number): number => {
     const i = freeTop > 0 ? freeStack[--freeTop] : nEnt++;
     ex[i] = gx; ey[i] = gy; prevX[i] = gx; prevY[i] = gy; emaxhp[i] = T_hp[ty] * FAC_HP[f]; ehp[i] = emaxhp[i]; ecd[i] = Math.random() * T_cd[ty]; eflash[i] = 0; eatk[i] = 0;
-    efac[i] = f; etype[i] = ty; eowner[i] = owner; eking[i] = ty === 4 ? 1 : 0; eranged[i] = T_range[ty] > 20 ? 1 : 0; ealive[i] = 1; etarget[i] = -1;
+    efac[i] = f; etype[i] = ty; eowner[i] = owner; eking[i] = ty === 4 ? 1 : 0; eranged[i] = T_range[ty] > 20 || (ty === 5 && f === 1) ? 1 : 0; ealive[i] = 1; etarget[i] = -1; // Elf-Champion = Fernkämpfer
     const p = worldToIso(gx, gy); screenX[i] = p.x; footY[i] = p.y - elevLift(sampleH(gx, gy));
     return i;
   };
@@ -940,11 +940,23 @@ async function main(): Promise<void> {
       let mvx = 0, mvy = 0;
       if (tg >= 0 && ealive[tg]) {
         const dx = ex[tg] - ex[i], dy = ey[tg] - ey[i], d = Math.sqrt(dx * dx + dy * dy) || 1;
-        if (d <= T_range[ty]) {                                                           // in Reichweite -> angreifen (auch Spieler)
+        const rng = ty === 5 && efac[i] === 1 ? 28 : T_range[ty];                          // Elf-Champion: große Reichweite
+        if (d <= rng) {                                                                   // in Reichweite -> angreifen (auch Spieler)
           ecd[i] -= DT_FIX;
-          if (ecd[i] <= 0) { ecd[i] = T_cd[ty]; if (eranged[i]) fireArrow(i, tg); else { eatk[i] = 5; ehp[tg] -= T_atk[ty] * FAC_DMG[efac[i]] * (isPlayer ? playerDmgMult * (buffDmg > 0 ? 1.5 : 1) : 1) * (tg === playerKing && shieldTimer > 0 ? 0.5 : 1); eflash[tg] = 6; if (ty === 5) cleave(i, tg); if (ehp[tg] <= 0) killE(tg); } }
-          if (eranged[i] && d < 16 && !isPlayer) { mvx = -dx / d * sp; mvy = -dy / d * sp; } // Bogenschütze kitet
+          if (ecd[i] <= 0) { ecd[i] = T_cd[ty]; if (eranged[i]) fireArrow(i, tg); else { eatk[i] = 5; ehp[tg] -= T_atk[ty] * FAC_DMG[efac[i]] * (isPlayer ? playerDmgMult * (buffDmg > 0 ? 1.5 : 1) : 1) * (tg === playerKing && shieldTimer > 0 ? 0.5 : 1); eflash[tg] = 6; if (ty === 5 && efac[i] === 2) cleave(i, tg); if (ehp[tg] <= 0) killE(tg); } } // Ork-Champion: Cleave
+          if (eranged[i] && d < 16 && !isPlayer) { mvx = -dx / d * sp; mvy = -dy / d * sp; } // Fernkämpfer kitet
         } else if (!isPlayer) { mvx = dx / d * sp; mvy = dy / d * sp; }                   // hinlaufen (Spieler steuert selbst)
+      }
+      if (ty === 5 && efac[i] === 0 && (simFrame + i) % 20 === 0) {                        // Mensch-Champion (Paladin): Heil-Aura für Verbündete
+        const cx = clampCell(ex[i]), cy = clampCell(ey[i]), uf = eowner[i];
+        for (let oy = -1; oy <= 1; oy++) for (let ox = -1; ox <= 1; ox++) {
+          const ng = cx + ox, mg = cy + oy; if (ng < 0 || mg < 0 || ng >= GW || mg >= GW) continue;
+          for (let j = gridHead[mg * GW + ng]; j !== -1; j = gridNext[j]) {
+            if (!ealive[j] || eowner[j] !== uf) continue;
+            const ddx = ex[j] - ex[i], ddy = ey[j] - ey[i];
+            if (ddx * ddx + ddy * ddy < 144 && ehp[j] < emaxhp[j]) ehp[j] = Math.min(emaxhp[j], ehp[j] + 6);
+          }
+        }
       }
       if (!isPlayer && mvx === 0 && mvy === 0) {                                          // kein Kampf-Move -> der eigenen König-Horde folgen
         const k = kingIdx[eowner[i]];
