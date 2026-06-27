@@ -56,6 +56,12 @@ function rampRGB(h: number, out: { r: number; g: number; b: number }): void {
 }
 
 const H = new Float32Array(N * N);
+// Emergente Hydrologie (alles rein aus H abgeleitet, KEIN separates Fluss-System):
+const HF = new Float32Array(N * N);   // Priority-Flood Füllhöhe = lokale Spill-/Wassertafel-Höhe
+const ACC = new Float32Array(N * N);  // D8-Abfluss (Drainage-Fläche pro Zelle)
+const REC = new Int32Array(N * N);    // D8-Empfänger (-1 = Auslass am Rand/Meer)
+const WET = new Float32Array(N * N);  // lokaler Wasser-Lift über dem Grund (0 = trocken)
+const FLOWX = new Float32Array(N * N), FLOWY = new Float32Array(N * N); // Fließrichtung NUR auf Flusszellen
 const HG = (i: number, j: number): number => H[Math.max(0, Math.min(N - 1, i)) * N + Math.max(0, Math.min(N - 1, j))];
 function baseHeight(i: number, j: number): number {
   const n = fbm(i * 0.014 + 7, j * 0.014 + 7, 5);
@@ -67,11 +73,69 @@ function baseHeight(i: number, j: number): number {
   const h = (n * 0.6 + ridge * ridge * 0.34) * edge + edge * 0.16 - 0.03;
   return Math.max(0, Math.min(1, h));
 }
+// EMERGENTE HYDROLOGIE — rein aus dem Heightmap H abgeleitet, kein Fluss-System, keine Splines:
+// (1) Priority-Flood+Epsilon (Barnes/Lehman 2014): füllt Senken -> JEDE Zelle entwässert monoton
+//     zum Rand (Meer). HF = lokale Spill-/Wassertafel-Höhe. (2) D8-Empfänger + Flow-Accumulation ->
+//     ACC = Abfluss (Drainage-Fläche). (3) Flüsse = Zellen mit viel Abfluss: Bett drainage-getrieben
+//     eintiefen (Stream-Power-Idee) + lokales Wasser füllt den Kanal auf TAL-Höhe. Seen = gefüllte
+//     Senken (HF-H). Fließrichtung = D8-Gefälle. => Flüsse münden garantiert ins Meer, auf eigener Höhe.
+const NB8: [number, number][] = [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [-1, 1], [1, -1], [1, 1]];
+function hydrology(): void {
+  const cap = N * N, EPS = 1e-6;
+  // --- (1) Priority-Flood+Epsilon (binärer Min-Heap auf flachen Typed-Arrays) ---
+  const hk = new Float32Array(cap), hv = new Int32Array(cap); let hn = 0;
+  const swap = (a: number, b: number): void => { const tk = hk[a]; hk[a] = hk[b]; hk[b] = tk; const tv = hv[a]; hv[a] = hv[b]; hv[b] = tv; };
+  const push = (key: number, idx: number): void => { let i = hn++; hk[i] = key; hv[i] = idx; while (i > 0) { const p = (i - 1) >> 1; if (hk[p] <= hk[i]) break; swap(p, i); i = p; } };
+  const pop = (): number => { const top = hv[0]; hn--; hk[0] = hk[hn]; hv[0] = hv[hn]; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < hn && hk[l] < hk[m]) m = l; if (r < hn && hk[r] < hk[m]) m = r; if (m === i) break; swap(m, i); i = m; } return top; };
+  const closed = new Uint8Array(cap);
+  for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) if (i === 0 || j === 0 || i === N - 1 || j === N - 1) { const k = i * N + j; HF[k] = H[k]; closed[k] = 1; push(H[k], k); }
+  while (hn > 0) {
+    const c = pop(), ci = (c / N) | 0, cj = c - ci * N;
+    for (let d = 0; d < 8; d++) { const ni = ci + NB8[d][0], nj = cj + NB8[d][1]; if (ni < 0 || nj < 0 || ni >= N || nj >= N) continue; const n = ni * N + nj; if (closed[n]) continue; HF[n] = Math.max(H[n], HF[c] + EPS); closed[n] = 1; push(HF[n], n); }
+  }
+  // --- (2) D8-Empfänger auf HF (Fließrichtung) + Flow-Accumulation in Höhen-Reihenfolge ---
+  REC.fill(-1);
+  for (let i = 1; i < N - 1; i++) for (let j = 1; j < N - 1; j++) {
+    const k = i * N + j; let best = -1, bestS = 0, bi = 0, bj = 0;
+    for (let d = 0; d < 8; d++) { const di = NB8[d][0], dj = NB8[d][1]; const n = (i + di) * N + (j + dj); const dist = di && dj ? 1.4142 : 1.0; const s = (HF[k] - HF[n]) / dist; if (s > bestS) { bestS = s; best = n; bi = di; bj = dj; } }
+    REC[k] = best; const fl = Math.hypot(bi, bj) || 1; FLOWX[k] = bi / fl; FLOWY[k] = bj / fl;
+  }
+  const order = new Int32Array(cap); for (let k = 0; k < cap; k++) { order[k] = k; ACC[k] = 1; }
+  order.sort((a, b) => HF[b] - HF[a]);
+  for (let o = 0; o < cap; o++) { const k = order[o], r = REC[k]; if (r >= 0) ACC[r] += ACC[k]; }
+  // --- (3) WET = lokaler Wasser-Lift; Flüsse: Bett eintiefen + Kanal auf Tal-Höhe füllen ---
+  let maxAcc = 1; for (let k = 0; k < cap; k++) if (ACC[k] > maxAcc) maxAcc = ACC[k];
+  const RIVER_THRESH = maxAcc * 0.0022;       // an maxAcc gekoppelt -> auflösungsstabil
+  const isRiver = new Uint8Array(cap);
+  for (let k = 0; k < cap; k++) {
+    const lake = HF[k] - H[k];
+    if (H[k] < WATER) { WET[k] = WATER - H[k]; FLOWX[k] = 0; FLOWY[k] = 0; }          // Ozean
+    else if (lake > 0.09) { WET[k] = lake; FLOWX[k] = 0; FLOWY[k] = 0; }              // See NUR bei tiefem Becken (sonst Seen-Brei)
+    else if (ACC[k] > RIVER_THRESH) {                                                // Fluss
+      const q = Math.min(1, Math.sqrt(ACC[k] / maxAcc));
+      const D = 0.025 + 0.06 * q;            // Bett-Eintiefung skaliert mit Abfluss (Stream-Power)
+      H[k] = Math.max(0, H[k] - D);          // Kanal ins Terrain graben (drainage-getrieben)
+      WET[k] = D * 0.82;                      // Wasser füllt Kanal; Ufer stehen leicht über -> sitzt im Tal
+      isRiver[k] = 1;                          // Fließrichtung FLOWX/Y aus D8 behalten
+    } else { WET[k] = 0; FLOWX[k] = 0; FLOWY[k] = 0; }                                // trockenes Land
+  }
+  // --- (3b) Flüsse 1 Zelle verbreitern -> sichtbar; Nachbar auf Kanal-Bett senken + Fließrichtung erben ---
+  const Hsrc = Float32Array.from(H), Wsrc = Float32Array.from(WET);
+  for (let i = 1; i < N - 1; i++) for (let j = 1; j < N - 1; j++) {
+    const k = i * N + j; if (!isRiver[k]) continue;
+    for (let d = 0; d < 8; d++) {
+      const ni = i + NB8[d][0], nj = j + NB8[d][1], n = ni * N + nj;
+      if (WET[n] === 0 && Hsrc[n] >= WATER && Hsrc[n] <= Hsrc[k] + 0.05) {
+        H[n] = Math.min(H[n], Hsrc[k]); WET[n] = Wsrc[k] * 0.9; FLOWX[n] = FLOWX[k]; FLOWY[n] = FLOWY[k];
+      }
+    }
+  }
+}
 function buildHeight(terrace: boolean): void {
   for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) H[i * N + j] = baseHeight(i, j);
-  erode(180000); // hydraulische Erosion: Wassertropfen graben dendritische Täler/Schluchten bergab ->
-  // natürliches Relief direkt aus der Heightmap (KEINE gecarvten Fake-Flüsse mehr; nur echte Senken=Seen).
+  erode(180000); // Droplet-Erosion: dendritische Täler bergab -> natürliches Relief direkt aus der Heightmap.
   for (let k = 0; k < N * N; k++) H[k] = Math.max(0, Math.min(1, H[k]));
+  hydrology();   // emergente Flüsse/Seen + Fließrichtung rein aus H (kein separates Fluss-System)
   if (terrace) for (let k = 0; k < N * N; k++) H[k] = Math.floor(H[k] * 13) / 13; // Voxel-Stufen
 }
 // Droplet-basierte hydraulische Erosion (Sebastian-Lague-Muster): jeder Tropfen folgt dem
@@ -122,7 +186,12 @@ function sampleH(fx: number, fy: number): number {
   return (a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + d * tx) * ty;
 }
 // begehbar = nicht Wasser, nicht Hochgebirge UND nicht zu steil (Steilhang/Klippe blockt wie Wasser).
-const passable = (fx: number, fy: number): boolean => { const h = sampleH(fx, fy); return h >= WATER && h <= MOUNTAIN && slopeAt(fx, fy) < STEEP; };
+const passable = (fx: number, fy: number): boolean => {
+  const h = sampleH(fx, fy);
+  if (h < WATER || h > MOUNTAIN || slopeAt(fx, fy) >= STEEP) return false;
+  const ix = Math.max(0, Math.min(N - 1, Math.floor(fx))), iy = Math.max(0, Math.min(N - 1, Math.floor(fy)));
+  return WET[ix * N + iy] <= 0.0005; // Flüsse/Seen blockieren Units wie Wasser (emergent)
+};
 // Hangneigung (für „flach genug zum Bauen"): Summe der Höhendifferenzen ringsum.
 function slopeAt(gx: number, gy: number): number {
   const e = 1.5;
@@ -135,16 +204,17 @@ let terrainShader: Shader;
 function buildTerrainMesh(): Mesh {
   const pos = new Float32Array(N * N * 2), col = new Float32Array(N * N * 3);
   const nrm = new Float32Array(N * N * 3), wld = new Float32Array(N * N * 2), hgt = new Float32Array(N * N);
+  const wet = new Float32Array(N * N), flow = new Float32Array(N * N * 2);
   const tmp = { r: 0, g: 0, b: 0 };
   for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
-    const k = i * N + j, h = H[k], p = worldToIso(i, j);
-    pos[2 * k] = p.x; pos[2 * k + 1] = p.y - elevLift(h);
+    const k = i * N + j, h = H[k], w = WET[k], p = worldToIso(i, j);
+    pos[2 * k] = p.x; pos[2 * k + 1] = p.y - elevLift(h + (w > 0 ? w : 0)); // Wasser-Vertices auf lokale Tafel heben
     rampRGB(h, tmp); col[3 * k] = tmp.r; col[3 * k + 1] = tmp.g; col[3 * k + 2] = tmp.b;
     // Normale aus Höhen-Gradient (für Hillshading)
     const nx = -(HG(i + 1, j) - HG(i - 1, j)) * NORM_K, ny = -(HG(i, j + 1) - HG(i, j - 1)) * NORM_K, nz = 1;
     const inv = 1 / Math.hypot(nx, ny, nz);
     nrm[3 * k] = nx * inv; nrm[3 * k + 1] = ny * inv; nrm[3 * k + 2] = nz * inv;
-    wld[2 * k] = i; wld[2 * k + 1] = j; hgt[k] = h;
+    wld[2 * k] = i; wld[2 * k + 1] = j; hgt[k] = h; wet[k] = w; flow[2 * k] = FLOWX[k]; flow[2 * k + 1] = FLOWY[k];
   }
   const idx: number[] = [];
   for (let d = 0; d < 2 * MAP; d++)
@@ -161,21 +231,23 @@ function buildTerrainMesh(): Mesh {
       aNormal: { buffer: buf(nrm, "nrm"), format: "float32x3", stride: 12, offset: 0 },
       aWorld: { buffer: buf(wld, "wld"), format: "float32x2", stride: 8, offset: 0 },
       aHeight: { buffer: buf(hgt, "hgt"), format: "float32", stride: 4, offset: 0 },
+      aWet: { buffer: buf(wet, "wet"), format: "float32", stride: 4, offset: 0 },
+      aFlow: { buffer: buf(flow, "flow"), format: "float32x2", stride: 8, offset: 0 },
     },
     indexBuffer: new Buffer({ data: new Uint32Array(idx), label: "idx", usage: BufferUsage.INDEX | BufferUsage.COPY_DST }),
   });
   const glProgram = new GlProgram({
     vertex: `
-      attribute vec2 aPosition; attribute vec3 aColor; attribute vec3 aNormal; attribute vec2 aWorld; attribute float aHeight;
-      varying vec3 vColor; varying vec3 vNormal; varying vec2 vWorld; varying float vHeight;
+      attribute vec2 aPosition; attribute vec3 aColor; attribute vec3 aNormal; attribute vec2 aWorld; attribute float aHeight; attribute float aWet; attribute vec2 aFlow;
+      varying vec3 vColor; varying vec3 vNormal; varying vec2 vWorld; varying float vHeight; varying float vWet; varying vec2 vFlow;
       uniform mat3 uProjectionMatrix; uniform mat3 uWorldTransformMatrix; uniform mat3 uTransformMatrix;
       void main() {
         gl_Position = vec4((uProjectionMatrix*uWorldTransformMatrix*uTransformMatrix*vec3(aPosition,1.0)).xy, 0.0, 1.0);
-        vColor = aColor; vNormal = aNormal; vWorld = aWorld; vHeight = aHeight;
+        vColor = aColor; vNormal = aNormal; vWorld = aWorld; vHeight = aHeight; vWet = aWet; vFlow = aFlow;
       }`,
     fragment: `
       precision mediump float;
-      varying vec3 vColor; varying vec3 vNormal; varying vec2 vWorld; varying float vHeight;
+      varying vec3 vColor; varying vec3 vNormal; varying vec2 vWorld; varying float vHeight; varying float vWet; varying vec2 vFlow;
       uniform float uTime; uniform vec3 uLight; uniform vec3 uView; uniform float uStyle; // 0 real | 1 pixel | 2 voxel | 3 cel
       float h2(vec2 p){ p=fract(p*vec2(123.34,456.21)); p+=dot(p,p+45.32); return fract(p.x*p.y); }
       float vn(vec2 p){ vec2 i=floor(p),f=fract(p); float a=h2(i),b=h2(i+vec2(1.,0.)),c=h2(i+vec2(0.,1.)),d=h2(i+vec2(1.,1.)); vec2 u=f*f*(3.-2.*f); return mix(mix(a,b,u.x),mix(c,d,u.x),u.y); }
@@ -197,8 +269,8 @@ function buildTerrainMesh(): Mesh {
         //      Physikalisches Wellen-Normalfeld -> jede Farbänderung kommt aus Fresnel/Specular, kein
         //      Noise, keine erfundene Helligkeits-Sinus-Hack. 3 langwellige Sinus = bandbegrenzt = keine
         //      Ölspur. + Toon-Tiefenbänder (pixelartig) + Ufer-Schaum. Null neue Texturen. ----
-        if (vHeight < 0.382) {
-          float depth = clamp((0.382 - vHeight) / 0.12, 0.0, 1.0);        // 0 Ufer ... 1 tief
+        if (vWet > 0.0005) {                                              // EMERGENT: Wasser wo Wassertafel > 0 (Ozean/See/Fluss)
+          float depth = clamp(vWet / 0.12, 0.0, 1.0);                     // LOKALE Tiefe (kein globales Meeresniveau)
           // Tiefen-Körperfarbe als 3 weiche Toon-Bänder (liest pixelig, killt Schimmer)
           vec3 cShallow = vec3(0.34, 0.66, 0.71);                         // Küsten-Türkis
           vec3 cMid     = vec3(0.11, 0.42, 0.58);                         // mittleres Meer
@@ -227,7 +299,14 @@ function buildTerrainMesh(): Mesh {
           float spec = pow(max(dot(Nw, Hl), 0.0), 96.0);                  // Sonnenglanz, wandert auf den Kämmen
           col += vec3(1.0, 0.97, 0.88) * spec * (0.55 * openSea);
           col += smoothstep(2.2, 2.9, crest) * 0.05 * openSea;            // sparsames Funkeln auf schärfsten Kämmen
-          float shore = smoothstep(0.016, 0.0, 0.382 - vHeight);          // Schaum an der Wasserlinie
+          // FLUSS-STRÖMUNG: nur Flusszellen (vFlow gesetzt) -> helle Linien wandern flussABWÄRTS (kein Noise)
+          float fmag = length(vFlow);
+          if (fmag > 0.01) {
+            float cur = sin(dot(vWorld, normalize(vFlow)) * 0.7 - uTime * 2.4);
+            col += 0.06 * smoothstep(0.35, 1.0, cur * 0.5 + 0.5);
+            col = mix(col, vec3(0.40, 0.62, 0.66), 0.14);                 // Fluss leicht türkiser -> sichtbar
+          }
+          float shore = smoothstep(0.016, 0.0, vWet);                     // Schaum an Wasserkante (Küste + Flussufer)
           float lap = 0.5 + 0.5 * sin(uTime * 1.0 + (vWorld.x + vWorld.y) * 0.25);
           col = mix(col, vec3(0.86, 0.93, 0.96), shore * (0.4 + 0.6 * lap) * 0.6);
           if (uStyle > 0.5 && uStyle < 2.5) { col = floor(col * 8.0 + 0.5) / 8.0; spec = step(0.5, spec); }
@@ -333,10 +412,12 @@ async function main(): Promise<void> {
   for (let i = 0; i < NB; i++) { const c = new Container(); buckets.push(c); layer.addChild(c); }
   const Y_MIN = -ELEV - 40, Y_SPAN = 2 * MAP * HH + ELEV + 120;
   const bucketOf = (screenY: number): number => Math.max(0, Math.min(NB - 1, ((screenY - Y_MIN) / Y_SPAN * NB) | 0));
+  // trockenes Land? (kein Fluss/See/Ozean) -> nichts spawnt im Wasser
+  const dry = (gx: number, gy: number): boolean => WET[Math.max(0, Math.min(N - 1, Math.floor(gx))) * N + Math.max(0, Math.min(N - 1, Math.floor(gy)))] <= 0.0005;
   function placeOnLand(): { gx: number; gy: number } {
     for (let i = 0; i < 80; i++) {
       const gx = 6 + Math.random() * (MAP - 12), gy = 6 + Math.random() * (MAP - 12), h = sampleH(gx, gy);
-      if (h >= WATER + 0.03 && h <= MOUNTAIN - 0.02 && slopeAt(gx, gy) < STEEP) return { gx, gy };
+      if (h >= WATER + 0.03 && h <= MOUNTAIN - 0.02 && slopeAt(gx, gy) < STEEP && dry(gx, gy)) return { gx, gy };
     }
     return { gx: MAP / 2, gy: MAP / 2 };
   }
@@ -352,7 +433,7 @@ async function main(): Promise<void> {
     tGuard++;
     const gx = 6 + Math.random() * (MAP - 12), gy = 6 + Math.random() * (MAP - 12);
     const h = sampleH(gx, gy);
-    if (h < WATER + 0.04 || h > 0.70 || slopeAt(gx, gy) > 0.06) continue;
+    if (h < WATER + 0.04 || h > 0.70 || slopeAt(gx, gy) > 0.06 || !dry(gx, gy)) continue;
     if (forestMask(gx, gy) < 0.52) continue; // nur in Wald-Zonen -> Cluster
     const s = new Sprite(treeT[(Math.random() * 3) | 0]);
     s.anchor.set(0.5, 0.9); s.scale.set(0.6); s.zIndex = 0; place(s, gx, gy); tPlaced++;
@@ -385,7 +466,7 @@ async function main(): Promise<void> {
   for (let g = 0; g < 20000 && towns.length < 26; g++) {
     const gx = 14 + Math.random() * (MAP - 28), gy = 14 + Math.random() * (MAP - 28);
     const h = sampleH(gx, gy);
-    if (h > 0.43 && h < 0.58 && slopeAt(gx, gy) < 0.022 && towns.every((t) => Math.hypot(t.gx - gx, t.gy - gy) > 34)) towns.push({ gx, gy });
+    if (h > 0.43 && h < 0.58 && slopeAt(gx, gy) < 0.022 && dry(gx, gy) && towns.every((t) => Math.hypot(t.gx - gx, t.gy - gy) > 34)) towns.push({ gx, gy });
   }
   for (const t of towns) {
     let n = 0, g2 = 0;
@@ -395,7 +476,7 @@ async function main(): Promise<void> {
       const a = Math.random() * Math.PI * 2, r = Math.random() * 20;
       const gx = t.gx + Math.cos(a) * r, gy = t.gy + Math.sin(a) * r;
       const h = sampleH(gx, gy);
-      if (h < 0.42 || h > 0.62 || slopeAt(gx, gy) > 0.03) continue; // flach + Gras, nie Berg/uneben
+      if (h < 0.42 || h > 0.62 || slopeAt(gx, gy) > 0.03 || !dry(gx, gy)) continue; // flach + Gras, trocken, nie Berg/uneben
       addBuilding(gx, gy); n++;
     }
   }
