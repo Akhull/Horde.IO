@@ -722,6 +722,17 @@ async function main(): Promise<void> {
         const od = Math.sqrt(od2) || 1; mvx = odx / od * sp; mvy = ody / od * sp;
         if (frame % 3 === 0) { u.hp -= 7; u.flash = 4; if (u.hp <= 0) { kill(u); continue; } }
       }
+      // Separation: Abstoßung von sehr nahen Units -> Blob/Front statt Punkt-Pile (auf 8 Nachbarn gedeckelt)
+      { const cx = Math.max(0, Math.min(GW - 1, (u.gx / CELL) | 0)), cy = Math.max(0, Math.min(GW - 1, (u.gy / CELL) | 0)); let px = 0, py = 0, n = 0;
+        for (let dy = -1; dy <= 1 && n < 8; dy++) for (let dx = -1; dx <= 1 && n < 8; dx++) {
+          const ng = cx + dx, mg = cy + dy; if (ng < 0 || mg < 0 || ng >= GW || mg >= GW) continue;
+          for (let j = gridHead[mg * GW + ng]; j !== -1 && n < 8; j = gridNext[j]) {
+            const v = units[j]; if (v === u || v.dead) continue;
+            const ax = u.gx - v.gx, ay = u.gy - v.gy, a2 = ax * ax + ay * ay;
+            if (a2 > 0.01 && a2 < 6.25) { const a = Math.sqrt(a2); px += ax / a; py += ay / a; n++; }
+          }
+        }
+        if (n > 0) { mvx += px / n * sp * 0.7; mvy += py / n * sp * 0.7; } }
       if (mvx !== 0 || mvy !== 0) { const nx = u.gx + mvx * dt, ny = u.gy + mvy * dt; if (passable(nx, u.gy)) u.gx = nx; if (passable(u.gx, ny)) u.gy = ny; }
       if (u.flash > 0) { u.flash -= dt; u.spr.tint = 0xff5555; } else u.spr.tint = u.tint; // Treffer-Blitz, sonst Typ-Tönung
       const p = worldToIso(u.gx, u.gy), sy = p.y - elevLift(sampleH(u.gx, u.gy));
