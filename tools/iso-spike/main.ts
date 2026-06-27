@@ -553,6 +553,102 @@ function buildUnitAtlas(decor: { tex: Texture }[]): Texture[] {
   return frames; // 0..35 Units ((fac*6+type)*2+step), 36+ Deko
 }
 
+// ── AUDIO ─────────────────────────────────────────────────────────────────────────────────────
+// Sounds aus dem Original (legacy/public/assets/audiosfx + music). HTMLAudioElement-POOLS statt
+// new Audio() pro Event -> kein GC-Sturm bei Massenkämpfen. Pro Sound: mehrere Varianten (rotieren),
+// Throttle (min. Abstand) + DISTANZ-GATE (nur nahe der Kamera hörbar, mit Falloff). Lautstärke
+// Master/Musik/SFX in localStorage; Browser-Autoplay erst nach der ersten User-Geste (start()).
+const A_ENC = (s: string): string => s.split("/").map((seg) => encodeURIComponent(seg)).join("/");
+const SND = {
+  music: ["/assets/music/Theme Music.mp3"],
+  ambient: ["/assets/audiosfx/Medieval Fight Ambient Dynamic Sound/MedievalFightAmbientLoop.mp3"],
+  arrow: [1, 2, 3, 4].map((n) => `/assets/audiosfx/Attack/Arrow Shot/Arrow Shot ${n}.mp3`),
+  melee: [1, 2, 3].map((n) => `/assets/audiosfx/Attack/Melee/Mellee metalic ${n}.mp3`),
+  collapse: [1, 2].map((n) => `/assets/audiosfx/Building Colapse/Building Cilapse ${n}.mp3`),
+  death_human: [1, 2, 3, 4].map((n) => `/assets/audiosfx/Dieing/Humans/DieSound ${n}.mp3`),
+  death_elf: [1, 2, 3].map((n) => `/assets/audiosfx/Dieing/Elfs/ElfsDie ${n}.mp3`),
+  death_orc: [1, 2, 3].map((n) => `/assets/audiosfx/Dieing/Orcs/OrcDie ${n}.mp3`),
+  footstep: ["/assets/audiosfx/StepSound/Stepsound.mp3"],
+  ui: ["/assets/kenney/ui-pack/Sounds/click-a.ogg"],
+} as const;
+// Fraktion (0..5) -> Todes-Sound. Nur Human/Elf/Orc-Sets vorhanden -> Untot=Elf-Wehklage, Zwerg=Human, Riese=Orc.
+const DEATH_SND = ["death_human", "death_elf", "death_orc", "death_elf", "death_human", "death_orc"] as const;
+interface SoundDef { gap: number; vol: number; }
+class AudioManager {
+  started = false; muted = false;
+  master = 0.8; music = 0.5; sfx = 0.65;
+  lx = 0; ly = 0;                                   // Listener (Kamera-Ziel) in Grid-Koordinaten
+  private hearR = 180;
+  private falloff = 55;
+  private hearR2 = this.hearR * this.hearR;
+  private falloff2 = this.falloff * this.falloff;
+  private musicEl: HTMLAudioElement;
+  private ambientEl: HTMLAudioElement;
+  private wantAmbient = false;
+  private pools: Record<string, HTMLAudioElement[]> = {};
+  private rr: Record<string, number> = {};
+  private last: Record<string, number> = {};
+  private def: Record<string, SoundDef> = {
+    arrow: { gap: 45, vol: 0.5 }, melee: { gap: 40, vol: 0.55 }, collapse: { gap: 120, vol: 0.9 },
+    death_human: { gap: 60, vol: 0.5 }, death_elf: { gap: 60, vol: 0.5 }, death_orc: { gap: 60, vol: 0.5 },
+    footstep: { gap: 240, vol: 0.4 }, ui: { gap: 30, vol: 0.7 },
+  };
+  constructor() {
+    try { const s = JSON.parse(localStorage.getItem("hordeio_audio") || "{}"); if (typeof s.master === "number") this.master = s.master; if (typeof s.music === "number") this.music = s.music; if (typeof s.sfx === "number") this.sfx = s.sfx; if (typeof s.muted === "boolean") this.muted = s.muted; } catch { /* defaults */ }
+    this.musicEl = new Audio(A_ENC(SND.music[0])); this.musicEl.loop = true; this.musicEl.preload = "auto";
+    this.ambientEl = new Audio(A_ENC(SND.ambient[0])); this.ambientEl.loop = true; this.ambientEl.preload = "auto";
+    const POOL = 6;
+    for (const [name, urls] of Object.entries(SND)) {
+      if (name === "music" || name === "ambient") continue;
+      const enc = (urls as readonly string[]).map(A_ENC);
+      const arr: HTMLAudioElement[] = [];
+      for (let i = 0; i < Math.max(POOL, enc.length); i++) { const a = new Audio(enc[i % enc.length]); a.preload = "auto"; arr.push(a); }
+      this.pools[name] = arr; this.rr[name] = 0; this.last[name] = -1e9;
+    }
+    this.applyVolumes();
+  }
+  private applyVolumes(): void {
+    this.musicEl.volume = this.muted ? 0 : this.master * this.music;
+    this.ambientEl.volume = this.muted ? 0 : this.master * this.sfx * 0.6;
+    try { localStorage.setItem("hordeio_audio", JSON.stringify({ master: this.master, music: this.music, sfx: this.sfx, muted: this.muted })); } catch { /* ignore */ }
+  }
+  setVolumes(v: { master?: number; music?: number; sfx?: number; muted?: boolean }): void {
+    if (v.master !== undefined) this.master = v.master; if (v.music !== undefined) this.music = v.music;
+    if (v.sfx !== undefined) this.sfx = v.sfx; if (v.muted !== undefined) this.muted = v.muted;
+    this.applyVolumes();
+    if (this.started) { if (!this.muted && this.musicEl.paused) this.musicEl.play().catch(() => {}); this.syncAmbient(); }
+  }
+  start(): void { // erste User-Geste -> Musik darf starten (Autoplay-Policy)
+    if (this.started) return; this.started = true;
+    if (!this.muted) this.musicEl.play().catch(() => {});
+    this.syncAmbient();
+  }
+  setAmbient(on: boolean): void { this.wantAmbient = on; this.syncAmbient(); }
+  private syncAmbient(): void {
+    if (!this.started) return;
+    if (this.wantAmbient && !this.muted) { if (this.ambientEl.paused) this.ambientEl.play().catch(() => {}); }
+    else if (!this.ambientEl.paused) this.ambientEl.pause();
+  }
+  setListener(gx: number, gy: number): void { this.lx = gx; this.ly = gy; }
+  play(name: string, gx?: number, gy?: number, volScale = 1): void {
+    if (!this.started || this.muted) return;
+    const d = this.def[name]; if (!d) return;
+    let v = this.master * this.sfx * d.vol * volScale;
+    if (gx !== undefined && gy !== undefined) {
+      const dx = gx - this.lx, dy = gy - this.ly, d2 = dx * dx + dy * dy;
+      if (d2 > this.hearR2) return;                                            // außer Reichweite -> billigster Reject (kein now())
+      if (d2 > this.falloff2) v *= 1 - (Math.sqrt(d2) - this.falloff) / (this.hearR - this.falloff);
+    }
+    if (v < 0.02) return;
+    const now = performance.now();
+    if (now - this.last[name] < d.gap) return;                                 // Throttle
+    this.last[name] = now;
+    const pool = this.pools[name]; const i = this.rr[name] = (this.rr[name] + 1) % pool.length;
+    const el = pool[i];
+    el.volume = v > 1 ? 1 : v; el.currentTime = 0; el.play().catch(() => {});
+  }
+}
+
 async function main(): Promise<void> {
   const params = new URLSearchParams(location.search);
   const style = params.get("style") ?? "real"; // real | pixel | voxel | cel
@@ -575,6 +671,12 @@ async function main(): Promise<void> {
     await app.init({ background: 0x0a1422, resizeTo: window, antialias: true });
   }
   document.getElementById("app")!.appendChild(app.canvas);
+
+  // AUDIO: Sounds + Musik. Browser-Autoplay erlaubt Ton erst nach der ersten User-Geste -> bei
+  // pointerdown/keydown einmalig audio.start() (Musik) auslösen.
+  const audio = new AudioManager();
+  const startAudioOnce = (): void => { audio.start(); window.removeEventListener("pointerdown", startAudioOnce); window.removeEventListener("keydown", startAudioOnce); };
+  window.addEventListener("pointerdown", startAudioOnce); window.addEventListener("keydown", startAudioOnce);
 
   const M = {
     humanU: `${ASSET}/Unit/medievalUnit_02.png`, humanK: `${ASSET}/Unit/medievalUnit_05.png`,
@@ -835,10 +937,10 @@ async function main(): Promise<void> {
     if (!ealive[i]) return;
     if (edecor[i]) { // Gebäude/Deko zerstört: Gebäude (edecor>=6) droppt Rekruten-Seelen -> Armee wächst. KEIN Freelist (Deko-Slot bleibt reserviert).
       ealive[i] = 0;
-      if (edecor[i] >= 6) { addPuff(ex[i], ey[i], 0xffd24a, 1.6); for (let s = 0; s < 5; s++) dropSoul(ex[i] + (rng() - 0.5) * 10, ey[i] + (rng() - 0.5) * 10); }
+      if (edecor[i] >= 6) { addPuff(ex[i], ey[i], 0xffd24a, 1.6); audio.play("collapse", ex[i], ey[i]); for (let s = 0; s < 5; s++) dropSoul(ex[i] + (rng() - 0.5) * 10, ey[i] + (rng() - 0.5) * 10); }
       return;
     }
-    ealive[i] = 0; etarget[i] = -1; if (eking[i]) kingIdx[eowner[i]] = -1; addPuff(ex[i], ey[i], FACTION_COL[efac[i]]); if (rng() < 0.5) dropSoul(ex[i], ey[i]); freeStack[freeTop++] = i;
+    ealive[i] = 0; etarget[i] = -1; if (eking[i]) kingIdx[eowner[i]] = -1; audio.play(DEATH_SND[efac[i]], ex[i], ey[i]); addPuff(ex[i], ey[i], FACTION_COL[efac[i]]); if (rng() < 0.5) dropSoul(ex[i], ey[i]); freeStack[freeTop++] = i;
   };
   // Adaptiv: erst inneres 3x3 (deckt Nahkampf), nur bei leer den äußeren 5x5-Ring -> meist 9 statt 25 Zellen.
   // FFA: Feind = anderer Owner (König-Team), nicht andere Fraktion -> mehrere Könige derselben Rasse sind Rivalen.
@@ -911,6 +1013,7 @@ async function main(): Promise<void> {
     const dx = ex[tgt] - ex[i], dy = ey[tgt] - ey[i], d = Math.hypot(dx, dy) || 1;
     const spr = new Sprite(arrowTex); spr.anchor.set(0.5); arrowsLayer.addChild(spr);
     arrows.push({ sx: ex[i], sy: ey[i], tx: ex[tgt], ty: ey[tgt], gx: ex[i], gy: ey[i], tgt, dmg: T_atk[etype[i]] * FAC_DMG[efac[i]] * (playerActive && i === playerKing ? playerDmgMult * (buffDmg > 0 ? 1.5 : 1) : 1), age: 0, T: Math.max(0.28, d * 0.02 + 0.12), apex: Math.min(60, 12 + d * 1.1), spr, psx: 0, psy: 0 });
+    audio.play("arrow", ex[i], ey[i]);
   };
   // RUNDE: PLAYERS Horden frisch spawnen (Gesamtzahl = reqUnits) + Sturm zurücksetzen.
   const newRound = (): void => {
@@ -1071,7 +1174,7 @@ async function main(): Promise<void> {
         const rng = ty === 5 && efac[i] === 1 ? 28 : T_range[ty];                          // Elf-Champion: große Reichweite
         if (d <= rng) {                                                                   // in Reichweite -> angreifen (auch Spieler)
           ecd[i] -= DT_FIX;
-          if (ecd[i] <= 0) { ecd[i] = T_cd[ty]; if (eranged[i]) fireArrow(i, tg); else { eatk[i] = 5; ehp[tg] -= T_atk[ty] * FAC_DMG[efac[i]] * (isPlayer ? playerDmgMult * (buffDmg > 0 ? 1.5 : 1) : 1) * (tg === playerKing && shieldTimer > 0 ? 0.5 : 1); eflash[tg] = 6; if (ty === 5 && efac[i] === 2) cleave(i, tg); if (ehp[tg] <= 0) killE(tg); } } // Ork-Champion: Cleave
+          if (ecd[i] <= 0) { ecd[i] = T_cd[ty]; if (eranged[i]) fireArrow(i, tg); else { eatk[i] = 5; audio.play("melee", ex[i], ey[i]); ehp[tg] -= T_atk[ty] * FAC_DMG[efac[i]] * (isPlayer ? playerDmgMult * (buffDmg > 0 ? 1.5 : 1) : 1) * (tg === playerKing && shieldTimer > 0 ? 0.5 : 1); eflash[tg] = 6; if (ty === 5 && efac[i] === 2) cleave(i, tg); if (ehp[tg] <= 0) killE(tg); } } // Ork-Champion: Cleave
           if (eranged[i] && d < 16 && !isPlayer) { mvx = -dx / d * sp; mvy = -dy / d * sp; } // Fernkämpfer kitet
         } else if (!isPlayer) { mvx = dx / d * sp; mvy = dy / d * sp; }                   // hinlaufen (Spieler steuert selbst)
       }
@@ -1166,19 +1269,52 @@ async function main(): Promise<void> {
       <button class="play" data-on="play">SPIELEN</button>
       <p class="hint">WASD / Pfeile bewegen · bei deiner Horde bleiben · grüne Seelen einsammeln</p></div>`;
   };
-  const showMenu = (): void => { gameState = "menu"; playerActive = false; newRound(); overlay.style.display = "flex"; renderMenu(); };
-  const startGame = (): void => { gameState = "playing"; playerActive = true; survT = 0; newRound(); overlay.style.display = "none"; };
+  const showMenu = (): void => { gameState = "menu"; playerActive = false; audio.setAmbient(false); newRound(); overlay.style.display = "flex"; renderMenu(); };
+  const startGame = (): void => { gameState = "playing"; playerActive = true; survT = 0; audio.start(); audio.setAmbient(true); newRound(); overlay.style.display = "none"; };
   const showOver = (title: string, sub: string): void => {
-    if (gameState === "over") return; gameState = "over"; overlay.style.display = "flex";
+    if (gameState === "over") return; gameState = "over"; audio.setAmbient(false); overlay.style.display = "flex";
     overlay.innerHTML = `<div class="panel"><h1>${title}</h1><p>${sub}</p><button class="play" data-on="again">NOCHMAL</button><button data-on="menu" style="margin-top:8px">ZURÜCK ZUM MENÜ</button></div>`;
   };
   overlay.addEventListener("click", (e) => {
     const on = (e.target as HTMLElement).getAttribute?.("data-on"); if (!on) return;
+    audio.start(); audio.play("ui");
     if (on.startsWith("fac")) { playerFaction = +on.slice(3); renderMenu(); }
     else if (on.startsWith("dif")) { difficulty = +on.slice(3); renderMenu(); }
     else if (on === "play" || on === "again") startGame();
     else if (on === "menu") showMenu();
   });
+
+  // ── AUDIO-OPTIONEN (⚙ oben rechts): Master/Musik/SFX-Slider + Stumm; Werte persistiert (localStorage). ──
+  const astyle = document.createElement("style");
+  astyle.textContent = `
+    #audiobtn{position:fixed;top:8px;right:10px;z-index:30;font-size:20px;line-height:1;width:38px;height:38px;
+      background:rgba(8,16,30,.86);border:1px solid #3a5a86;border-radius:8px;color:#cfe;cursor:pointer;}
+    #audiobtn:hover{background:#1d3052;}
+    #audiopanel{position:fixed;top:52px;right:10px;z-index:30;display:none;width:230px;font:13px/1.5 monospace;color:#cfe;
+      background:rgba(8,16,30,.96);border:1px solid #3a5a86;border-radius:10px;padding:14px 16px;box-shadow:0 10px 40px rgba(0,0,0,.6);}
+    #audiopanel h2{margin:0 0 10px;font-size:15px;letter-spacing:2px;color:#ffd24a;}
+    #audiopanel label{display:block;margin:9px 0 2px;color:#8ab;}
+    #audiopanel input[type=range]{width:100%;accent-color:#7fb0ff;}
+    #audiopanel .mute{display:flex;align-items:center;gap:8px;margin-top:12px;color:#9fc;cursor:pointer;}`;
+  document.head.appendChild(astyle);
+  const abtn = document.createElement("button"); abtn.id = "audiobtn"; abtn.textContent = "🔊"; abtn.title = "Audio-Optionen"; document.body.appendChild(abtn);
+  const apanel = document.createElement("div"); apanel.id = "audiopanel"; document.body.appendChild(apanel);
+  const pct = (v: number): number => Math.round(v * 100);
+  apanel.innerHTML = `<h2>AUDIO</h2>
+    <label>Gesamt <span id="vMaster">${pct(audio.master)}</span>%</label><input id="sMaster" type="range" min="0" max="100" value="${pct(audio.master)}">
+    <label>Musik <span id="vMusic">${pct(audio.music)}</span>%</label><input id="sMusic" type="range" min="0" max="100" value="${pct(audio.music)}">
+    <label>Effekte <span id="vSfx">${pct(audio.sfx)}</span>%</label><input id="sSfx" type="range" min="0" max="100" value="${pct(audio.sfx)}">
+    <label class="mute"><input id="cMute" type="checkbox" ${audio.muted ? "checked" : ""}> Stumm</label>`;
+  const $ = (id: string): HTMLElement => apanel.querySelector("#" + id) as HTMLElement;
+  const sMaster = $("sMaster") as HTMLInputElement, sMusic = $("sMusic") as HTMLInputElement, sSfx = $("sSfx") as HTMLInputElement, cMute = $("cMute") as HTMLInputElement;
+  const bindSlider = (el: HTMLInputElement, lab: string, key: "master" | "music" | "sfx"): void => {
+    el.addEventListener("input", () => { const v = +el.value / 100; $(lab).textContent = `${el.value}`; audio.setVolumes({ [key]: v }); });
+  };
+  bindSlider(sMaster, "vMaster", "master"); bindSlider(sMusic, "vMusic", "music"); bindSlider(sSfx, "vSfx", "sfx");
+  cMute.addEventListener("change", () => { audio.setVolumes({ muted: cMute.checked }); abtn.textContent = cMute.checked ? "🔇" : "🔊"; });
+  abtn.textContent = audio.muted ? "🔇" : "🔊";
+  abtn.addEventListener("click", () => { audio.start(); apanel.style.display = apanel.style.display === "block" ? "none" : "block"; });
+
   showMenu();
 
   let acc = 0, time = 0, frame = 0, victoryTimer = 0, simMs = 0, sortMs = 0, accSim = 0;
@@ -1273,6 +1409,10 @@ async function main(): Promise<void> {
       const tx = app.screen.width / 2 - psx * sc0, ty = app.screen.height / 2 - psy * sc0;
       if (!camInit) { world.x = tx; world.y = ty; camInit = true; } else { world.x += (tx - world.x) * 0.12; world.y += (ty - world.y) * 0.12; }
     }
+    // AUDIO-LISTENER folgt der Kamera (Grid-Koordinaten -> Distanz-Gate). Schritt-Sound, solange der
+    // Spieler-König läuft (play() self-throttlet auf den footstep-gap).
+    if (camTarget >= 0) audio.setListener(ex[camTarget], ey[camTarget]);
+    if (playerActive && playerKing >= 0 && ealive[playerKing] === 1 && (pInX !== 0 || pInY !== 0)) audio.play("footstep", ex[playerKing], ey[playerKing]);
     // RENDER: interpolierte Positionen -> Counting-Sort + Pool-Slots (EIN Draw-Call), dann König-FX.
     const tSort = performance.now();
     projectInterp(alpha);
