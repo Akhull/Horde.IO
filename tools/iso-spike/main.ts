@@ -471,26 +471,35 @@ function renderUnitCell(faction: string, type: string): (RGB | 0)[] {
 const FAC_ORDER = ["human", "elf", "orc"] as const;
 const TY_ORDER = ["warrior", "archer", "spearman", "brute", "king", "champion"] as const;
 const ANIM = 2; // Frames pro Einheit (Gang-Zyklus)
-function buildUnitAtlas(): Texture[] {
-  const COLS = FAC_ORDER.length * TY_ORDER.length * ANIM, AW = COLS * UW;
-  const cv = document.createElement("canvas"); cv.width = AW; cv.height = UH;
+const UNIT_FRAMES = FAC_ORDER.length * TY_ORDER.length * ANIM; // 36 Unit-Zellen, danach Deko-Frames
+// Atlas: 36 Unit-Zellen + Deko (Bäume/Steine/Gebäude) auf EINE Source -> Deko sortiert IM SELBEN
+// Counting-Sort wie die Units (globale Z-Regel: tiefer im Bild = vorne gilt auch für Deko<->Units).
+function buildUnitAtlas(decor: { tex: Texture; h: number }[]): Texture[] {
+  const dW = decor.map((dd) => Math.max(1, Math.round(dd.h * (dd.tex.width / dd.tex.height))));
+  const unitW = UNIT_FRAMES * UW, AW = unitW + dW.reduce((a, b) => a + b, 0);
+  const AH = Math.max(UH, ...decor.map((dd) => dd.h));
+  const cv = document.createElement("canvas"); cv.width = AW; cv.height = AH;
   const ctx = cv.getContext("2d")!; ctx.imageSmoothingEnabled = false;
-  const img = ctx.createImageData(AW, UH), d = img.data;
+  const img = ctx.createImageData(unitW, UH), d = img.data;
   let col = 0;
   for (const f of FAC_ORDER) for (const t of TY_ORDER) for (let step = 0; step < ANIM; step++) {
     BODY_STEP = step;
     const cell = renderUnitCell(f, t), ox = col * UW;
     for (let y = 0; y < UH; y++) for (let x = 0; x < UW; x++) {
       const c = cell[y * UW + x]; if (c === 0) continue;
-      const o = (y * AW + ox + x) * 4; d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = 255;
+      const o = (y * unitW + ox + x) * 4; d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = 255;
     }
     col++;
   }
-  ctx.putImageData(img, 0, 0);
+  ctx.putImageData(img, 0, 0); // Units als ImageData; Deko danach per drawImage in eigene Spalten
+  const decorRect: Rectangle[] = [];
+  let dx = unitW;
+  for (let j = 0; j < decor.length; j++) { ctx.drawImage(decor[j].tex.source.resource as CanvasImageSource, dx, 0, dW[j], decor[j].h); decorRect.push(new Rectangle(dx, 0, dW[j], decor[j].h)); dx += dW[j]; }
   const src = Texture.from(cv).source; src.scaleMode = "nearest";
   const frames: Texture[] = [];
-  for (let i = 0; i < COLS; i++) frames.push(new Texture({ source: src, frame: new Rectangle(i * UW, 0, UW, UH) }));
-  return frames; // index = (fac*6 + type)*2 + step
+  for (let i = 0; i < UNIT_FRAMES; i++) frames.push(new Texture({ source: src, frame: new Rectangle(i * UW, 0, UW, UH) }));
+  for (const r of decorRect) frames.push(new Texture({ source: src, frame: r }));
+  return frames; // 0..35 Units ((fac*6+type)*2+step), 36+ Deko
 }
 
 async function main(): Promise<void> {
@@ -545,18 +554,10 @@ async function main(): Promise<void> {
   world.addChild(buildTerrainMesh());
   terrainShader.resources.terr.uniforms.uStyle = styleId;
 
-  // GLOBALE Z-REGEL via SCREEN-Y-BUCKETS: jedes Asset kommt in den Eimer seiner Fuss-screen-Y.
-  // Eimer liegen in FIXER Reihenfolge (oben im Bild=hinten ... unten=vorne) -> korrekte Tiefe OHNE
-  // per-frame Vollsortierung (sortableChildren auf 8000+ Sprites = 3 FPS Batch-Rebuild). Batches stabil.
-  // Gilt fuer ALLE Inhalte ueber place()/spawn() -> auch kuenftige Assets automatisch korrekt.
-  const NB = 1100;
-  const layer = new Container();
-  world.addChild(layer);
-  const buckets: Container[] = [];
-  for (let i = 0; i < NB; i++) { const c = new Container(); buckets.push(c); layer.addChild(c); }
+  // GLOBALE Z-REGEL: ALLE Inhalte (Units UND Deko) liegen in EINEM Counting-Sort über die Fuß-screen-Y.
+  // Y_MIN/Y_SPAN = Quantisierungsgrenzen dieses Sorts. Deko wird als DECOR-Entity gespawnt (spawnDecor),
+  // damit ein Baum/Gebäude relativ zu jeder Unit korrekt vorne/hinten steht (tiefer im Bild = vorne).
   const Y_MIN = -ELEV - 40, Y_SPAN = 2 * MAP * HH + ELEV + 120;
-  const bucketOf = (screenY: number): number => Math.max(0, Math.min(NB - 1, ((screenY - Y_MIN) / Y_SPAN * NB) | 0));
-  // trockenes Land? (kein Fluss/See/Ozean) -> nichts spawnt im Wasser
   const dry = (gx: number, gy: number): boolean => WET[Math.max(0, Math.min(N - 1, Math.floor(gx))) * N + Math.max(0, Math.min(N - 1, Math.floor(gy)))] <= 0.0005;
   function placeOnLand(): { gx: number; gy: number } {
     for (let i = 0; i < 80; i++) {
@@ -565,51 +566,32 @@ async function main(): Promise<void> {
     }
     return { gx: MAP / 2, gy: MAP / 2 };
   }
-  function place(spr: Sprite, gx: number, gy: number): void {
-    const p = worldToIso(gx, gy), sy = p.y - elevLift(sampleH(gx, gy));
-    spr.x = p.x; spr.y = sy; buckets[bucketOf(sy)].addChild(spr);
-  }
+  const orbTex = makeOrbTexture(app);                       // für Seelen/Power-Ups
+  interface Orb { spr: Sprite; life: number; }
+  const orbs: Orb[] = [];
 
-  // WÄLDER: Bäume clustern in Wald-Zonen (forestMask) auf Gras -> echte Waldflächen statt random.
-  const treeT = [tex.tree1, tex.tree2, tex.tree3], rockT = [tex.rock1, tex.rock2];
+  // DEKO-PLAN: Positionen + Deko-Typ (0-2 Bäume, 3-4 Steine, 5-8 Gebäude). Entities folgen nach Engine-Setup.
+  const decorPlan: { gx: number; gy: number; dt: number }[] = [];
+  // WÄLDER: Bäume clustern in Wald-Zonen (forestMask) auf Gras.
   let tPlaced = 0, tGuard = 0;
   while (tPlaced < TREES && tGuard < TREES * 25) {
     tGuard++;
-    const gx = 6 + rng() * (MAP - 12), gy = 6 + rng() * (MAP - 12);
-    const h = sampleH(gx, gy);
+    const gx = 6 + rng() * (MAP - 12), gy = 6 + rng() * (MAP - 12), h = sampleH(gx, gy);
     if (h < WATER + 0.04 || h > 0.70 || slopeAt(gx, gy) > 0.06 || !dry(gx, gy)) continue;
-    if (forestMask(gx, gy) < 0.52) continue; // nur in Wald-Zonen -> Cluster
-    const s = new Sprite(treeT[(rng() * 3) | 0]);
-    s.anchor.set(0.5, 0.9); s.scale.set(0.6); s.zIndex = 0; place(s, gx, gy); tPlaced++;
+    if (forestMask(gx, gy) < 0.52) continue;
+    decorPlan.push({ gx, gy, dt: (rng() * 3) | 0 }); tPlaced++;
   }
-  // STEINE: am Bergfuß / höherem felsigem Gelände gestreut.
+  // STEINE: am Bergfuß / felsigem Gelände gestreut.
   for (let i = 0; i < TREES * 0.2; i++) {
     let gx = 0, gy = 0, ok = false;
     for (let k = 0; k < 25; k++) { gx = 6 + rng() * (MAP - 12); gy = 6 + rng() * (MAP - 12); if (sampleH(gx, gy) > 0.58 && sampleH(gx, gy) < 0.9) { ok = true; break; } }
     if (!ok) continue;
-    const s = new Sprite(rockT[i % 2]); s.anchor.set(0.5, 0.9); s.scale.set(0.28); s.zIndex = 0; place(s, gx, gy);
+    decorPlan.push({ gx, gy, dt: 3 + (i % 2) });
   }
-
-  const bTex = [tex.barn, tex.house, tex.tower, tex.barracks];
-  interface Orb { spr: Sprite; life: number; }
-  const orbs: Orb[] = [];
-  let buildingsLeft = 0;
-  const orbTex = makeOrbTexture(app);
-  const addBuilding = (gx: number, gy: number): void => {
-    const s = new Sprite(bTex[(rng() * 4) | 0]);
-    s.anchor.set(0.5, 0.88); s.scale.set(0.58); s.zIndex = 1; s.eventMode = "static"; s.cursor = "pointer";
-    s.on("pointerdown", (e) => {
-      e.stopPropagation();
-      const orb = new Sprite(orbTex); orb.anchor.set(0.5); orb.x = s.x; orb.y = s.y - 12; orb.tint = 0xffd24a; orb.scale.set(0.5);
-      buckets[NB - 1].addChild(orb); orbs.push({ spr: orb, life: 1 }); s.destroy(); buildingsLeft--; // FX immer vorne
-    });
-    place(s, gx, gy); buildingsLeft++;
-  };
-  // STÄDTE: Zentren auf flachem Gras (nie Berg/uneben), dann Gebäude drumherum clustern.
+  // STÄDTE: Zentren auf flachem Gras, Gebäude drumherum clustern.
   const towns: { gx: number; gy: number }[] = [];
   for (let g = 0; g < 20000 && towns.length < 26; g++) {
-    const gx = 14 + rng() * (MAP - 28), gy = 14 + rng() * (MAP - 28);
-    const h = sampleH(gx, gy);
+    const gx = 14 + rng() * (MAP - 28), gy = 14 + rng() * (MAP - 28), h = sampleH(gx, gy);
     if (h > 0.43 && h < 0.58 && slopeAt(gx, gy) < 0.022 && dry(gx, gy) && towns.every((t) => Math.hypot(t.gx - gx, t.gy - gy) > 34)) towns.push({ gx, gy });
   }
   for (const t of towns) {
@@ -618,10 +600,9 @@ async function main(): Promise<void> {
     while (n < target && g2 < 800) {
       g2++;
       const a = rng() * Math.PI * 2, r = rng() * 20;
-      const gx = t.gx + Math.cos(a) * r, gy = t.gy + Math.sin(a) * r;
-      const h = sampleH(gx, gy);
-      if (h < 0.42 || h > 0.62 || slopeAt(gx, gy) > 0.03 || !dry(gx, gy)) continue; // flach + Gras, trocken, nie Berg/uneben
-      addBuilding(gx, gy); n++;
+      const gx = t.gx + Math.cos(a) * r, gy = t.gy + Math.sin(a) * r, h = sampleH(gx, gy);
+      if (h < 0.42 || h > 0.62 || slopeAt(gx, gy) > 0.03 || !dry(gx, gy)) continue;
+      decorPlan.push({ gx, gy, dt: 5 + ((rng() * 4) | 0) }); n++;
     }
   }
 
@@ -648,7 +629,8 @@ async function main(): Promise<void> {
 
   // Unit-Anzahl per ?units=N skalierbar (Benchmark) — Default = 16 Horden wie bisher.
   const reqUnits = Math.max(PLAYERS * 4, parseInt(params.get("units") ?? "", 10) || PLAYERS * (HORDE + 1));
-  const CAP = reqUnits + 64;                                            // SoA-Kapazität inkl. Headroom
+  const DECOR_MAX = TREES + ((TREES * 0.2) | 0) + BUILDINGS + 100;      // Deko als Entities (Bäume/Steine/Gebäude)
+  const CAP = reqUnits + DECOR_MAX + 64;                               // SoA-Kapazität: Units + Deko + Headroom
   // — SoA-Felder (Index i = Entity-ID). Kein Objekt-Pointer mehr (target = Int32-ID), kein GC. —
   const ex = new Float32Array(CAP), ey = new Float32Array(CAP);         // Welt gx/gy (Sim-Stand nach letztem Tick)
   const prevX = new Float32Array(CAP), prevY = new Float32Array(CAP);   // gx/gy vor dem letzten Tick (Render-Interpolation)
@@ -656,6 +638,8 @@ async function main(): Promise<void> {
   const ehp = new Float32Array(CAP), emaxhp = new Float32Array(CAP), ecd = new Float32Array(CAP), eflash = new Float32Array(CAP), eatk = new Float32Array(CAP);
   const efac = new Uint8Array(CAP), etype = new Uint8Array(CAP), eking = new Uint8Array(CAP), eranged = new Uint8Array(CAP), ealive = new Uint8Array(CAP), evis = new Uint8Array(CAP);
   const eowner = new Uint8Array(CAP);   // König-/Team-ID (0..PLAYERS-1). FFA: anderer Owner = Feind. efac = nur Optik.
+  const edecor = new Uint8Array(CAP);   // 0 = Unit, sonst Deko-Typ+1 (Baum/Stein/Gebäude) -> sortiert mit Units, keine Sim
+  let decorCount = 0;                   // erste decorCount Indizes = Deko (bleiben über Runden erhalten)
   const etarget = new Int32Array(CAP);
   const PLAYER = 0;                      // owner 0 = der Spieler-König
   const kingIdx = new Int32Array(PLAYERS).fill(-1); // Entity-ID des Königs je Owner (-1 = tot) -> Horde folgt IHM
@@ -677,7 +661,14 @@ async function main(): Promise<void> {
 
   // ATLAS-Frames + ParticleContainer-Pool. dynamicProperties: position(x,y) + vertex(scale/anchor) +
   // uvs(welches Frame) + color(tint/alpha) ändern sich pro Slot/Frame (Slot-Inhalt = jeweils andere Unit).
-  const FRAMES = buildUnitAtlas();
+  // Deko-Spezifikation (Welt-Höhe + Anker): wird in den Atlas gebacken; Frames ab Index UNIT_FRAMES.
+  const DECOR_SPEC = [
+    { tex: tex.tree1, h: 58, anchorY: 0.94 }, { tex: tex.tree2, h: 58, anchorY: 0.94 }, { tex: tex.tree3, h: 58, anchorY: 0.94 },
+    { tex: tex.rock1, h: 24, anchorY: 0.9 }, { tex: tex.rock2, h: 24, anchorY: 0.9 },
+    { tex: tex.barn, h: 52, anchorY: 0.9 }, { tex: tex.house, h: 52, anchorY: 0.9 }, { tex: tex.tower, h: 66, anchorY: 0.92 }, { tex: tex.barracks, h: 52, anchorY: 0.9 },
+  ];
+  const DECOR_ANCHOR = DECOR_SPEC.map((s) => s.anchorY);
+  const FRAMES = buildUnitAtlas(DECOR_SPEC);
   const frameOf = (f: number, ty: number): number => f * 6 + ty; // 6 Typen pro Fraktion im Atlas
   const unitsPC = new ParticleContainer({ dynamicProperties: { position: true, vertex: true, uvs: true, color: true, rotation: false } });
   unitsPC.eventMode = "none"; world.addChild(unitsPC);
@@ -741,10 +732,19 @@ async function main(): Promise<void> {
   const spawnE = (gx: number, gy: number, f: number, ty: number, owner: number): number => {
     const i = freeTop > 0 ? freeStack[--freeTop] : nEnt++;
     ex[i] = gx; ey[i] = gy; prevX[i] = gx; prevY[i] = gy; emaxhp[i] = T_hp[ty] * FAC_HP[f]; ehp[i] = emaxhp[i]; ecd[i] = rng() * T_cd[ty]; eflash[i] = 0; eatk[i] = 0;
-    efac[i] = f; etype[i] = ty; eowner[i] = owner; eking[i] = ty === 4 ? 1 : 0; eranged[i] = T_range[ty] > 20 || (ty === 5 && f === 1) ? 1 : 0; ealive[i] = 1; etarget[i] = -1; // Elf-Champion = Fernkämpfer
+    efac[i] = f; etype[i] = ty; eowner[i] = owner; edecor[i] = 0; eking[i] = ty === 4 ? 1 : 0; eranged[i] = T_range[ty] > 20 || (ty === 5 && f === 1) ? 1 : 0; ealive[i] = 1; etarget[i] = -1; // Elf-Champion = Fernkämpfer
     const p = worldToIso(gx, gy); screenX[i] = p.x; footY[i] = p.y - elevLift(sampleH(gx, gy));
     return i;
   };
+  // DEKO als Entity (sortiert mit Units, keine Sim): nur Position + Frame; bleibt über Runden erhalten.
+  const spawnDecor = (gx: number, gy: number, dt: number): void => {
+    const i = nEnt++;
+    ex[i] = gx; ey[i] = gy; prevX[i] = gx; prevY[i] = gy; ealive[i] = 1; edecor[i] = dt + 1;
+    efac[i] = 0; etype[i] = 0; eowner[i] = 255; eflash[i] = 0; eatk[i] = 0; etarget[i] = -1; eking[i] = 0; eranged[i] = 0;
+    const p = worldToIso(gx, gy); screenX[i] = p.x; footY[i] = p.y - elevLift(sampleH(gx, gy));
+  };
+  for (const dp of decorPlan) if (nEnt < CAP) spawnDecor(dp.gx, dp.gy, dp.dt);
+  decorCount = nEnt;                                                    // Units spawnen ab hier; Deko bleibt unten
   const killE = (i: number): void => { if (!ealive[i]) return; ealive[i] = 0; etarget[i] = -1; if (eking[i]) kingIdx[eowner[i]] = -1; addPuff(ex[i], ey[i], FACTION_COL[efac[i]]); if (rng() < 0.5) dropSoul(ex[i], ey[i]); freeStack[freeTop++] = i; };
   // Adaptiv: erst inneres 3x3 (deckt Nahkampf), nur bei leer den äußeren 5x5-Ring -> meist 9 statt 25 Zellen.
   // FFA: Feind = anderer Owner (König-Team), nicht andere Fraktion -> mehrere Könige derselben Rasse sind Rivalen.
@@ -824,7 +824,7 @@ async function main(): Promise<void> {
     kingFX.length = 0;
     for (const a of arrows) a.spr.destroy(); arrows.length = 0;
     for (const s of souls) s.spr.destroy(); souls.length = 0;
-    nEnt = 0; freeTop = 0; ealive.fill(0); kingIdx.fill(-1);
+    nEnt = decorCount; freeTop = 0; ealive.fill(0, decorCount); kingIdx.fill(-1); // Deko (0..decorCount) bleibt erhalten
     for (const p of pool) p.alpha = 0; lastDrawn = 0;
     zoneR = 380; zoneTarget = 380; zoneTimer = 0; drawZone();
     const perHorde = Math.max(1, Math.floor((reqUnits - PLAYERS) / PLAYERS));
@@ -894,12 +894,20 @@ async function main(): Promise<void> {
     let a = 0; for (let b = 0; b < KSORT; b++) { const c = sortCnt[b]; sortCnt[b] = a; a += c; }
     for (let i = 0; i < nEnt; i++) { if (!evis[i]) continue; let b = ((footY[i] - Y_MIN) * invSpan) | 0; b = b < 0 ? 0 : b >= KSORT ? KSORT - 1 : b; sortOrder[sortCnt[b]++] = i; }
     for (let k = 0; k < n; k++) {
-      const u = sortOrder[k], p = pool[k], sc = T_scale[etype[u]] * (u === playerKing ? playerSizeMult : 1);
-      p.x = screenX[u]; p.y = footY[u]; p.scaleX = sc; p.scaleY = sc;
-      const moving = Math.abs(ex[u] - prevX[u]) + Math.abs(ey[u] - prevY[u]) > 0.05;      // Gang-Frame nur in Bewegung
-      const ph = moving ? (((time * 7 + u) | 0) & 1) : 0;
-      p.texture = FRAMES[frameOf(efac[u], etype[u]) * 2 + ph];
-      p.tint = eflash[u] > 0 ? 0xff5555 : u === playerKing && shieldTimer > 0 ? 0x8fc4ff : 0xffffff; p.alpha = 1;
+      const u = sortOrder[k], p = pool[k];
+      p.x = screenX[u]; p.y = footY[u];
+      const di = edecor[u];
+      if (di) {                                                                          // DEKO: eigener Frame/Anker, keine Anim
+        const j = di - 1;
+        p.texture = FRAMES[UNIT_FRAMES + j]; p.anchorY = DECOR_ANCHOR[j]; p.scaleX = 1; p.scaleY = 1; p.tint = 0xffffff; p.alpha = 1;
+      } else {                                                                           // UNIT: Typ-Skala, Gang-Frame, Tönung
+        const sc = T_scale[etype[u]] * (u === playerKing ? playerSizeMult : 1);
+        p.anchorY = 0.82; p.scaleX = sc; p.scaleY = sc;
+        const moving = Math.abs(ex[u] - prevX[u]) + Math.abs(ey[u] - prevY[u]) > 0.05;    // Gang-Frame nur in Bewegung
+        const ph = moving ? (((time * 7 + u) | 0) & 1) : 0;
+        p.texture = FRAMES[frameOf(efac[u], etype[u]) * 2 + ph];
+        p.tint = eflash[u] > 0 ? 0xff5555 : u === playerKing && shieldTimer > 0 ? 0x8fc4ff : 0xffffff; p.alpha = 1;
+      }
     }
     for (let k = n; k < lastDrawn; k++) pool[k].alpha = 0; // pensionierte Slots einmalig parken
     lastDrawn = n;
@@ -911,7 +919,7 @@ async function main(): Promise<void> {
   window.addEventListener("keydown", (e) => {
     if (e.key === "+" || e.key === "=") { const ks = aliveKings(); if (!ks.length) return;
       for (let n = 0; n < 1000 && (freeTop > 0 || nEnt < CAP); n++) { const ki = ks[(rng() * ks.length) | 0]; const r = rng(); const ty = r < 0.55 ? 0 : r < 0.73 ? 1 : r < 0.88 ? 2 : 3; spawnE(ex[ki] + (rng() - 0.5) * 30, ey[ki] + (rng() - 0.5) * 30, efac[ki], ty, eowner[ki]); } }
-    else if (e.key === "-" || e.key === "_") { let removed = 0; for (let i = 0; i < nEnt && removed < 1000; i++) if (ealive[i] && !eking[i]) { killE(i); removed++; } }
+    else if (e.key === "-" || e.key === "_") { let removed = 0; for (let i = decorCount; i < nEnt && removed < 1000; i++) if (ealive[i] && !eking[i]) { killE(i); removed++; } }
   });
 
   // SPIELER-STEUERUNG: WASD/Pfeile bewegen den eigenen König (owner 0). Bildschirm-Richtung -> Iso-Grid.
@@ -947,14 +955,14 @@ async function main(): Promise<void> {
     simFrame++;
     // 1) Spatial-Grid neu aufbauen (nur lebende Units)
     gridHead.fill(-1);
-    for (let i = 0; i < nEnt; i++) { if (!ealive[i]) continue; const c = clampCell(ey[i]) * GW + clampCell(ex[i]); gridNext[i] = gridHead[c]; gridHead[c] = i; }
+    for (let i = decorCount; i < nEnt; i++) { if (!ealive[i]) continue; const c = clampCell(ey[i]) * GW + clampCell(ex[i]); gridNext[i] = gridHead[c]; gridHead[c] = i; }
     // 1b) Sturmzone in Phasen schrumpfen
     zoneTimer += HSTEP / 1000;
     if (zoneTimer > 20 && zoneTarget > 60) { zoneTimer = 0; zoneTarget *= 0.72; } // langsamer/größer -> Match ~1.5min, kein Sofort-Wipe
     if (Math.abs(zoneR - zoneTarget) > 0.3) { zoneR += (zoneTarget - zoneR) * Math.min(1, 0.012 * DT_FIX); drawZone(); }
     const zr2 = zoneR * zoneR;
-    // 2) Kampf + Bewegung (SoA, Index i)
-    for (let i = 0; i < nEnt; i++) {
+    // 2) Kampf + Bewegung (SoA, Index i; Deko 0..decorCount übersprungen)
+    for (let i = decorCount; i < nEnt; i++) {
       if (!ealive[i]) continue;
       const isPlayer = playerActive && i === playerKing;
       const ty = etype[i], sp = T_speed[ty] * FAC_SPD[efac[i]] * (isPlayer && buffSpeed > 0 ? 1.5 : 1);
@@ -1196,7 +1204,7 @@ async function main(): Promise<void> {
     if (acc > 250) {
       acc = 0;
       let kingsAlive = 0; for (let p = 0; p < PLAYERS; p++) if (kingIdx[p] >= 0) kingsAlive++;
-      let total = 0, myHorde = 0; for (let i = 0; i < nEnt; i++) if (ealive[i]) { total++; if (eowner[i] === PLAYER) myHorde++; }
+      let total = 0, myHorde = 0; for (let i = decorCount; i < nEnt; i++) if (ealive[i]) { total++; if (eowner[i] === PLAYER) myHorde++; }
       const pAlive = playerKing >= 0 && ealive[playerKing] === 1;
       const me = pAlive ? `Du: Lv${playerLevel} · ${Math.max(0, ehp[playerKing]) | 0}/${emaxhp[playerKing] | 0} HP · Horde ${myHorde}` : `besiegt (Zuschauer)`;
       const dashS = dashCd > 0 ? `${Math.ceil(dashCd)}s` : "●", shieldS = shieldTimer > 0 ? `aktiv ${Math.ceil(shieldTimer)}s` : shieldCd > 0 ? `${Math.ceil(shieldCd)}s` : "●";
