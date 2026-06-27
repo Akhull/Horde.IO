@@ -514,6 +514,16 @@ async function main(): Promise<void> {
     }
     return best;
   };
+  // BATTLE-ROYALE-STURMZONE: sicherer Kreis schrumpft in Phasen; außerhalb Dauerschaden -> Units
+  // fliehen rein, Nachzügler sterben -> erzwingt den Zusammenstoß (kein Minuten-Warten).
+  let zoneX = MAP / 2, zoneY = MAP / 2, zoneR = 320, zoneTarget = 320, zoneTimer = 0;
+  const zoneG = new Graphics(); zoneG.eventMode = "none"; world.addChild(zoneG); // über Terrain+Units
+  const drawZone = (): void => {
+    const pts: number[] = [];
+    for (let a = 0; a <= 72; a++) { const th = (a / 72) * Math.PI * 2; const p = worldToIso(zoneX + Math.cos(th) * zoneR, zoneY + Math.sin(th) * zoneR); pts.push(p.x, p.y); }
+    zoneG.clear().poly(pts).stroke({ color: 0x8af0ff, width: 16, alpha: 0.55 }).poly(pts).stroke({ color: 0xffffff, width: 5, alpha: 0.9 });
+  };
+  drawZone();
 
   // --- PIXELATE (Pixel-Perfect-Camera): Welt in eine gesnappte LOW-RES-SCREEN-RT rendern, dann
   // NEAREST x PX hochskalieren. Block = PX BILDSCHIRM-px -> KONSTANT über alle Zooms (kein Pixelmatsch
@@ -558,6 +568,11 @@ async function main(): Promise<void> {
     // 1) Spatial-Grid neu aufbauen (nur lebende Units)
     gridHead.fill(-1);
     for (let i = 0; i < units.length; i++) { const u = units[i]; if (u.dead) continue; const c = cellIdx(u.gx, u.gy); gridNext[i] = gridHead[c]; gridHead[c] = i; }
+    // 1b) Sturmzone in Phasen schrumpfen
+    zoneTimer += t.deltaMS / 1000;
+    if (zoneTimer > 14 && zoneTarget > 60) { zoneTimer = 0; zoneTarget *= 0.66; }
+    if (Math.abs(zoneR - zoneTarget) > 0.3) { zoneR += (zoneTarget - zoneR) * Math.min(1, 0.012 * dt); drawZone(); }
+    const zr2 = zoneR * zoneR;
     // 2) Kampf + Bewegung
     for (let i = 0; i < units.length; i++) {
       const u = units[i]; if (u.dead) continue;
@@ -570,6 +585,12 @@ async function main(): Promise<void> {
         if (d <= ATTACK_RANGE) { u.cd -= dt; if (u.cd <= 0) { u.cd = ATTACK_CD; tg.hp -= u.atk; tg.flash = 6; if (tg.hp <= 0) kill(tg); } } // Nahkampf
         else { mvx = dx / d * sp; mvy = dy / d * sp; }                                   // hinlaufen
       } else { const dx = MAP / 2 - u.gx, dy = MAP / 2 - u.gy, d = Math.hypot(dx, dy) || 1; mvx = dx / d * sp * 0.6; mvy = dy / d * sp * 0.6; } // kein Gegner -> zur Mitte (Schlacht suchen)
+      // Sturm: außerhalb der sicheren Zone -> rein fliehen (überschreibt Kampf) + Dauerschaden
+      const odx = zoneX - u.gx, ody = zoneY - u.gy, od2 = odx * odx + ody * ody;
+      if (od2 > zr2) {
+        const od = Math.sqrt(od2) || 1; mvx = odx / od * sp; mvy = ody / od * sp;
+        if (frame % 3 === 0) { u.hp -= 7; u.flash = 4; if (u.hp <= 0) { kill(u); continue; } }
+      }
       if (mvx !== 0 || mvy !== 0) { const nx = u.gx + mvx * dt, ny = u.gy + mvy * dt; if (passable(nx, u.gy)) u.gx = nx; if (passable(u.gx, ny)) u.gy = ny; }
       if (u.flash > 0) { u.flash -= dt; u.spr.tint = 0xff5555; } else u.spr.tint = u.king ? 0xffe6a0 : 0xffffff; // Treffer-Blitz
       const p = worldToIso(u.gx, u.gy), sy = p.y - elevLift(sampleH(u.gx, u.gy));
@@ -604,7 +625,7 @@ async function main(): Promise<void> {
       const names = ["Menschen", "Elfen", "Orks"];
       const remaining = cnt.filter((c) => c > 0).length;
       const status = remaining <= 1 ? ` · SIEG: ${names[cnt.findIndex((c) => c > 0)] ?? "—"}` : "";
-      hud.textContent = `Horde.IO — ${cnt[0] + cnt[1] + cnt[2]} Krieger · ${names.map((n, i) => `${n} ${cnt[i]}`).join(" · ")}${status} · ${app.ticker.FPS.toFixed(0)} FPS`;
+      hud.textContent = `Horde.IO — ${cnt[0] + cnt[1] + cnt[2]} Krieger · ${names.map((n, i) => `${n} ${cnt[i]}`).join(" · ")}${status} · Sturm R${zoneR | 0} · ${app.ticker.FPS.toFixed(0)} FPS`;
     }
   });
 }
