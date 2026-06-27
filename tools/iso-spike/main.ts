@@ -479,20 +479,41 @@ async function main(): Promise<void> {
   }
 
   const factions = [{ u: tex.humanU, k: tex.humanK }, { u: tex.elfU, k: tex.elfK }, { u: tex.orcU, k: tex.orcK }];
-  interface U { gx: number; gy: number; vx: number; vy: number; spr: Sprite; bk: number; }
-  const units: U[] = [];
-  function spawn(gx: number, gy: number, t: Texture, scale: number): void {
+  // GAMEPLAY: Horden-Kampf. Jede Unit hat Fraktion, HP, Angriff. Verhalten: nächsten Gegner suchen,
+  // hinlaufen, im Nahkampf Schaden, bei HP<=0 sterben. Battle-Royale -> letzte Fraktion siegt.
+  interface U { gx: number; gy: number; spr: Sprite; bk: number; f: number; hp: number; atk: number; cd: number; flash: number; king: boolean; dead: boolean; target: U | null; }
+  let units: U[] = [];
+  const ATTACK_RANGE = 5.0, ATTACK_CD = 26, SPEED = 0.22, KING_SPEED = 0.14;
+  function spawn(gx: number, gy: number, t: Texture, scale: number, f: number, king: boolean): void {
     const spr = new Sprite(t); spr.anchor.set(0.5, 0.82); spr.scale.set(scale);
+    if (king) spr.tint = 0xffe6a0; // Könige golden markiert
     const p = worldToIso(gx, gy), sy = p.y - elevLift(sampleH(gx, gy)); spr.x = p.x; spr.y = sy;
     const bk = bucketOf(sy); buckets[bk].addChild(spr);
-    const ang = Math.random() * Math.PI * 2, sp = 0.006 + Math.random() * 0.014;
-    units.push({ gx, gy, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp, spr, bk });
+    units.push({ gx, gy, spr, bk, f, hp: king ? 320 : 46, atk: king ? 16 : 5, cd: Math.random() * ATTACK_CD, flash: 0, king, dead: false, target: null });
   }
   for (let pi = 0; pi < PLAYERS; pi++) {
-    const f = factions[pi % 3], c = placeOnLand();
-    spawn(c.gx, c.gy, f.k, 0.65);
-    for (let i = 0; i < HORDE; i++) spawn(c.gx + (Math.random() - 0.5) * 12, c.gy + (Math.random() - 0.5) * 12, f.u, 0.38);
+    const fid = pi % 3, f = factions[fid], c = placeOnLand();
+    spawn(c.gx, c.gy, f.k, 0.65, fid, true);
+    for (let i = 0; i < HORDE; i++) spawn(c.gx + (Math.random() - 0.5) * 12, c.gy + (Math.random() - 0.5) * 12, f.u, 0.38, fid, false);
   }
+  // Spatial-Grid (verkettete Liste pro Zelle) -> schnelle Gegnersuche bei 8000+ Units (kein O(n^2)).
+  const CELL = 18, GW = Math.ceil(MAP / CELL) + 1;
+  const gridHead = new Int32Array(GW * GW), gridNext = new Int32Array(units.length);
+  const cellIdx = (gx: number, gy: number): number => Math.max(0, Math.min(GW - 1, (gy / CELL) | 0)) * GW + Math.max(0, Math.min(GW - 1, (gx / CELL) | 0));
+  const kill = (v: U): void => { v.dead = true; v.spr.destroy(); };
+  const findEnemy = (u: U): U | null => {
+    const cx = Math.max(0, Math.min(GW - 1, (u.gx / CELL) | 0)), cy = Math.max(0, Math.min(GW - 1, (u.gy / CELL) | 0));
+    let best: U | null = null, bestD = 1e9;
+    for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+      const nx = cx + dx, ny = cy + dy; if (nx < 0 || ny < 0 || nx >= GW || ny >= GW) continue;
+      for (let j = gridHead[ny * GW + nx]; j !== -1; j = gridNext[j]) {
+        const v = units[j]; if (v.dead || v.f === u.f) continue;
+        const ddx = v.gx - u.gx, ddy = v.gy - u.gy, d = ddx * ddx + ddy * ddy;
+        if (d < bestD) { bestD = d; best = v; }
+      }
+    }
+    return best;
+  };
 
   // --- PIXELATE (Pixel-Perfect-Camera): Welt in eine gesnappte LOW-RES-SCREEN-RT rendern, dann
   // NEAREST x PX hochskalieren. Block = PX BILDSCHIRM-px -> KONSTANT über alle Zooms (kein Pixelmatsch
@@ -529,20 +550,35 @@ async function main(): Promise<void> {
     world.x = mx - wx * ns; world.y = my - wy * ns;
   }, { passive: false });
 
-  let acc = 0, time = 0;
+  let acc = 0, time = 0, frame = 0;
   app.ticker.add((t) => {
     const dt = t.deltaTime;
-    time += t.deltaMS / 1000;
+    time += t.deltaMS / 1000; frame++;
     terrainShader.resources.terr.uniforms.uTime = time;
-    for (const u of units) {
-      const nx = u.gx + u.vx * dt, ny = u.gy + u.vy * dt;
-      if (!passable(nx, u.gy)) u.vx = -u.vx; else u.gx = nx;
-      if (!passable(u.gx, ny)) u.vy = -u.vy; else u.gy = ny;
+    // 1) Spatial-Grid neu aufbauen (nur lebende Units)
+    gridHead.fill(-1);
+    for (let i = 0; i < units.length; i++) { const u = units[i]; if (u.dead) continue; const c = cellIdx(u.gx, u.gy); gridNext[i] = gridHead[c]; gridHead[c] = i; }
+    // 2) Kampf + Bewegung
+    for (let i = 0; i < units.length; i++) {
+      const u = units[i]; if (u.dead) continue;
+      if (!u.target || u.target.dead || i % 16 === frame % 16) { const e = findEnemy(u); if (e) u.target = e; } // Ziel suchen/auffrischen (gestaffelt)
+      const sp = u.king ? KING_SPEED : SPEED;
+      let mvx = 0, mvy = 0;
+      const tg = u.target;
+      if (tg && !tg.dead) {
+        const dx = tg.gx - u.gx, dy = tg.gy - u.gy, d = Math.hypot(dx, dy) || 1;
+        if (d <= ATTACK_RANGE) { u.cd -= dt; if (u.cd <= 0) { u.cd = ATTACK_CD; tg.hp -= u.atk; tg.flash = 6; if (tg.hp <= 0) kill(tg); } } // Nahkampf
+        else { mvx = dx / d * sp; mvy = dy / d * sp; }                                   // hinlaufen
+      } else { const dx = MAP / 2 - u.gx, dy = MAP / 2 - u.gy, d = Math.hypot(dx, dy) || 1; mvx = dx / d * sp * 0.6; mvy = dy / d * sp * 0.6; } // kein Gegner -> zur Mitte (Schlacht suchen)
+      if (mvx !== 0 || mvy !== 0) { const nx = u.gx + mvx * dt, ny = u.gy + mvy * dt; if (passable(nx, u.gy)) u.gx = nx; if (passable(u.gx, ny)) u.gy = ny; }
+      if (u.flash > 0) { u.flash -= dt; u.spr.tint = 0xff5555; } else u.spr.tint = u.king ? 0xffe6a0 : 0xffffff; // Treffer-Blitz
       const p = worldToIso(u.gx, u.gy), sy = p.y - elevLift(sampleH(u.gx, u.gy));
       u.spr.x = p.x; u.spr.y = sy;
       const bk = bucketOf(sy);
       if (bk !== u.bk) { buckets[bk].addChild(u.spr); u.bk = bk; } // Eimerwechsel = neue Tiefe (global)
     }
+    // 3) Tote periodisch aus dem Array entfernen (Sprites sind schon zerstört)
+    if (frame % 30 === 0) { for (let i = 0; i < units.length; i++) if (units[i].dead) { units = units.filter((u) => !u.dead); break; } }
     for (let i = orbs.length - 1; i >= 0; i--) {
       const o = orbs[i]; o.life -= 0.012 * dt; o.spr.y -= 0.6 * dt; o.spr.alpha = Math.max(0, o.life);
       if (o.life <= 0) { o.spr.destroy(); orbs.splice(i, 1); }
@@ -562,7 +598,14 @@ async function main(): Promise<void> {
       }
     }
     acc += t.deltaMS;
-    if (acc > 250) { acc = 0; hud.textContent = `Horde.IO — Iso Spike v4 · ${units.length} Units · ${PLAYERS} Horden · ${buildingsLeft} Gebäude · ${app.ticker.FPS.toFixed(0)} FPS · Hillshade+Wasser-Anim · Klick=looten`; }
+    if (acc > 250) {
+      acc = 0;
+      const cnt = [0, 0, 0]; for (const u of units) if (!u.dead) cnt[u.f]++;
+      const names = ["Menschen", "Elfen", "Orks"];
+      const remaining = cnt.filter((c) => c > 0).length;
+      const status = remaining <= 1 ? ` · SIEG: ${names[cnt.findIndex((c) => c > 0)] ?? "—"}` : "";
+      hud.textContent = `Horde.IO — ${cnt[0] + cnt[1] + cnt[2]} Krieger · ${names.map((n, i) => `${n} ${cnt[i]}`).join(" · ")}${status} · ${app.ticker.FPS.toFixed(0)} FPS`;
+    }
   });
 }
 
