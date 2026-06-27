@@ -28,7 +28,7 @@ const ELEV = 150;           // Screen-Y-Lift (markante Berge)
 const NORM_K = 26;          // Höhen->Slope-Skala für die Beleuchtung
 const WATER = 0.38, MOUNTAIN = 0.80; // höhere Block-Schwelle -> weniger gesperrte Fläche, mehr Pässe
 const STEEP = 0.22;                  // nur echte Klippen/Steilhänge blocken (Hügel begehbar -> Terrain sperrt nicht alles)
-const PLAYERS = 16, HORDE = 520, BUILDINGS = 520, TREES = 2200;
+const PLAYERS = 16, HORDE = 520, BUILDINGS = 520, TREES = 4600; // dichtere Wälder (vorher 2200 = zu mau)
 const ASSET = "/assets/kenney/medieval-rts/PNG/Retina";
 
 function hash(x: number, y: number): number {
@@ -153,10 +153,11 @@ function buildHeight(terrace: boolean): void {
   for (let k = 0; k < N * N; k++) H[k] = Math.max(0, Math.min(1, H[k]));
   hydrology();   // emergente Flüsse/Seen + Fließrichtung rein aus H (kein separates Fluss-System)
   if (terrace) for (let k = 0; k < N * N; k++) H[k] = Math.floor(H[k] * 13) / 13; // Voxel-Stufen
-  // Begehbarkeits-Bitmap EINMAL vorberechnen (nicht Wasser/Hochgebirge/Steilhang/Fluss) -> O(1) im Tick.
+  // Begehbarkeits-Bitmap EINMAL vorberechnen: NUR Wasser/Fluss + Hochgebirge blocken (keine Hang-Sperre
+  // mehr -> Hügel begehbar, man bleibt nicht überall hängen; nur echte Berge & Wasser sind Hindernisse).
   for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
     const k = i * N + j, h = H[k];
-    PASS[k] = h >= WATER && h <= MOUNTAIN && slopeAt(i, j) < STEEP && WET[k] <= 0.0005 ? 1 : 0;
+    PASS[k] = h >= WATER && h <= MOUNTAIN && WET[k] <= 0.0005 ? 1 : 0;
   }
 }
 // Droplet-basierte hydraulische Erosion (Sebastian-Lague-Muster): jeder Tropfen folgt dem
@@ -579,7 +580,7 @@ async function main(): Promise<void> {
     tGuard++;
     const gx = 6 + rng() * (MAP - 12), gy = 6 + rng() * (MAP - 12), h = sampleH(gx, gy);
     if (h < WATER + 0.04 || h > 0.70 || slopeAt(gx, gy) > 0.06 || !dry(gx, gy)) continue;
-    if (forestMask(gx, gy) < 0.52) continue;
+    if (forestMask(gx, gy) < 0.46) continue;                 // größere Waldflächen
     decorPlan.push({ gx, gy, dt: (rng() * 3) | 0 }); tPlaced++;
   }
   // STEINE: am Bergfuß / felsigem Gelände gestreut.
@@ -645,7 +646,7 @@ async function main(): Promise<void> {
   const etarget = new Int32Array(CAP);
   const PLAYER = 0;                      // owner 0 = der Spieler-König
   const kingIdx = new Int32Array(PLAYERS).fill(-1); // Entity-ID des Königs je Owner (-1 = tot) -> Horde folgt IHM
-  let playerKing = -1, camInit = false;
+  let playerKing = -1, camInit = false, pkvx = 0, pkvy = 0; // pkvx/y = geglättete Königs-Geschwindigkeit (Smoothing)
   let playerActive = false;                          // false = Menü-Vorschau-Auto-Battle; true = Spieler steuert
   let playerFaction = Math.max(0, Math.min(2, parseInt(params.get("fac") ?? "", 10) || 0)); // 0 Mensch 1 Elf 2 Ork
   let difficulty = 1;                                // 0 Leicht .. 3 Hardcore
@@ -854,7 +855,7 @@ async function main(): Promise<void> {
     }
     playerKing = kingIdx[PLAYER]; camInit = false;                       // Kamera beim Rundenstart auf Spieler-König snappen
     playerXP = 0; playerLevel = 1; playerSizeMult = 1; playerDmgMult = 1; // König-Progression zurücksetzen
-    dashCd = 0; shieldCd = 0; shieldTimer = 0; buffSpeed = 0; buffDmg = 0; // Fähigkeiten + Buffs zurücksetzen
+    dashCd = 0; shieldCd = 0; shieldTimer = 0; buffSpeed = 0; buffDmg = 0; pkvx = 0; pkvy = 0; // Fähigkeiten + Buffs + Momentum zurücksetzen
     spawnPows();                                                           // Power-Ups neu verteilen
   };
   let lastDrawn = 0;
@@ -1007,7 +1008,7 @@ async function main(): Promise<void> {
         if (k >= 0 && k !== i) { const dx = ex[k] - ex[i], dy = ey[k] - ey[i], dd = dx * dx + dy * dy; if (dd > 100) { const d = Math.sqrt(dd); mvx = dx / d * sp * 0.9; mvy = dy / d * sp * 0.9; } }
         else { const dx = MAP / 2 - ex[i], dy = MAP / 2 - ey[i], d = Math.sqrt(dx * dx + dy * dy) || 1; mvx = dx / d * sp * 0.6; mvy = dy / d * sp * 0.6; } // König (oder verwaist) -> Mitte
       }
-      if (isPlayer) { mvx = pInX * sp; mvy = pInY * sp; }                                 // Spieler-Input überschreibt Bewegung
+      if (isPlayer) { const tvx = pInX * sp, tvy = pInY * sp; pkvx += (tvx - pkvx) * 0.4; pkvy += (tvy - pkvy) * 0.4; mvx = pkvx; mvy = pkvy; } // Smoothing: Geschwindigkeit lerpt -> kein abruptes Ruckeln
       // Sturm: außerhalb der Zone Dauerschaden; KI flieht rein, Spieler bleibt steuerbar.
       const odx = zoneX - ex[i], ody = zoneY - ey[i], od2 = odx * odx + ody * ody;
       if (od2 > zr2) {
