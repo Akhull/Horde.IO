@@ -393,6 +393,16 @@ const PAL: Record<string, Palette> = {
   dwarf: palette(0x8a4f2a, 0xb8410f, 0xd9a441, 0x7d8388), // Rost + Kupfer-Bart(skin) + Gold + Eisen
   giant: palette(0x6f5b48, 0x7d8a72, 0x6fae4a, 0x55504a), // Lederbraun + grau-grüner Stein + Moos + Steingrau
 };
+// FRAKTIONS-PROJEKTILE (Magier-Bolt + Stab-Orb + Treffer/Tod-FX): core = heller Kern, glow = Hülle/Spur.
+// Auf einen Blick distinkt: Mensch gold-weiß · Elf mint · Ork rot-orange · Untot giftgrün · Zwerg bernstein · Riese grau-staub.
+const FAC_PROJ: { core: number; glow: number }[] = [
+  { core: 0xffffff, glow: 0xffe9a0 }, // human  (heilig)
+  { core: 0xc9f58a, glow: 0x8fe39a }, // elf    (Blatt)
+  { core: 0xe2795a, glow: 0xff6a4a }, // orc    (Gore)
+  { core: 0xb6f0c0, glow: 0x6fe06f }, // undead (Nekro)
+  { core: 0xffe08a, glow: 0xff8c2a }, // dwarf  (Glut)
+  { core: 0x9aa890, glow: 0x7d8a72 }, // giant  (Stein/Staub)
+];
 const OUTLINE: RGB = hexRGB(0x14171f), GOLD: RGB = hexRGB(0xffd24a), GLOW: RGB = hexRGB(0x9dffb0), BONE: RGB = hexRGB(0xe8e0c8);
 // 32x40-Sprites (vorher 24x28) -> deutlich mehr Detail-Raum. UCX = Mitte (gespiegelt), HIP = Bein-Ansatz,
 // FOOT = Boden-Basislinie, SPLIT = Grenze Oberkörper/Beine (Oberkörper wird pro Pose um (lean,bob) verschoben).
@@ -493,7 +503,7 @@ function sigOrc(p: Pen, P: Palette): void { p.m(UCX - 5, 17, P.metal[3]); p.m(UC
 function sigUndead(p: Pen, P: Palette): void { for (let y = 18; y <= 25; y += 2) { p.m(UCX - 3, y, P.skin[3]); p.m(UCX - 2, y, P.skin[2]); } } // freiliegende Rippen
 function sigDwarf(p: Pen, P: Palette): void { p.m(UCX, HIP - 2, GOLD); p.m(UCX - 2, HIP - 2, P.accent); } // Gürtelschnalle/Runen
 function sigGiant(p: Pen, P: Palette): void { for (let y = 18; y <= 27; y++) p.r(UW - 4, y, P.skin[2]); p.r(UW - 3, 27, P.skin[1]); p.r(UW - 4, 27, P.skin[1]); p.m(UCX - 5, 14, hexRGB(0x6fae4a)); } // langer Schlepp-Arm + Moos
-interface Prof { pal: Palette; w: number; scale: number; tt: number; fy: number; leg: string; head: (p: Pen, P: Palette) => void; sig: (p: Pen, P: Palette) => void; hp: number; spd: number; dmg: number; }
+interface Prof { pal: Palette; w: number; scale: number; tt: number; fy: number; leg: string; head: (p: Pen, P: Palette) => void; sig: (p: Pen, P: Palette) => void; proj: { core: number; glow: number }; hp: number; spd: number; dmg: number; }
 function drawBody(p: Pen, P: Palette, bodyW: number, torsoTop: number, leg: string, fy: number): void {
   const half = bodyW >> 1, btm = HIP - 1 + fy;
   for (let y = torsoTop; y <= btm; y++) {                                                 // Torso (oben hell -> Volumen)
@@ -541,14 +551,25 @@ function drawChampion(p: Pen, pr: Prof): void {
   for (let y = 13; y <= 18; y++) { p.m(UCX - 6, y, GOLD); p.m(UCX - 5, y, P.metal[3]); }                 // Gold-Pauldrons
   drawSword(p, P, UW - 8, 17, 15); p.r(UW - 8, 2, GOLD); pr.sig(p, P);                                    // Großschwert
 }
-const DRAW: Record<string, (p: Pen, pr: Prof) => void> = { warrior: drawWarrior, archer: drawArcher, spearman: drawSpearman, brute: drawBrute, king: drawKing, champion: drawChampion };
+function drawMage(p: Pen, pr: Prof): void { // Magier: Kapuze/Kopf + langes Gewand (statt Beinen) + Stab mit Glüh-Orb (Fraktionsfarbe)
+  const P = pr.pal, top = 16 + pr.tt, hipY = HIP - 1 + pr.fy;
+  for (let y = top; y <= hipY; y++) for (let x = UCX - 3; x <= UCX + 3; x++) p.m(x, y, x <= UCX - 2 ? P.cloth[0] : x <= UCX ? P.cloth[2] : P.cloth[1]); // Oberkörper-Robe
+  for (let y = HIP + pr.fy; y <= FOOT; y++) { const w = Math.min(8, 3 + ((y - HIP - pr.fy) >> 1)); for (let x = UCX - w; x <= UCX + w; x++) p.m(x, y, x === UCX - w || x === UCX + w ? P.cloth[0] : (x + y) & 1 ? P.cloth[1] : P.cloth[2]); } // ausgestelltes Gewand bis zum Boden
+  for (let x = UCX - 3; x <= UCX + 3; x++) p.m(x, hipY, P.accent);                                       // Gürtel
+  pr.head(p, P);
+  const sx = UW - 7, core = hexRGB(pr.proj.core), glow = hexRGB(pr.proj.glow);                            // Stab + Glüh-Orb
+  for (let y = 6; y <= FOOT - 1; y++) p.r(sx, y, shade(0x6a4a2a, -0.05));
+  p.r(sx, 4, glow); p.r(sx - 1, 4, glow); p.r(sx + 1, 4, glow); p.r(sx, 3, glow); p.r(sx, 5, glow); p.r(sx, 4, core); // Orb leuchtet
+  pr.sig(p, P);
+}
+const DRAW: Record<string, (p: Pen, pr: Prof) => void> = { warrior: drawWarrior, archer: drawArcher, spearman: drawSpearman, brute: drawBrute, king: drawKing, champion: drawChampion, mage: drawMage };
 const PROF: Record<string, Prof> = {
-  human: { pal: PAL.human, w: 0, scale: 1.0, tt: 0, fy: 0, leg: "normal", head: headHelmed, sig: sigHuman, hp: 1.1, spd: 0.9, dmg: 1.1 },
-  elf: { pal: PAL.elf, w: -1, scale: 1.0, tt: -1, fy: 0, leg: "normal", head: headEared, sig: sigElf, hp: 0.9, spd: 1.15, dmg: 1.05 },
-  orc: { pal: PAL.orc, w: 3, scale: 1.08, tt: 1, fy: 0, leg: "wide", head: headTusked, sig: sigOrc, hp: 1.15, spd: 0.9, dmg: 1.1 },
-  undead: { pal: PAL.undead, w: -2, scale: 0.92, tt: 0, fy: 0, leg: "normal", head: headSkull, sig: sigUndead, hp: 0.85, spd: 1.0, dmg: 0.9 },
-  dwarf: { pal: PAL.dwarf, w: 5, scale: 0.85, tt: 3, fy: -4, leg: "wide", head: headBearded, sig: sigDwarf, hp: 1.15, spd: 0.88, dmg: 1.12 },
-  giant: { pal: PAL.giant, w: 4, scale: 1.4, tt: -2, fy: 1, leg: "stub", head: headTiny, sig: sigGiant, hp: 1.15, spd: 0.85, dmg: 1.12 },
+  human: { pal: PAL.human, w: 0, scale: 1.0, tt: 0, fy: 0, leg: "normal", head: headHelmed, sig: sigHuman, proj: FAC_PROJ[0], hp: 1.1, spd: 0.9, dmg: 1.1 },
+  elf: { pal: PAL.elf, w: -1, scale: 1.0, tt: -1, fy: 0, leg: "normal", head: headEared, sig: sigElf, proj: FAC_PROJ[1], hp: 0.9, spd: 1.15, dmg: 1.05 },
+  orc: { pal: PAL.orc, w: 3, scale: 1.08, tt: 1, fy: 0, leg: "wide", head: headTusked, sig: sigOrc, proj: FAC_PROJ[2], hp: 1.15, spd: 0.9, dmg: 1.1 },
+  undead: { pal: PAL.undead, w: -2, scale: 0.92, tt: 0, fy: 0, leg: "normal", head: headSkull, sig: sigUndead, proj: FAC_PROJ[3], hp: 0.85, spd: 1.0, dmg: 0.9 },
+  dwarf: { pal: PAL.dwarf, w: 5, scale: 0.85, tt: 3, fy: -4, leg: "wide", head: headBearded, sig: sigDwarf, proj: FAC_PROJ[4], hp: 1.15, spd: 0.88, dmg: 1.12 },
+  giant: { pal: PAL.giant, w: 4, scale: 1.4, tt: -2, fy: 1, leg: "stub", head: headTiny, sig: sigGiant, proj: FAC_PROJ[5], hp: 1.15, spd: 0.85, dmg: 1.12 },
 };
 // Eine Zelle (Fraktion x Typ x Pose) als roher (RGB|0)[]-Puffer: zeichnen -> Oberkörper um (lean,bob)
 // verschieben -> Rim-Light (obere Kanten) -> 1px-Outline -> Boden-Schatten.
@@ -582,7 +603,7 @@ function renderUnitCell(faction: string, type: string): (RGB | 0)[] {
 // zeichnet ALLE Units in EINEM Draw-Call. GRID-Layout (statt einer 6900px-Reihe -> unter GPU-Textur-Limit).
 // Frame-Index uf = (fac*6 + type)*6 + pose; Spalte = uf%COLS, Zeile = uf/COLS. Deko folgt in eigener Reihe.
 const FAC_ORDER = ["human", "elf", "orc", "undead", "dwarf", "giant"] as const;
-const TY_ORDER = ["warrior", "archer", "spearman", "brute", "king", "champion"] as const;
+const TY_ORDER = ["warrior", "archer", "spearman", "brute", "king", "champion", "mage"] as const;
 const UNIT_FRAMES = FAC_ORDER.length * TY_ORDER.length * FRAMES_PER; // 216 Unit-Zellen, danach Deko-Frames
 const unitFrame = (f: number, ty: number, pose: number): number => (f * TY_ORDER.length + ty) * FRAMES_PER + pose;
 const ATLAS_COLS = 32;                                              // 32*32 = 1024px breit
@@ -837,6 +858,7 @@ async function main(): Promise<void> {
     { hp: 135, atk: 16, range: 6, cd: 44, speed: 0.13, scale: 2.1 },  // 3 Brute (zäh, langsam)
     { hp: 340, atk: 20, range: 6, cd: 30, speed: 0.14, scale: 2.7 },  // 4 König (Anführer)
     { hp: 240, atk: 40, range: 7, cd: 30, speed: 0.16, scale: 2.4 },  // 5 Champion (Gold-Seele; zäh+schlagkräftig)
+    { hp: 42, atk: 22, range: 26, cd: 70, speed: 0.18, scale: 1.7 },  // 6 Magier (Fraktions-Bolt: große Reichweite, harter Treffer, langsamer CD, fragil)
   ];
   const T_hp = Float32Array.from(T, (s) => s.hp), T_atk = Float32Array.from(T, (s) => s.atk);
   const T_range = Float32Array.from(T, (s) => s.range), T_cd = Float32Array.from(T, (s) => s.cd);
@@ -949,6 +971,20 @@ async function main(): Promise<void> {
     const p = worldToIso(gx, gy); spr.x = p.x; spr.y = p.y - elevLift(sampleH(gx, gy)) - 6;
     fxLayer.addChild(spr); puffs.push({ spr, life: 1 });
   };
+  // FRAKTIONS-TOD-FX: eigene Sterbe-Wolke je Fraktion (Ork Blut · Untot grüner Seelen-Wisp · Riese Staub+Geröll
+  // · Zwerg Staub+Kupfer · Elf Blätter · Mensch goldener Aufstieg). DISTANZ-GATE zur Kamera -> bei Massensterben
+  // entstehen keine Off-Screen-Poofs (billig). Nutzt den gedeckelten addPuff-Pool.
+  const deathFX = (gx: number, gy: number, fac: number): void => {
+    const dx = gx - audio.lx, dy = gy - audio.ly; if (dx * dx + dy * dy > 230 * 230) return;
+    if (fac === 2) { addPuff(gx, gy, 0x7a1e16, 0.7); if (rng() < 0.6) addPuff(gx + (rng() - 0.5) * 7, gy + (rng() - 0.5) * 7, 0xb23a2a, 0.4); }
+    else if (fac === 3) { addPuff(gx, gy, 0x6cff8a, 0.7); if (rng() < 0.5) addPuff(gx, gy, 0xb6f0c0, 0.4); }
+    else if (fac === 5) { addPuff(gx, gy, 0x7d8a72, 1.3); if (rng() < 0.7) addPuff(gx + (rng() - 0.5) * 9, gy + (rng() - 0.5) * 9, 0x55504a, 0.6); }
+    else if (fac === 4) { addPuff(gx, gy, 0x8a4f2a, 0.6); if (rng() < 0.5) addPuff(gx, gy, 0xff8c2a, 0.3); }
+    else if (fac === 1) { addPuff(gx, gy, 0x3c7d2f, 0.6); if (rng() < 0.6) addPuff(gx + (rng() - 0.5) * 7, gy, 0x5fd07a, 0.35); }
+    else addPuff(gx, gy, 0xffe9a0, 0.6); // human
+  };
+  // FRAKTIONS-TREFFER-FX: kleiner farbiger Funke beim Magier-Bolt-Einschlag (Kern + Hülle).
+  const hitFX = (gx: number, gy: number, fac: number): void => { addPuff(gx, gy, FAC_PROJ[fac].glow, 0.5); addPuff(gx, gy, FAC_PROJ[fac].core, 0.28); };
   // SEELEN (Kern-Loop): gefallene Units lassen NAHE dem Spieler-König eine Seele fallen; der König
   // sammelt sie ein -> seine Horde wächst (kämpfen -> Seelen -> größere Horde). Nur nahe Spawns, gedeckelt.
   interface Soul { gx: number; gy: number; spr: Sprite; gold: boolean; }
@@ -1006,7 +1042,7 @@ async function main(): Promise<void> {
       if (edecor[i] >= 6) { addPuff(ex[i], ey[i], 0xffd24a, 1.6); audio.play("collapse", ex[i], ey[i]); for (let s = 0; s < 5; s++) dropSoul(ex[i] + (rng() - 0.5) * 10, ey[i] + (rng() - 0.5) * 10); }
       return;
     }
-    ealive[i] = 0; etarget[i] = -1; if (eking[i]) kingIdx[eowner[i]] = -1; audio.play(DEATH_SND[efac[i]], ex[i], ey[i]); addPuff(ex[i], ey[i], FACTION_COL[efac[i]]); if (rng() < 0.5) dropSoul(ex[i], ey[i]); freeStack[freeTop++] = i;
+    ealive[i] = 0; etarget[i] = -1; if (eking[i]) kingIdx[eowner[i]] = -1; audio.play(DEATH_SND[efac[i]], ex[i], ey[i]); deathFX(ex[i], ey[i], efac[i]); if (rng() < 0.5) dropSoul(ex[i], ey[i]); freeStack[freeTop++] = i;
   };
   // Adaptiv: erst inneres 3x3 (deckt Nahkampf), nur bei leer den äußeren 5x5-Ring -> meist 9 statt 25 Zellen.
   // FFA: Feind = anderer Owner (König-Team), nicht andere Fraktion -> mehrere Könige derselben Rasse sind Rivalen.
@@ -1070,15 +1106,19 @@ async function main(): Promise<void> {
   };
   // BALLISTISCHE PFEILE (Feel aus dem Original: Bogen-Wurf mit z-Höhe+Schwerkraft, dreht zur Flugrichtung,
   // Staub beim Einschlag). gx/gy homen aufs Ziel, z = Sinus-Bogen über die Flugdauer. tgt = Entity-ID.
-  interface Arrow { sx: number; sy: number; tx: number; ty: number; gx: number; gy: number; tgt: number; dmg: number; age: number; T: number; apex: number; spr: Sprite; psx: number; psy: number; }
+  interface Arrow { sx: number; sy: number; tx: number; ty: number; gx: number; gy: number; tgt: number; dmg: number; age: number; T: number; apex: number; spr: Sprite; psx: number; psy: number; bolt: number; fac: number; }
   const arrows: Arrow[] = [];
-  const ARROW_CAP = 1600;                                               // gleichzeitige Pfeile gedeckelt (Scale)
+  const ARROW_CAP = 1600;                                               // gleichzeitige Geschosse gedeckelt (Scale)
   const arrowTex = makeArrowTexture(app);
+  const boltTex = FAC_PROJ.map((fp) => makeBoltTexture(app, fp.core, fp.glow)); // 6 Magier-Bolt-Texturen (Fraktionsfarbe)
+  // Geschosse: Bogenschütze (ty 1) = ballistischer Pfeil; Magier (ty 6) = flach fliegender Fraktions-BOLT
+  // (eigene Textur + Glüh-Spur + Fraktions-Treffer-FX). Beide homen aufs Ziel + z-Bogen.
   const fireArrow = (i: number, tgt: number): void => {
     if (arrows.length >= ARROW_CAP) return;
     const dx = ex[tgt] - ex[i], dy = ey[tgt] - ey[i], d = Math.hypot(dx, dy) || 1;
-    const spr = new Sprite(arrowTex); spr.anchor.set(0.5); arrowsLayer.addChild(spr);
-    arrows.push({ sx: ex[i], sy: ey[i], tx: ex[tgt], ty: ey[tgt], gx: ex[i], gy: ey[i], tgt, dmg: T_atk[etype[i]] * FAC_DMG[efac[i]] * (playerActive && i === playerKing ? playerDmgMult * (buffDmg > 0 ? 1.5 : 1) : 1), age: 0, T: Math.max(0.28, d * 0.02 + 0.12), apex: Math.min(60, 12 + d * 1.1), spr, psx: 0, psy: 0 });
+    const bolt = etype[i] === 6 ? 1 : 0, fac = efac[i];
+    const spr = new Sprite(bolt ? boltTex[fac] : arrowTex); spr.anchor.set(0.5); if (bolt) spr.scale.set(1 + Math.min(0.5, d * 0.01)); arrowsLayer.addChild(spr);
+    arrows.push({ sx: ex[i], sy: ey[i], tx: ex[tgt], ty: ey[tgt], gx: ex[i], gy: ey[i], tgt, dmg: T_atk[etype[i]] * FAC_DMG[fac] * (playerActive && i === playerKing ? playerDmgMult * (buffDmg > 0 ? 1.5 : 1) : 1), age: 0, T: Math.max(0.28, d * 0.02 + 0.12), apex: bolt ? Math.min(22, 4 + d * 0.4) : Math.min(60, 12 + d * 1.1), spr, psx: 0, psy: 0, bolt, fac });
     audio.play("arrow", ex[i], ey[i]);
   };
   // RUNDE: PLAYERS Horden frisch spawnen (Gesamtzahl = reqUnits) + Sturm zurücksetzen.
@@ -1098,7 +1138,7 @@ async function main(): Promise<void> {
       const king = spawnE(c.gx, c.gy, f, 4, pi); kingIdx[pi] = king; addKingFX(king, f);
       if (pi === PLAYER) { emaxhp[king] *= DIFF[difficulty].hp; ehp[king] = emaxhp[king]; } // Schwierigkeit -> Spieler-König-HP
       for (let i = 0; i < perHorde; i++) {
-        const r = rng(), ty = r < 0.55 ? 0 : r < 0.73 ? 1 : r < 0.88 ? 2 : 3;
+        const r = rng(), ty = r < 0.50 ? 0 : r < 0.68 ? 1 : r < 0.80 ? 2 : r < 0.90 ? 3 : 6; // ~10% Magier
         let gx = c.gx + (rng() - 0.5) * 2 * spreadR, gy = c.gy + (rng() - 0.5) * 2 * spreadR;
         if (!passable(gx, gy)) { gx = c.gx; gy = c.gy; }                  // nicht ins Wasser/Steilhang spawnen
         spawnE(gx, gy, f, ty, pi);
@@ -1415,11 +1455,11 @@ async function main(): Promise<void> {
       const z = Math.sin(prog * Math.PI) * ar.apex;
       const p = worldToIso(ar.gx, ar.gy), sy = p.y - elevLift(sampleH(ar.gx, ar.gy)) - z;
       ar.spr.x = p.x; ar.spr.y = sy;
-      if (ar.psx !== 0 || ar.psy !== 0) ar.spr.rotation = Math.atan2(sy - ar.psy, p.x - ar.psx);
-      ar.psx = p.x; ar.psy = sy;
+      if (ar.bolt) { if ((frame & 1) === 0) addPuff(ar.gx, ar.gy, FAC_PROJ[ar.fac].glow, 0.3); } // Magier-Bolt: Glüh-Spur (nicht drehen -> Orb)
+      else { if (ar.psx !== 0 || ar.psy !== 0) ar.spr.rotation = Math.atan2(sy - ar.psy, p.x - ar.psx); ar.psx = p.x; ar.psy = sy; } // Pfeil: zur Flugrichtung drehen
       if (prog >= 1) {
         if (ealive[ar.tgt]) { ehp[ar.tgt] -= ar.dmg * (ar.tgt === playerKing && shieldTimer > 0 ? 0.5 : 1); eflash[ar.tgt] = 6; if (ehp[ar.tgt] <= 0) killE(ar.tgt); }
-        addPuff(ar.gx, ar.gy, 0xffb050, 0.35);                                            // oranger Treffer-Funke
+        if (ar.bolt) hitFX(ar.gx, ar.gy, ar.fac); else addPuff(ar.gx, ar.gy, 0xffb050, 0.35);  // Fraktions-Treffer vs. oranger Pfeil-Funke
         ar.spr.destroy(); arrows.splice(i, 1);
       }
     }
@@ -1443,7 +1483,7 @@ async function main(): Promise<void> {
             if (freeTop > 0 || nEnt < CAP) spawnE(kx + (rng() - 0.5) * 16, ky + (rng() - 0.5) * 16, pf, 5, PLAYER);
             onPlayerSoul(); onPlayerSoul(); addPuff(kx, ky, 0xffd24a, 1.5);
           } else {                                                       // grüne Seele -> Vasall + König-XP
-            if (freeTop > 0 || nEnt < CAP) { const r = rng(), ty = r < 0.78 ? 0 : r < 0.92 ? 1 : 2; spawnE(kx + (rng() - 0.5) * 16, ky + (rng() - 0.5) * 16, pf, ty, PLAYER); }
+            if (freeTop > 0 || nEnt < CAP) { const r = rng(), ty = r < 0.72 ? 0 : r < 0.86 ? 1 : r < 0.94 ? 2 : 6; spawnE(kx + (rng() - 0.5) * 16, ky + (rng() - 0.5) * 16, pf, ty, PLAYER); } // gel. Seele -> Vasall (auch Magier)
             onPlayerSoul();
           }
           s.spr.destroy(); souls.splice(i, 1); continue;
@@ -1542,6 +1582,16 @@ function makeArrowTexture(app: Application): Texture {
   const gr = new Graphics();
   gr.moveTo(-6, 0).lineTo(3, 0).stroke({ color: 0x4a3318, width: 2 });   // Schaft
   gr.poly([7, 0, 1, -3, 1, 3]).fill(0x2a1d0e);                            // Spitze
+  const t = app.renderer.generateTexture({ target: gr, antialias: true });
+  gr.destroy();
+  return t;
+}
+// Magier-BOLT: leuchtender Orb je Fraktion — weiche Glüh-Hülle + heller Kern (Farbe = Fraktions-Identität).
+function makeBoltTexture(app: Application, core: number, glow: number): Texture {
+  const gr = new Graphics();
+  gr.circle(0, 0, 8).fill({ color: glow, alpha: 0.30 });                  // weiche Aura
+  gr.circle(0, 0, 4.5).fill({ color: glow, alpha: 0.72 });               // Hülle
+  gr.circle(0, 0, 2.4).fill({ color: core, alpha: 1 });                  // heißer Kern
   const t = app.renderer.generateTexture({ target: gr, antialias: true });
   gr.destroy();
   return t;
