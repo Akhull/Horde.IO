@@ -8,7 +8,7 @@
 //
 // Aufruf: http://localhost:5173/iso-spike.html  (Drag=Pan, Rad=Zoom, Klick Gebäude=looten)
 
-import { Application, Container, Sprite, Texture, Assets, Geometry, Buffer, BufferUsage, Mesh, Shader, GlProgram, Graphics, RenderTexture, Matrix } from "pixi.js";
+import { Application, Container, Sprite, Texture, Assets, Geometry, Buffer, BufferUsage, Mesh, Shader, GlProgram, Graphics, RenderTexture } from "pixi.js";
 
 const TILE_W = 32, TILE_H = 16, HW = TILE_W / 2, HH = TILE_H / 2;
 const MAP = 720, N = MAP + 1; // große Insel (16-Spieler-Battle-Royale)
@@ -497,28 +497,23 @@ async function main(): Promise<void> {
     for (let i = 0; i < HORDE; i++) spawn(c.gx + (Math.random() - 0.5) * 12, c.gy + (Math.random() - 0.5) * 12, f.u, 0.38);
   }
 
-  // --- Welt-Raum-Pixelate-Bake: Welt in eine kleine RenderTexture (÷ block, nearest) backen und
-  // als Sprite IM world-Container (Kamera-Ebene) zeigen -> Pixelraster klebt an Map-Koords, pant/
-  // zoomt 1:1 mit der Map (kein Screen-Space-"Schwimmen"). LAST child -> verdeckt das Original.
+  // --- PIXELATE (Pixel-Perfect-Camera): Welt in eine gesnappte LOW-RES-SCREEN-RT rendern, dann
+  // NEAREST x PX hochskalieren. Block = PX BILDSCHIRM-px -> KONSTANT über alle Zooms (kein Pixelmatsch
+  // beim Reinzoomen, anders als ein fester Welt-Block). Kamera pro Frame auf das Texel-Grid gesnappt
+  // -> welt-verankert, kein Schwimmen beim Pannen. Quelle: Unity PixelPerfectCamera / yal.cc.
+  const PX = 3;                                  // Bildschirm-px pro Pixel-Art-Pixel (konstant)
   let bakeRt: RenderTexture | null = null, bakeSprite: Sprite | null = null;
-  const bakeMatrix = new Matrix();
   let bakeThrottle = false;
-  if (pixelateBake) {
-    const block = 6;
-    const minX = -MAP * HW - 8, maxX = MAP * HW + 8;
-    const minY = -ELEV - 160, maxY = 2 * MAP * HH + 160;
-    const w = Math.ceil((maxX - minX) / block), h = Math.ceil((maxY - minY) / block);
+  const makeBakeRT = (): void => {
+    const w = Math.max(2, Math.ceil(app.screen.width / PX) + 1);   // +1 Pad-Texel (Subpixel-Rand)
+    const h = Math.max(2, Math.ceil(app.screen.height / PX) + 1);
+    bakeRt?.destroy(true);
     bakeRt = RenderTexture.create({ width: w, height: h, antialias: false });
     bakeRt.source.scaleMode = "nearest";
-    bakeSprite = new Sprite(bakeRt);
-    bakeSprite.eventMode = "none";
-    bakeSprite.x = minX; bakeSprite.y = minY;
-    bakeSprite.width = maxX - minX; bakeSprite.height = maxY - minY;
-    bakeSprite.visible = false;
-    world.addChild(bakeSprite); // LAST child von world -> deckt das Original im Hauptpass ab
-    const inv = 1 / block;
-    bakeMatrix.identity(); bakeMatrix.translate(-minX, -minY); bakeMatrix.scale(inv, inv);
-  }
+    if (!bakeSprite) { bakeSprite = new Sprite(bakeRt); bakeSprite.eventMode = "none"; bakeSprite.scale.set(PX); app.stage.addChild(bakeSprite); }
+    else bakeSprite.texture = bakeRt;
+  };
+  if (pixelateBake) { makeBakeRT(); window.addEventListener("resize", makeBakeRT); }
 
   let dragging = false, lastX = 0, lastY = 0;
   app.canvas.style.touchAction = "none";
@@ -540,7 +535,6 @@ async function main(): Promise<void> {
   let acc = 0, time = 0;
   app.ticker.add((t) => {
     const dt = t.deltaTime;
-    if (pixelateBake) { world.x = Math.round(world.x); world.y = Math.round(world.y); } // Integer-Pixel -> kein Zittern
     time += t.deltaMS / 1000;
     terrainShader.resources.terr.uniforms.uTime = time;
     for (const u of units) {
@@ -556,16 +550,18 @@ async function main(): Promise<void> {
       const o = orbs[i]; o.life -= 0.012 * dt; o.spr.y -= 0.6 * dt; o.spr.alpha = Math.max(0, o.life);
       if (o.life <= 0) { o.spr.destroy(); orbs.splice(i, 1); }
     }
-    // Welt-Raum-Pixelate-Bake: Kamera kurz neutralisieren, ganze Map in die RT backen, wiederherstellen.
+    // PIXELATE Option A: Welt gesnappt in die Low-Res-RT rendern, dann nur den crispen Buffer zeigen.
     if (pixelateBake && bakeRt && bakeSprite) {
       bakeThrottle = !bakeThrottle;
       if (bakeThrottle || units.length < 4000) {       // 30-Hz-Throttle bei Last
-        bakeSprite.visible = false;
-        const sx = world.x, sy = world.y, zx = world.scale.x, zy = world.scale.y;
-        world.x = 0; world.y = 0; world.scale.set(1);
-        app.renderer.render({ container: world, target: bakeRt, transform: bakeMatrix, clear: true });
-        world.x = sx; world.y = sy; world.scale.set(zx, zy);
-        bakeSprite.visible = true;
+        const camX = world.x, camY = world.y, zx = world.scale.x;
+        const snapX = Math.round(camX / PX) * PX, snapY = Math.round(camY / PX) * PX; // Kamera auf Texel-Grid -> kein Schwimmen
+        world.renderable = true; bakeSprite.visible = false;
+        world.scale.set(zx / PX); world.x = snapX / PX; world.y = snapY / PX;          // Welt 1/PX in die RT
+        app.renderer.render({ container: world, target: bakeRt, clear: true });
+        world.scale.set(zx); world.x = camX; world.y = camY;                            // echte Kamera zurück
+        bakeSprite.x = camX - snapX; bakeSprite.y = camY - snapY;                       // Subpixel-glatter Rest-Offset
+        bakeSprite.visible = true; world.renderable = false;                            // Haupt-Pass: nur crispe Pixel-Buffer
       }
     }
     acc += t.deltaMS;
