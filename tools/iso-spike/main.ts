@@ -105,7 +105,7 @@ function hydrology(): void {
   for (let o = 0; o < cap; o++) { const k = order[o], r = REC[k]; if (r >= 0) ACC[r] += ACC[k]; }
   // --- (3) WET = lokaler Wasser-Lift; Flüsse: Bett eintiefen + Kanal auf Tal-Höhe füllen ---
   let maxAcc = 1; for (let k = 0; k < cap; k++) if (ACC[k] > maxAcc) maxAcc = ACC[k];
-  const RIVER_THRESH = maxAcc * 0.0022;       // an maxAcc gekoppelt -> auflösungsstabil
+  const RIVER_THRESH = maxAcc * 0.03;         // NUR große Ströme (hoher Abfluss), keine Mini-Bäche
   const isRiver = new Uint8Array(cap);
   for (let k = 0; k < cap; k++) {
     const lake = HF[k] - H[k];
@@ -119,12 +119,15 @@ function hydrology(): void {
       isRiver[k] = 1;                          // Fließrichtung FLOWX/Y aus D8 behalten
     } else { WET[k] = 0; FLOWX[k] = 0; FLOWY[k] = 0; }                                // trockenes Land
   }
-  // --- (3b) Flüsse 1 Zelle verbreitern -> sichtbar; Nachbar auf Kanal-Bett senken + Fließrichtung erben ---
+  // --- (3b) Flüsse verbreitern (Radius skaliert mit Abfluss -> große Ströme breit) -> Nachbar auf
+  //     Kanal-Bett senken + Fließrichtung erben. So lesen die großen Flüsse als richtige Gewässer. ---
   const Hsrc = Float32Array.from(H), Wsrc = Float32Array.from(WET);
-  for (let i = 1; i < N - 1; i++) for (let j = 1; j < N - 1; j++) {
+  for (let i = 2; i < N - 2; i++) for (let j = 2; j < N - 2; j++) {
     const k = i * N + j; if (!isRiver[k]) continue;
-    for (let d = 0; d < 8; d++) {
-      const ni = i + NB8[d][0], nj = j + NB8[d][1], n = ni * N + nj;
+    const rad = ACC[k] > maxAcc * 0.25 ? 2 : 1;          // große Ströme breiter (2 Zellen)
+    for (let di = -rad; di <= rad; di++) for (let dj = -rad; dj <= rad; dj++) {
+      if ((di === 0 && dj === 0) || di * di + dj * dj > rad * rad + 1) continue;
+      const n = (i + di) * N + (j + dj);
       if (WET[n] === 0 && Hsrc[n] >= WATER && Hsrc[n] <= Hsrc[k] + 0.05) {
         H[n] = Math.min(H[n], Hsrc[k]); WET[n] = Wsrc[k] * 0.9; FLOWX[n] = FLOWX[k]; FLOWY[n] = FLOWY[k];
       }
