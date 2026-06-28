@@ -875,6 +875,7 @@ async function main(): Promise<void> {
   // — SoA-Felder (Index i = Entity-ID). Kein Objekt-Pointer mehr (target = Int32-ID), kein GC. —
   const ex = new Float32Array(CAP), ey = new Float32Array(CAP);         // Welt gx/gy (Sim-Stand nach letztem Tick)
   const prevX = new Float32Array(CAP), prevY = new Float32Array(CAP);   // gx/gy vor dem letzten Tick (Render-Interpolation)
+  const evx = new Float32Array(CAP), evy = new Float32Array(CAP);       // geglättete Geschwindigkeit pro Unit -> kein Zittern/Orbit (Bewegung lerpt)
   const screenX = new Float32Array(CAP), footY = new Float32Array(CAP); // iso-Render-Pos (footY = Sort-Key)
   const ehp = new Float32Array(CAP), emaxhp = new Float32Array(CAP), ecd = new Float32Array(CAP), eflash = new Float32Array(CAP), eatk = new Float32Array(CAP);
   const efac = new Uint8Array(CAP), etype = new Uint8Array(CAP), eking = new Uint8Array(CAP), eranged = new Uint8Array(CAP), ealive = new Uint8Array(CAP), evis = new Uint8Array(CAP);
@@ -886,6 +887,9 @@ async function main(): Promise<void> {
   const PLAYER = 0;                      // owner 0 = der Spieler-König
   const kingIdx = new Int32Array(PLAYERS).fill(-1); // Entity-ID des Königs je Owner (-1 = tot) -> Horde folgt IHM
   let playerKing = -1, camInit = false, pkvx = 0, pkvy = 0; // pkvx/y = geglättete Königs-Geschwindigkeit (Smoothing)
+  // HORDEN-BEFEHL (nur Spieler-Horde): 0 FOLGEN (locker am König) · 1 ANGRIFF (zum Rallypunkt orderX/Y marschieren,
+  // Gegner unterwegs angreifen) · 2 RÜCKZUG (eng zum König sammeln, Gegner ignorieren). Rechtsklick=Angriff, F=toggle.
+  let orderMode = 0, orderX = MAP / 2, orderY = MAP / 2;
   let playerActive = false;                          // false = Menü-Vorschau-Auto-Battle; true = Spieler steuert
   let playerFaction = Math.max(0, Math.min(5, parseInt(params.get("fac") ?? "", 10) || 0)); // 0-5: Mensch/Elf/Ork/Untot/Zwerg/Riese
   let difficulty = 1;                                // 0 Leicht .. 3 Hardcore
@@ -931,9 +935,12 @@ async function main(): Promise<void> {
   // ── FLOW-FIELD-PATHFINDING ── Pro König ein Richtungsfeld (BFS um Wasser/Berge herum). Units, die ihrem
   // König folgen, sampeln dessen Feld -> laufen um Hindernisse statt hängenzubleiben. Feld pro Tick für
   // EINEN König neu (Round-Robin) -> billig (BFS über ~14k Grobzellen). O(1)-Sampling pro Unit.
-  const FW = 120, FCELL = MAP / FW;
+  const FW = 180, FCELL = MAP / FW;                                  // feiner (4 Grid/Zelle) -> dünne Landbrücken/Buchten passierbar (weniger Stuck)
   const flowPass = new Uint8Array(FW * FW);
-  for (let cy = 0; cy < FW; cy++) for (let cx = 0; cx < FW; cx++) flowPass[cy * FW + cx] = passable((cx + 0.5) * FCELL, (cy + 0.5) * FCELL) ? 1 : 0;
+  for (let cy = 0; cy < FW; cy++) for (let cx = 0; cx < FW; cx++) { // Zelle begehbar, wenn IRGENDEIN Punkt begehbar ist (Brücken bleiben offen)
+    const x0 = cx * FCELL, y0 = cy * FCELL;
+    flowPass[cy * FW + cx] = passable(x0 + FCELL * 0.5, y0 + FCELL * 0.5) || passable(x0 + 0.5, y0 + 0.5) || passable(x0 + FCELL - 0.5, y0 + 0.5) || passable(x0 + 0.5, y0 + FCELL - 0.5) || passable(x0 + FCELL - 0.5, y0 + FCELL - 0.5) ? 1 : 0;
+  }
   const flowCell = (gx: number, gy: number): number => {
     let cx = (gx / FCELL) | 0, cy = (gy / FCELL) | 0;
     cx = cx < 0 ? 0 : cx >= FW ? FW - 1 : cx; cy = cy < 0 ? 0 : cy >= FW ? FW - 1 : cy; return cy * FW + cx;
@@ -1020,7 +1027,7 @@ async function main(): Promise<void> {
   };
   const spawnE = (gx: number, gy: number, f: number, ty: number, owner: number): number => {
     const i = freeTop > 0 ? freeStack[--freeTop] : nEnt++;
-    ex[i] = gx; ey[i] = gy; prevX[i] = gx; prevY[i] = gy; emaxhp[i] = T_hp[ty] * FAC_HP[f]; ehp[i] = emaxhp[i]; ecd[i] = rng() * T_cd[ty]; eflash[i] = 0; eatk[i] = 0;
+    ex[i] = gx; ey[i] = gy; prevX[i] = gx; prevY[i] = gy; evx[i] = 0; evy[i] = 0; emaxhp[i] = T_hp[ty] * FAC_HP[f]; ehp[i] = emaxhp[i]; ecd[i] = rng() * T_cd[ty]; eflash[i] = 0; eatk[i] = 0;
     efac[i] = f; etype[i] = ty; eowner[i] = owner; edecor[i] = 0; eking[i] = ty === 4 ? 1 : 0; eranged[i] = T_range[ty] > 20 || (ty === 5 && f === 1) ? 1 : 0; ealive[i] = 1; etarget[i] = -1; // Elf-Champion = Fernkämpfer
     const p = worldToIso(gx, gy); screenX[i] = p.x; footY[i] = p.y - elevLift(sampleH(gx, gy));
     return i;
@@ -1088,6 +1095,22 @@ async function main(): Promise<void> {
   // BATTLE-ROYALE-STURMZONE: sicherer Kreis schrumpft in Phasen; außerhalb Dauerschaden.
   let zoneX = MAP / 2, zoneY = MAP / 2, zoneR = 380, zoneTarget = 380, zoneTimer = 0;
   const zoneG = new Graphics(); zoneG.eventMode = "none"; world.addChild(zoneG); // ganz oben
+  // BEFEHLS-MARKER (Rallypunkt bei ANGRIFF): roter Ziel-Ring in der Welt.
+  const orderG = new Graphics(); orderG.eventMode = "none"; world.addChild(orderG);
+  const drawOrderMarker = (): void => {
+    orderG.clear(); if (orderMode !== 1 || !playerActive) return;
+    const p = worldToIso(orderX, orderY), yy = p.y - elevLift(sampleH(orderX, orderY));
+    const pulse = 12 + Math.sin(time * 5) * 3;
+    orderG.circle(p.x, yy, pulse + 6).stroke({ color: 0xff5a3a, width: 4, alpha: 0.85 }).circle(p.x, yy, pulse).stroke({ color: 0xffd24a, width: 2.5, alpha: 0.9 });
+    orderG.moveTo(p.x, yy - 4).lineTo(p.x, yy + 4).moveTo(p.x - 4, yy).lineTo(p.x + 4, yy).stroke({ color: 0xffffff, width: 2, alpha: 0.9 });
+  };
+  // Bildschirm -> Grid (Iso invertiert, Höhe genähert): für Rechtsklick-Befehle.
+  const screenToGrid = (clientX: number, clientY: number): { gx: number; gy: number } => {
+    const rect = app.canvas.getBoundingClientRect();
+    const wx = (clientX - rect.left - world.x) / world.scale.x, wy = (clientY - rect.top - world.y) / world.scale.y;
+    const a = wx / HW, b = wy / HH;                                  // wx=(gx-gy)*HW, wy≈(gx+gy)*HH
+    return { gx: Math.max(2, Math.min(MAP - 2, (a + b) / 2)), gy: Math.max(2, Math.min(MAP - 2, (b - a) / 2)) };
+  };
   const drawZone = (): void => {
     const pts: number[] = [];
     for (let a = 0; a <= 72; a++) { const th = (a / 72) * Math.PI * 2; const p = worldToIso(zoneX + Math.cos(th) * zoneR, zoneY + Math.sin(th) * zoneR); pts.push(p.x, p.y); }
@@ -1146,7 +1169,7 @@ async function main(): Promise<void> {
     }
     playerKing = kingIdx[PLAYER]; camInit = false;                       // Kamera beim Rundenstart auf Spieler-König snappen
     playerXP = 0; playerLevel = 1; playerSizeMult = 1; playerDmgMult = 1; // König-Progression zurücksetzen
-    dashCd = 0; shieldCd = 0; shieldTimer = 0; buffSpeed = 0; buffDmg = 0; pkvx = 0; pkvy = 0; // Fähigkeiten + Buffs + Momentum zurücksetzen
+    dashCd = 0; shieldCd = 0; shieldTimer = 0; buffSpeed = 0; buffDmg = 0; pkvx = 0; pkvy = 0; orderMode = 0; // Fähigkeiten + Buffs + Momentum + Befehl zurücksetzen
     spawnPows();                                                           // Power-Ups neu verteilen
   };
   let lastDrawn = 0;
@@ -1171,8 +1194,14 @@ async function main(): Promise<void> {
 
   let dragging = false, lastX = 0, lastY = 0;
   app.canvas.style.touchAction = "none";
-  app.canvas.addEventListener("pointerdown", (e) => { dragging = true; lastX = e.clientX; lastY = e.clientY; });
+  app.canvas.addEventListener("pointerdown", (e) => { if (e.button !== 0) return; dragging = true; lastX = e.clientX; lastY = e.clientY; }); // nur Linksklick pannt
   window.addEventListener("pointerup", () => { dragging = false; });
+  // RECHTSKLICK = ANGRIFFS-MARSCH: Horde marschiert zum geklickten Punkt (greift Gegner unterwegs an).
+  app.canvas.addEventListener("contextmenu", (e) => {
+    e.preventDefault(); if (!playerActive) return;
+    const g = screenToGrid(e.clientX, e.clientY); orderX = g.gx; orderY = g.gy; orderMode = 1;
+    audio.play("ui"); addPuff(orderX, orderY, 0xff5a3a, 1.0);
+  });
   window.addEventListener("pointermove", (e) => { if (!dragging) return; world.x += e.clientX - lastX; world.y += e.clientY - lastY; lastX = e.clientX; lastY = e.clientY; });
   app.canvas.addEventListener("wheel", (e) => {
     e.preventDefault();
@@ -1248,6 +1277,8 @@ async function main(): Promise<void> {
     if (!playerActive) return;
     if ((k === " " || e.code === "Space") && dashCd <= 0) { if (doDash()) dashCd = 5; }
     else if (k === "q" && shieldCd <= 0 && playerKing >= 0 && ealive[playerKing]) { shieldTimer = 5; shieldCd = 10; addPuff(ex[playerKing], ey[playerKing], 0x7fb0ff, 1.2); }
+    else if (k === "f") { orderMode = orderMode === 2 ? 0 : 2; audio.play("ui"); }     // F = RÜCKZUG an König (toggle)
+    else if (k === "g") { orderMode = 0; audio.play("ui"); }                            // G = FOLGEN/Sammeln (Befehl aufheben)
   });
   window.addEventListener("keyup", (e) => { keys.delete(e.key.toLowerCase()); });
 
@@ -1267,7 +1298,8 @@ async function main(): Promise<void> {
     if (zoneTimer > 38 && zoneTarget > 95) { zoneTimer = 0; zoneTarget *= 0.85; } // viel langsamer: ~40s Atempause/Stufe, mildere Schritte
     if (Math.abs(zoneR - zoneTarget) > 0.3) { zoneR += (zoneTarget - zoneR) * Math.min(1, 0.006 * DT_FIX); drawZone(); }
     const zr2 = zoneR * zoneR;
-    buildKingFlow(kingIdx[simFrame % PLAYERS]); // pro Tick EIN König-Flow-Feld neu (Round-Robin -> jeder ~0.5s)
+    buildKingFlow(kingIdx[PLAYER]);                              // Spieler-Horde: Pfad zum König JEDEN Tick frisch (kein Stuck/Verirren)
+    buildKingFlow(kingIdx[1 + (simFrame % (PLAYERS - 1))]);      // übrige Könige Round-Robin
     // 2) Kampf + Bewegung (SoA, Index i; Deko 0..decorCount übersprungen)
     for (let i = decorCount; i < nEnt; i++) {
       if (!ealive[i]) continue;
@@ -1296,35 +1328,49 @@ async function main(): Promise<void> {
           }
         }
       }
-      if (!isPlayer && mvx === 0 && mvy === 0) {                                          // kein Kampf-Move -> der eigenen König-Horde folgen
-        const k = kingIdx[eowner[i]];
-        if (k >= 0 && k !== i) {
-          const dx = ex[k] - ex[i], dy = ey[k] - ey[i], dd = dx * dx + dy * dy;
-          if (dd > 100) {                                                                 // weit weg -> Flow-Field (um Hindernisse), sonst direkt
-            const fb = eowner[i] * FW * FW + flowCell(ex[i], ey[i]), fx = kingFlowX[fb], fy = kingFlowY[fb];
-            if (fx !== 0 || fy !== 0) { mvx = (fx / 100) * sp * 0.9; mvy = (fy / 100) * sp * 0.9; }
-            else { const d = Math.sqrt(dd); mvx = dx / d * sp * 0.9; mvy = dy / d * sp * 0.9; }
+      if (!isPlayer && mvx === 0 && mvy === 0) {                                          // kein Kampf-Move -> Zielpunkt je Befehl ansteuern
+        const k = kingIdx[eowner[i]], mine = eowner[i] === PLAYER;
+        let gxT: number, gyT: number, hold: number, viaFlow: boolean;
+        if (orderMode === 1 && mine) { gxT = orderX; gyT = orderY; hold = 9; viaFlow = false; }                // ANGRIFF: zum Rallypunkt marschieren
+        else if (k >= 0 && k !== i) { gxT = ex[k]; gyT = ey[k]; hold = orderMode === 2 && mine ? 5 : 15; viaFlow = true; } // FOLGEN/RÜCKZUG: zum König (Flow umgeht Wasser/Berge)
+        else { gxT = MAP / 2; gyT = MAP / 2; hold = 2; viaFlow = false; }                                      // König tot/verwaist -> Mitte
+        const ddx = gxT - ex[i], ddy = gyT - ey[i], dist = Math.sqrt(ddx * ddx + ddy * ddy) || 1;
+        if (dist > hold) {
+          const approach = Math.min(1, (dist - hold) / 10);                                                    // Kraft rampt ein -> kein Überschwingen/Zittern
+          let dirx = ddx / dist, diry = ddy / dist;
+          if (viaFlow) {                                                                                       // Flow-Field: garantierter Weg um Hindernisse zum König zurück
+            const fbase = eowner[i] * FW * FW; let fx = kingFlowX[fbase + flowCell(ex[i], ey[i])], fy = kingFlowY[fbase + flowCell(ex[i], ey[i])];
+            if (fx === 0 && fy === 0 && dist > hold + 6) {                                                     // Sink-/Randzelle -> beste Nachbarzelle sampeln (nie endgültig stuck)
+              const cx = (ex[i] / FCELL) | 0, cy = (ey[i] / FCELL) | 0;
+              for (let nn = 0; nn < 8; nn++) { const ncx = cx + FNX[nn], ncy = cy + FNY[nn]; if (ncx < 0 || ncy < 0 || ncx >= FW || ncy >= FW) continue; const nf = fbase + ncy * FW + ncx; if (kingFlowX[nf] !== 0 || kingFlowY[nf] !== 0) { fx = FNX[nn] * 70; fy = FNY[nn] * 70; break; } }
+            }
+            if (fx !== 0 || fy !== 0) { const fm = Math.hypot(fx, fy) || 1; dirx = fx / fm; diry = fy / fm; }
           }
-        } else { const dx = MAP / 2 - ex[i], dy = MAP / 2 - ey[i], d = Math.sqrt(dx * dx + dy * dy) || 1; mvx = dx / d * sp * 0.6; mvy = dy / d * sp * 0.6; } // König tot/verwaist -> Mitte
+          const fsp = sp * approach * (orderMode === 2 && mine ? 1.18 : 0.95);                                 // Rückzug etwas schneller
+          mvx = dirx * fsp; mvy = diry * fsp;
+        }
       }
-      if (isPlayer) { const tvx = pInX * sp, tvy = pInY * sp; pkvx += (tvx - pkvx) * 0.4; pkvy += (tvy - pkvy) * 0.4; mvx = pkvx; mvy = pkvy; } // Smoothing: Geschwindigkeit lerpt -> kein abruptes Ruckeln
+      if (isPlayer) { const tvx = pInX * sp, tvy = pInY * sp; pkvx += (tvx - pkvx) * 0.4; pkvy += (tvy - pkvy) * 0.4; mvx = pkvx; mvy = pkvy; } // Königs-Smoothing (nur Spieler-Input, NICHT von Units geschoben)
       // Sturm: außerhalb der Zone Dauerschaden; KI flieht rein, Spieler bleibt steuerbar.
       const odx = zoneX - ex[i], ody = zoneY - ey[i], od2 = odx * odx + ody * ody;
       if (od2 > zr2) {
         if (!isPlayer) { const od = Math.sqrt(od2) || 1; mvx = odx / od * sp; mvy = ody / od * sp; }
         ehp[i] -= STORM_DMG * (isPlayer && shieldTimer > 0 ? 0.5 : 1); eflash[i] = 4; if (ehp[i] <= 0) { killE(i); continue; }
       }
-      // Separation: Abstoßung naher Units -> Front statt Punkt-Pile (auf 8 Nachbarn gedeckelt)
-      { const cx = clampCell(ex[i]), cy = clampCell(ey[i]); let px = 0, py = 0, n = 0;
+      // Separation: Abstoßung naher Units -> Front statt Pile. KÖNIGE SIND IMMUN -> der Spieler-König wird NIE
+      // von seiner Horde geschoben (autoritäre Steuerung).
+      if (!eking[i]) { const cx = clampCell(ex[i]), cy = clampCell(ey[i]); let px = 0, py = 0, n = 0;
         for (let dy = -1; dy <= 1 && n < 8; dy++) for (let dx = -1; dx <= 1 && n < 8; dx++) {
           const ng = cx + dx, mg = cy + dy; if (ng < 0 || mg < 0 || ng >= GW || mg >= GW) continue;
           for (let j = gridHead[mg * GW + ng]; j !== -1 && n < 8; j = gridNext[j]) {
             if (j === i || !ealive[j]) continue;
             const axx = ex[i] - ex[j], ayy = ey[i] - ey[j], a2 = axx * axx + ayy * ayy;
-            if (a2 > 0.01 && a2 < 6.25) { const aa = Math.sqrt(a2); px += axx / aa; py += ayy / aa; n++; }
+            if (a2 > 0.01 && a2 < 5.0) { const aa = Math.sqrt(a2); px += axx / aa; py += ayy / aa; n++; }
           }
         }
-        if (n > 0) { mvx += px / n * sp * 0.7; mvy += py / n * sp * 0.7; } }
+        if (n > 0) { mvx += px / n * sp * 0.5; mvy += py / n * sp * 0.5; } }
+      // GESCHWINDIGKEITS-GLÄTTUNG pro Unit: Ziel-Velocity lerpen -> kein Zittern/Orbit am König (Spieler nutzt pkvx).
+      if (!isPlayer) { evx[i] += (mvx - evx[i]) * 0.32; evy[i] += (mvy - evy[i]) * 0.32; mvx = evx[i]; mvy = evy[i]; }
       if (mvx !== 0 || mvy !== 0) { const nx = ex[i] + mvx * DT_FIX, ny = ey[i] + mvy * DT_FIX; if (passable(nx, ey[i])) ex[i] = nx; if (passable(ex[i], ny)) ey[i] = ny; }
       if (eflash[i] > 0) eflash[i] -= DT_FIX;
       if (eatk[i] > 0) eatk[i] -= DT_FIX;
@@ -1535,7 +1581,7 @@ async function main(): Promise<void> {
       kf.fill.x = screenX[i] - 11; kf.fill.y = footY[i] - 44; kf.fill.width = 22 * hpf;
       kf.fill.tint = hpf > 0.5 ? 0x6fe06f : hpf > 0.25 ? 0xe0c040 : 0xe05050;
     }
-    drawMini();
+    drawMini(); drawOrderMarker();
     // PIXELATE (nur ?style=bake): Welt gesnappt in Low-Res-RT, dann crisp hochskalieren (welt-verankert).
     if (pixelateBake && bakeRt && bakeSprite) {
       bakeThrottle = !bakeThrottle;
@@ -1559,7 +1605,8 @@ async function main(): Promise<void> {
       const me = pAlive ? `Du: Lv${playerLevel} · ${Math.max(0, ehp[playerKing]) | 0}/${emaxhp[playerKing] | 0} HP · Horde ${myHorde}` : `besiegt (Zuschauer)`;
       const dashS = dashCd > 0 ? `${Math.ceil(dashCd)}s` : "●", shieldS = shieldTimer > 0 ? `aktiv ${Math.ceil(shieldTimer)}s` : shieldCd > 0 ? `${Math.ceil(shieldCd)}s` : "●";
       const buffs = (buffSpeed > 0 ? " ⚡Tempo" : "") + (buffDmg > 0 ? " ⚔Schaden" : "");
-      hud.textContent = `Horde.IO — ${me} · Könige ${kingsAlive}/${PLAYERS} · ${total} Units · WASD · Dash(Space) ${dashS} · Schild(Q) ${shieldS}${buffs} · ${app.ticker.FPS.toFixed(0)} FPS (sim ${simMs.toFixed(1)}/sort ${sortMs.toFixed(1)}) · Sturm R${zoneR | 0}`;
+      const cmd = ["Folgen", "⚔ANGRIFF", "🛡RÜCKZUG"][orderMode];
+      hud.textContent = `Horde.IO — ${me} · Könige ${kingsAlive}/${PLAYERS} · ${total} Units · Befehl: ${cmd} (Rechtsklick=Angriff F=Rückzug G=Folgen) · WASD · Dash(Space) ${dashS} · Schild(Q) ${shieldS}${buffs} · ${app.ticker.FPS.toFixed(0)} FPS (sim ${simMs.toFixed(1)}/sort ${sortMs.toFixed(1)}) · Sturm R${zoneR | 0}`;
       const roundOver = kingsAlive <= 1;
       if (playerActive && gameState === "playing" && (roundOver || !pAlive)) {
         const place = pAlive ? 1 : kingsAlive + 1, tsec = survT | 0;
