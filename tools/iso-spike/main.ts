@@ -867,13 +867,25 @@ async function main(): Promise<void> {
   function placeOnLand(): { gx: number; gy: number } {
     for (let i = 0; i < 80; i++) {
       const gx = 6 + rng() * (MAP - 12), gy = 6 + rng() * (MAP - 12), h = sampleH(gx, gy);
-      if (h >= WATER + 0.03 && h <= MOUNTAIN - 0.02 && slopeAt(gx, gy) < STEEP && dry(gx, gy)) return { gx, gy };
+      if (h >= WATER + 0.03 && h <= MOUNTAIN - 0.02 && slopeAt(gx, gy) < STEEP && dry(gx, gy) && passable(gx, gy)) return { gx, gy }; // nicht in Wald-/Sperrzellen
     }
     return { gx: MAP / 2, gy: MAP / 2 };
   }
   const orbTex = makeOrbTexture(app);                       // für Seelen/Power-Ups
   interface Orb { spr: Sprite; life: number; }
   const orbs: Orb[] = [];
+
+  // ── WÄLDER ALS (zerstörbare) MAUERN ── Bäume blocken einen 2x2-Fußabdruck in PASS -> Wälder kanalisieren die
+  // Armee wie Berge/Wasser (Flow-Field läuft drumherum). NUR der Spieler-König fällt Bäume -> öffnet Pfade.
+  // treeBlockN = Block-Zähler/Zelle (overlap-sicher), TERRAIN_PASS = Begehbarkeit OHNE Bäume (sauberes Freigeben),
+  // treeAt = Zelle -> Baum-Entity (Fäll-Lookup).
+  const TERRAIN_PASS = Uint8Array.from(PASS);
+  const treeBlockN = new Uint8Array(N * N);
+  const treeAt = new Int32Array(N * N).fill(-1);
+  const TREE_FP: [number, number][] = [[0, 0], [1, 0], [0, 1], [1, 1]];
+  const TREE_HP_V = 80;
+  const blockTree = (gx: number, gy: number): void => { const ix = gx | 0, iy = gy | 0; for (const [dx, dy] of TREE_FP) { const x = ix + dx, y = iy + dy; if (x >= 0 && y >= 0 && x < N && y < N) { treeBlockN[x * N + y]++; PASS[x * N + y] = 0; } } };
+  const unblockTree = (gx: number, gy: number): void => { const ix = gx | 0, iy = gy | 0; for (const [dx, dy] of TREE_FP) { const x = ix + dx, y = iy + dy; if (x < 0 || y < 0 || x >= N || y >= N) continue; const k = x * N + y; if (treeBlockN[k] > 0 && --treeBlockN[k] === 0) PASS[k] = TERRAIN_PASS[k]; } };
 
   // DEKO-PLAN: Positionen + Deko-Typ (0-2 Bäume, 3-4 Steine, 5-8 Gebäude). Entities folgen nach Engine-Setup.
   const decorPlan: { gx: number; gy: number; dt: number }[] = [];
@@ -884,7 +896,7 @@ async function main(): Promise<void> {
     const gx = 6 + rng() * (MAP - 12), gy = 6 + rng() * (MAP - 12), h = sampleH(gx, gy);
     if (h < WATER + 0.04 || h > 0.70 || slopeAt(gx, gy) > 0.06 || !dry(gx, gy)) continue;
     if (forestMask(gx, gy) < 0.46) continue;                 // größere Waldflächen
-    decorPlan.push({ gx, gy, dt: (rng() * 3) | 0 }); tPlaced++;
+    decorPlan.push({ gx, gy, dt: (rng() * 3) | 0 }); blockTree(gx, gy); tPlaced++; // Baum blockt -> Wald = Mauer (vor Flow-Field-Aufbau)
   }
   // STEINE: am Bergfuß / felsigem Gelände gestreut.
   for (let i = 0; i < TREES * 0.2; i++) {
@@ -1102,7 +1114,8 @@ async function main(): Promise<void> {
     const i = nEnt++;
     ex[i] = gx; ey[i] = gy; prevX[i] = gx; prevY[i] = gy; ealive[i] = 1; edecor[i] = dt + 1;
     efac[i] = 0; etype[i] = 0; eowner[i] = 255; eflash[i] = 0; eatk[i] = 0; etarget[i] = -1; eking[i] = 0; eranged[i] = 0;
-    if (dt >= 5) { ehp[i] = 200; emaxhp[i] = 200; buildingIdx.push(i); } // Gebäude: zerstörbar (Rekruten-Quelle)
+    if (dt >= 5) { ehp[i] = 200; emaxhp[i] = 200; buildingIdx.push(i); }   // Gebäude: zerstörbar (Rekruten-Quelle)
+    else if (dt < 3) { ehp[i] = TREE_HP_V; emaxhp[i] = TREE_HP_V; treeAt[(gx | 0) * N + (gy | 0)] = i; } // Baum: vom König fällbar
     const p = worldToIso(gx, gy); screenX[i] = p.x; footY[i] = p.y - elevLift(sampleH(gx, gy));
   };
   for (const dp of decorPlan) if (nEnt < CAP) spawnDecor(dp.gx, dp.gy, dp.dt);
@@ -1631,7 +1644,17 @@ async function main(): Promise<void> {
     // AUDIO-LISTENER folgt der Kamera (Grid-Koordinaten -> Distanz-Gate). Schritt-Sound, solange der
     // Spieler-König läuft (play() self-throttlet auf den footstep-gap).
     if (camTarget >= 0) audio.setListener(ex[camTarget], ey[camTarget]);
-    if (playerActive && playerKing >= 0 && ealive[playerKing] === 1 && (pInX !== 0 || pInY !== 0)) audio.play("footstep", ex[playerKing], ey[playerKing]);
+    if (playerActive && playerKing >= 0 && ealive[playerKing] === 1 && (pInX !== 0 || pInY !== 0)) {
+      audio.play("footstep", ex[playerKing], ey[playerKing]);
+      // KÖNIG FÄLLT BÄUME: läuft der Spieler in einen Wald, hackt er den nächsten Baum vor sich weg -> Pfad öffnet sich.
+      const kx = ex[playerKing], ky = ey[playerKing], fx = (kx + pInX * 2.5) | 0, fy = (ky + pInY * 2.5) | 0;
+      let tr = -1;
+      for (let dy = -1; dy <= 1 && tr < 0; dy++) for (let dx = -1; dx <= 1 && tr < 0; dx++) { const x = fx + dx, y = fy + dy; if (x < 0 || y < 0 || x >= N || y >= N) continue; const c = treeAt[x * N + y]; if (c >= 0 && ealive[c]) tr = c; }
+      if (tr >= 0) {
+        ehp[tr] -= 26 * dtR; addPuff(ex[tr], ey[tr], 0x6a4a2a, 0.35); if (frame % 8 === 0) audio.play("melee", kx, ky);
+        if (ehp[tr] <= 0) { ealive[tr] = 0; unblockTree(ex[tr], ey[tr]); flowPass[flowCell(ex[tr], ey[tr])] = passable(ex[tr], ey[tr]) ? 1 : 0; addPuff(ex[tr], ey[tr], 0x3c7d2f, 1.1); audio.play("collapse", ex[tr], ey[tr], 0.6); if (rng() < 0.5) dropSoul(ex[tr], ey[tr]); }
+      }
+    }
     // RENDER: interpolierte Positionen -> Counting-Sort + Pool-Slots (EIN Draw-Call), dann König-FX.
     const tSort = performance.now();
     projectInterp(alpha);
