@@ -385,15 +385,15 @@ function palette(cloth: number, skin: number, accent: number, metalBase = 0x9aa3
 }
 // 6 FRAKTIONEN mit EIGENER Identität (Palette + Körper-Profil + Kopf + Signatur) — nicht nur Recolor.
 // human Argent Crown · elf Sylvan Wardens · orc Broken Tusk · undead Pale Legion · dwarf Ironbeards · giant Trollkin.
-// HINWEIS: cloth ist absichtlich NEUTRAL-hell (nimmt die TEAM-Farbe als Tint sauber an, 16 Teams trennbar).
-// Fraktions-Identität kommt aus Haut/Kopf/Waffe/Akzent/Haltung (skin/accent/metal bleiben fraktionsspezifisch).
+// cloth = volle FRAKTIONSFARBE (Body trägt Fraktions-Identität + Detail). Die TEAM-Farbe kommt NICHT als
+// Full-Body-Tint, sondern als separates Overlay (Wappenrock + Crest, teamRegion) -> clever gefärbte Teile.
 const PAL: Record<string, Palette> = {
-  human: palette(0xc8ccd4, 0xe6b088, 0xffcf3d, 0xc4ccd8), // neutrale Tunika + helle Haut + Gold + helles Stahl
-  elf: palette(0xccd2d8, 0xe6d2b8, 0xe8d27a, 0x8c9a82),   // helle Robe + Elfenbein + Pale-Gold + Salbei-Metall
-  orc: palette(0xb6bac2, 0x4e6e38, 0xb23a2a, 0x3a3d40),   // raue Felle + Moosgrün-Haut + Blut + fast-schwarzes Eisen
-  undead: palette(0xacb0b8, 0x9aa890, 0x6cff8a, 0x6b7d68), // Lumpen + Knochen + Nekro-Grün + Grünspan
-  dwarf: palette(0xc0c4cc, 0xb8410f, 0xd9a441, 0x7d8388), // Kittel + Kupfer-Bart(skin) + Gold + Eisen
-  giant: palette(0xb2b6be, 0x7d8a72, 0x6fae4a, 0x55504a), // Lendenschurz + grau-grüner Stein + Moos + Steingrau
+  human: palette(0x35508f, 0xe6b088, 0xffcf3d, 0xc4ccd8), // Königsblau + helle Haut + Gold + helles Stahl
+  elf: palette(0x2f7d4f, 0xe6d2b8, 0xe8d27a, 0x8c9a82),   // Blattgrün + Elfenbein + Pale-Gold + Salbei-Metall
+  orc: palette(0x6e5740, 0x4e6e38, 0xb23a2a, 0x3a3d40),   // Lederbraun + Moosgrün-Haut + Blut + fast-schwarzes Eisen
+  undead: palette(0x3c4636, 0x9aa890, 0x6cff8a, 0x6b7d68), // Oliv-Lumpen + Knochen + Nekro-Grün + Grünspan
+  dwarf: palette(0x8a4f2a, 0xb8410f, 0xd9a441, 0x7d8388), // Rost + Kupfer-Bart(skin) + Gold + Eisen
+  giant: palette(0x6f5b48, 0x7d8a72, 0x6fae4a, 0x55504a), // Lederbraun + grau-grüner Stein + Moos + Steingrau
 };
 // FRAKTIONS-PROJEKTILE (Magier-Bolt + Stab-Orb + Treffer/Tod-FX): core = heller Kern, glow = Hülle/Spur.
 // Auf einen Blick distinkt: Mensch gold-weiß · Elf mint · Ork rot-orange · Untot giftgrün · Zwerg bernstein · Riese grau-staub.
@@ -406,6 +406,7 @@ const FAC_PROJ: { core: number; glow: number }[] = [
   { core: 0x9aa890, glow: 0x7d8a72 }, // giant  (Stein/Staub)
 ];
 const OUTLINE: RGB = hexRGB(0x14171f), GOLD: RGB = hexRGB(0xffd24a), GLOW: RGB = hexRGB(0x9dffb0), BONE: RGB = hexRGB(0xe8e0c8);
+const WHITE: RGB = [255, 255, 255], TEAMDK: RGB = [120, 120, 130]; // WHITE = Team-Overlay (wird getönt); TEAMDK = dunkle Kante
 // 32x40-Sprites (vorher 24x28) -> deutlich mehr Detail-Raum. UCX = Mitte (gespiegelt), HIP = Bein-Ansatz,
 // FOOT = Boden-Basislinie, SPLIT = Grenze Oberkörper/Beine (Oberkörper wird pro Pose um (lean,bob) verschoben).
 const UW = 32, UH = 40, UCX = 16, HIP = 27, FOOT = 36, SPLIT = 27;
@@ -436,8 +437,9 @@ function rline(p: Pen, x0: number, y0: number, x1: number, y1: number, c: RGB): 
 }
 // ── BEINE (asymmetrisch -> echter Gang) ──
 function drawLeg(p: Pen, P: Palette, x: number, topY: number, lift: number, thick: number): void {
-  for (let y = topY + lift; y <= FOOT; y++) for (let k = 0; k < thick; k++) p.r(x + k, y, k === 0 ? P.cloth[0] : P.cloth[1]);
-  for (let k = 0; k < thick; k++) p.r(x + k, FOOT, k === thick - 1 ? P.accent : OUTLINE); // Stiefel
+  for (let y = topY + lift; y <= FOOT - 1; y++) for (let k = 0; k < thick; k++) p.r(x + k, y, k === 0 ? P.cloth[0] : P.cloth[1]);
+  p.r(x, topY + lift, P.cloth[2]);                                                        // Knie-Highlight
+  for (let k = 0; k < thick; k++) { p.r(x + k, FOOT, OUTLINE); p.r(x + k, FOOT - 1, k === thick - 1 ? P.cloth[0] : shade(0x2a2018, 0)); } // Stiefel (dunkel) + Sohle
 }
 function drawLegs(p: Pen, P: Palette, leg: string, fy: number): void {
   const hy = HIP + fy, stub = leg === "stub", wide = leg === "wide";
@@ -541,14 +543,16 @@ function sigGiant(p: Pen, P: Palette): void { for (let y = 18; y <= 27; y++) p.r
 interface Prof { pal: Palette; w: number; scale: number; tt: number; fy: number; leg: string; hunch: number; head: (p: Pen, P: Palette) => void; melee: Wpn; sig: (p: Pen, P: Palette) => void; proj: { core: number; glow: number }; hp: number; spd: number; dmg: number; }
 function drawBody(p: Pen, P: Palette, bodyW: number, torsoTop: number, leg: string, fy: number): void {
   const halfMax = bodyW >> 1, btm = HIP - 1 + fy, hgt = Math.max(1, btm - torsoTop);
-  for (let y = torsoTop; y <= btm; y++) {                                                 // Torso: oben Ecke gerundet (kein Klotz), oben hell = Volumen
+  for (let y = torsoTop; y <= btm; y++) {                                                 // Torso: gerundete Schulter + Schattierung (Brust hell, Saum dunkel = Volumen)
     const t = (y - torsoTop) / hgt;
-    const half = t < 0.08 ? halfMax - 1 : halfMax;                                        // nur obere Kante runden -> entkastet, ohne Glocke
-    const si = t < 0.20 ? 3 : t < 0.55 ? 2 : 1;
+    const half = t < 0.08 ? halfMax - 1 : halfMax;
+    const si = t < 0.16 ? 3 : t < 0.5 ? 2 : t > 0.84 ? 0 : 1;                             // dunkler Saum/AO unten
     for (let x = UCX - half; x <= UCX + half; x++) p.m(x, y, x === UCX - half || x === UCX + half ? P.cloth[0] : P.cloth[si]);
   }
+  p.m(UCX - halfMax, torsoTop, P.metal[2]); p.m(UCX - halfMax + 1, torsoTop, P.metal[3]); p.m(UCX - halfMax, torsoTop + 1, P.metal[1]); // Schulter-Pauldron (Metall) = Definition
   const beltHalf = Math.max(1, halfMax - 1);
-  for (let x = UCX - beltHalf; x <= UCX + beltHalf; x++) p.m(x, btm, P.accent);           // Gürtel (maskiert Bein-Übergang)
+  for (let x = UCX - beltHalf; x <= UCX + beltHalf; x++) p.m(x, btm, P.accent);           // Gürtel
+  p.m(UCX, btm, P.metal[3]);                                                              // Gürtelschnalle
   drawLegs(p, P, leg, fy);
 }
 function drawWarrior(p: Pen, pr: Prof): void {
@@ -639,15 +643,33 @@ function renderUnitCell(faction: string, type: string): (RGB | 0)[] {
   for (const [sx, sy, sw] of shadow) for (let x = sx; x < sx + sw; x++) { const i = sy * UW + x; if (out[i] === 0) out[i] = shade(0x0c0e14, 0.14); }
   return out;
 }
+// ── TEAM-OVERLAY-ZELLE ── NUR die Team-Teile (Wappenrock auf der Brust + Kopf-Crest) in WHITE; im Render mit
+// der Team-Farbe getönt + DECKUNGSGLEICH (gleiche Pose/Verschiebung) über den Fraktions-Body gelegt. So:
+// Body = Fraktionsfarbe+Detail, Team = clever gefärbtes Wappen (kein Full-Body-Tint).
+function teamRegion(p: Pen, pr: Prof, type: string): void {
+  const fy = pr.fy, mage = type === "mage", top = 16, bottom = (mage ? FOOT - 8 : HIP - 2) + fy;
+  for (let y = top; y <= bottom; y++) { p.m(UCX, y, WHITE); if (y >= top + 2 && y <= bottom - 1) p.m(UCX - 1, y, WHITE); } // Wappenrock: schmal->breit->schmal (V-Form)
+  p.m(UCX, bottom + 1, TEAMDK); p.m(UCX - 1, bottom + 1, TEAMDK);                          // Saumkante dunkel (Definition)
+  p.r(UCX - 1, 2, WHITE); p.r(UCX, 2, WHITE); p.r(UCX - 1, 3, WHITE);                      // Kopf-Crest/Feder
+  if (type === "king" || type === "champion") { p.r(UCX + 1, 2, WHITE); p.r(UCX + 2, 3, WHITE); } // größerer Wimpel für König/Champion
+}
+function renderTeamCell(faction: string, type: string): (RGB | 0)[] {
+  let buf: (RGB | 0)[] = new Array(UW * UH).fill(0);
+  teamRegion(makePen(buf), PROF[faction], type);
+  const lean = CUR.lean + PROF[faction].hunch, bob = CUR.bob;                              // gleiche Verschiebung wie der Body
+  if (lean || bob) { const sh: (RGB | 0)[] = new Array(UW * UH).fill(0); for (let y = 0; y < UH; y++) for (let x = 0; x < UW; x++) { const c = buf[y * UW + x]; if (c === 0) continue; if (y < SPLIT) { const nx = x + lean, ny = y + bob; if (nx >= 0 && nx < UW && ny >= 0 && ny < UH) sh[ny * UW + nx] = c; } else sh[y * UW + x] = c; } buf = sh; }
+  return buf;
+}
 // ATLAS: 6 Fraktionen x 6 Typen x 6 Posen = 216 Zellen auf EINE TextureSource -> ParticleContainer
 // zeichnet ALLE Units in EINEM Draw-Call. GRID-Layout (statt einer 6900px-Reihe -> unter GPU-Textur-Limit).
 // Frame-Index uf = (fac*6 + type)*6 + pose; Spalte = uf%COLS, Zeile = uf/COLS. Deko folgt in eigener Reihe.
 const FAC_ORDER = ["human", "elf", "orc", "undead", "dwarf", "giant"] as const;
 const TY_ORDER = ["warrior", "archer", "spearman", "brute", "king", "champion", "mage"] as const;
-const UNIT_FRAMES = FAC_ORDER.length * TY_ORDER.length * FRAMES_PER; // 216 Unit-Zellen, danach Deko-Frames
+const UNIT_FRAMES = FAC_ORDER.length * TY_ORDER.length * FRAMES_PER; // 6*7*6 = 252 Body-Zellen; danach 252 TEAM-Overlay-Zellen; danach Deko
 const unitFrame = (f: number, ty: number, pose: number): number => (f * TY_ORDER.length + ty) * FRAMES_PER + pose;
+const teamFrame = (f: number, ty: number, pose: number): number => UNIT_FRAMES + unitFrame(f, ty, pose); // Team-Overlay-Zelle (gleiche Pose)
 const ATLAS_COLS = 32;                                              // 32*32 = 1024px breit
-const ATLAS_ROWS = Math.ceil(UNIT_FRAMES / ATLAS_COLS);            // 7 Zeilen
+const ATLAS_ROWS = Math.ceil(2 * UNIT_FRAMES / ATLAS_COLS);        // Body + Team -> 16 Zeilen
 // Atlas: Unit-Grid oben + Deko (Bäume/Steine/Gebäude) in einer Reihe darunter -> Deko sortiert IM SELBEN
 // Counting-Sort wie die Units (globale Z-Regel: tiefer im Bild = vorne gilt auch für Deko<->Units).
 function buildUnitAtlas(decor: { tex: Texture }[]): Texture[] {
@@ -659,24 +681,27 @@ function buildUnitAtlas(decor: { tex: Texture }[]): Texture[] {
   const cv = document.createElement("canvas"); cv.width = AW; cv.height = AH;
   const ctx = cv.getContext("2d")!; ctx.imageSmoothingEnabled = false;
   const img = ctx.createImageData(gridW, gridH), d = img.data;
-  for (let f = 0; f < FAC_ORDER.length; f++) for (let t = 0; t < TY_ORDER.length; t++) for (let pose = 0; pose < FRAMES_PER; pose++) {
-    CUR = POSES[pose];
-    const cell = renderUnitCell(FAC_ORDER[f], TY_ORDER[t]);
-    const uf = unitFrame(f, t, pose), ox = (uf % ATLAS_COLS) * UW, oy = ((uf / ATLAS_COLS) | 0) * UH;
+  const blit = (cell: (RGB | 0)[], cellIdx: number): void => {
+    const ox = (cellIdx % ATLAS_COLS) * UW, oy = ((cellIdx / ATLAS_COLS) | 0) * UH;
     for (let y = 0; y < UH; y++) for (let x = 0; x < UW; x++) {
       const c = cell[y * UW + x]; if (c === 0) continue;
       const o = ((oy + y) * gridW + ox + x) * 4; d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = 255;
     }
+  };
+  for (let f = 0; f < FAC_ORDER.length; f++) for (let t = 0; t < TY_ORDER.length; t++) for (let pose = 0; pose < FRAMES_PER; pose++) {
+    CUR = POSES[pose];
+    blit(renderUnitCell(FAC_ORDER[f], TY_ORDER[t]), unitFrame(f, t, pose)); // Body-Zelle (Fraktionsfarbe)
+    blit(renderTeamCell(FAC_ORDER[f], TY_ORDER[t]), teamFrame(f, t, pose)); // Team-Overlay-Zelle (WHITE -> getönt)
   }
-  ctx.putImageData(img, 0, 0); // Units als ImageData; Deko danach per drawImage in die Reihe darunter
+  ctx.putImageData(img, 0, 0); // Units+Team als ImageData; Deko danach per drawImage in die Reihe darunter
   const decorRect: Rectangle[] = [];
   let dx = 0;
   for (let j = 0; j < decor.length; j++) { ctx.drawImage(decor[j].tex.source.resource as CanvasImageSource, dx, gridH, dW[j], dH[j]); decorRect.push(new Rectangle(dx, gridH, dW[j], dH[j])); dx += dW[j]; }
   const src = Texture.from(cv).source; src.scaleMode = "nearest";
   const frames: Texture[] = [];
-  for (let uf = 0; uf < UNIT_FRAMES; uf++) frames.push(new Texture({ source: src, frame: new Rectangle((uf % ATLAS_COLS) * UW, ((uf / ATLAS_COLS) | 0) * UH, UW, UH) }));
+  for (let uf = 0; uf < 2 * UNIT_FRAMES; uf++) frames.push(new Texture({ source: src, frame: new Rectangle((uf % ATLAS_COLS) * UW, ((uf / ATLAS_COLS) | 0) * UH, UW, UH) }));
   for (const r of decorRect) frames.push(new Texture({ source: src, frame: r }));
-  return frames; // 0..215 Units (unitFrame(f,ty,pose)), 216+ Deko
+  return frames; // 0..251 Body (unitFrame), 252..503 Team (teamFrame), 504+ Deko
 }
 
 // ── AUDIO ─────────────────────────────────────────────────────────────────────────────────────
@@ -1007,8 +1032,10 @@ async function main(): Promise<void> {
   const ANCHOR_Y = FOOT / UH;    // Fuß-Anker (0.9) statt fixem 0.82
   const unitsPC = new ParticleContainer({ dynamicProperties: { position: true, vertex: true, uvs: true, color: true, rotation: false } });
   unitsPC.eventMode = "none"; world.addChild(unitsPC);
-  const pool: Particle[] = new Array(CAP);
-  for (let k = 0; k < CAP; k++) { const p = new Particle({ texture: FRAMES[0], anchorX: 0.5, anchorY: 0.82 }); p.alpha = 0; pool[k] = p; unitsPC.addParticle(p); }
+  // 2 Partikel pro Slot, VERSCHRÄNKT (Body, Team, Body, Team, …) -> gleiche Tiefe, Team direkt nach Body =
+  // Team-Overlay liegt auf dem Body, Tiefenordnung bleibt korrekt (alle aus EINEM Atlas = 1 Draw-Call).
+  const pool: Particle[] = new Array(CAP * 2);
+  for (let k = 0; k < CAP * 2; k++) { const p = new Particle({ texture: FRAMES[0], anchorX: 0.5, anchorY: 0.82 }); p.alpha = 0; pool[k] = p; unitsPC.addParticle(p); }
 
   // FX-Layer (Poofs/Pfeile) ÜBER den Units; Banner/HP-Balken (≤16 Könige) ganz oben.
   const fxLayer = new Container(); fxLayer.eventMode = "none"; world.addChild(fxLayer);
@@ -1317,25 +1344,29 @@ async function main(): Promise<void> {
     let a = 0; for (let b = 0; b < KSORT; b++) { const c = sortCnt[b]; sortCnt[b] = a; a += c; }
     for (let i = 0; i < nEnt; i++) { if (!evis[i]) continue; let b = ((footY[i] - Y_MIN) * invSpan) | 0; b = b < 0 ? 0 : b >= KSORT ? KSORT - 1 : b; sortOrder[sortCnt[b]++] = i; }
     for (let k = 0; k < n; k++) {
-      const u = sortOrder[k], p = pool[k];
-      p.x = screenX[u]; p.y = footY[u];
+      const u = sortOrder[k], pb = pool[2 * k], pt = pool[2 * k + 1];                     // pb = Body, pt = Team-Overlay (gleiche Pos/Tiefe)
+      pb.x = pt.x = screenX[u]; pb.y = pt.y = footY[u];
       const di = edecor[u];
-      if (di) {                                                                          // DEKO: eigener Frame/Anker/Skala, keine Anim
+      if (di) {                                                                          // DEKO: eigener Frame/Anker/Skala, keine Anim, kein Team-Overlay
         const j = di - 1, dsc = DECOR_SCALE[j];
-        p.texture = FRAMES[UNIT_FRAMES + j]; p.anchorY = DECOR_ANCHOR[j]; p.scaleX = dsc; p.scaleY = dsc; p.tint = 0xffffff; p.alpha = 1;
-      } else {                                                                           // UNIT: Typ-Skala × Fraktions-Skala, Anim-Frame, Tönung
+        pb.texture = FRAMES[2 * UNIT_FRAMES + j]; pb.anchorY = DECOR_ANCHOR[j]; pb.scaleX = dsc; pb.scaleY = dsc; pb.tint = 0xffffff; pb.alpha = 1;
+        pt.alpha = 0;
+      } else {                                                                           // UNIT: Body in Fraktionsfarbe + Team-Wappen-Overlay
         const sc = T_scale[etype[u]] * FAC_SCALE[efac[u]] * UNIT_DRAW * (u === playerKing ? playerSizeMult : 1);
-        p.anchorY = ANCHOR_Y; p.scaleX = sc; p.scaleY = sc;
         let fr: number;                                                                   // Pose: Angriff (Ausholen 4 -> Schlag 5) > Gang (0..3) > Idle (1)
         if (eatk[u] > 0) fr = eatk[u] > 8 ? 4 : 5;
         else { const moving = Math.abs(ex[u] - prevX[u]) + Math.abs(ey[u] - prevY[u]) > 0.05; fr = moving ? (((time * 8 + u * 0.7) | 0) & 3) : 1; }
-        p.texture = FRAMES[unitFrame(efac[u], etype[u], fr)];
-        p.tint = eflash[u] > 0 ? 0xff5555 : u === playerKing && shieldTimer > 0 ? 0x8fc4ff : TEAM_COL[eowner[u]]; p.alpha = 1; // Team-Farbe als Körper-Tint
-
+        const f = efac[u], ty = etype[u];
+        pb.anchorY = ANCHOR_Y; pb.scaleX = sc; pb.scaleY = sc;
+        pb.texture = FRAMES[unitFrame(f, ty, fr)];
+        pb.tint = eflash[u] > 0 ? 0xff5555 : u === playerKing && shieldTimer > 0 ? 0x8fc4ff : 0xffffff; pb.alpha = 1; // Body = Fraktionsfarbe (Flash/Schild override)
+        pt.anchorY = ANCHOR_Y; pt.scaleX = sc; pt.scaleY = sc;
+        pt.texture = FRAMES[teamFrame(f, ty, fr)];
+        pt.tint = TEAM_COL[eowner[u]]; pt.alpha = eflash[u] > 0 ? 0 : 1;                  // Team-Wappen in Team-Farbe (beim Treffer-Flash kurz aus)
       }
     }
-    for (let k = n; k < lastDrawn; k++) pool[k].alpha = 0; // pensionierte Slots einmalig parken
-    lastDrawn = n;
+    for (let k = 2 * n; k < lastDrawn; k++) pool[k].alpha = 0; // pensionierte Slots (beide Lagen) einmalig parken
+    lastDrawn = 2 * n;
     return n;
   };
 
