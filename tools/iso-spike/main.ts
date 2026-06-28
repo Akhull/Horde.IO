@@ -1033,7 +1033,6 @@ async function main(): Promise<void> {
     }
   };
 
-  const bannerTex = FACTION_COL.map((c) => makeBannerTexture(app, c));  // Fraktions-Banner an Königen
   const puffTex = makePuffTexture(app);
   interface Puff { spr: Sprite; life: number; }
   const puffs: Puff[] = [];
@@ -1150,13 +1149,14 @@ async function main(): Promise<void> {
     }
   };
   // KÖNIG-FX: Banner + HP-Balken als gepoolte Sprites (kein Per-Frame Graphics.clear mehr).
-  interface KingFX { i: number; banner: Sprite; bg: Sprite; fill: Sprite; }
+  // KÖNIG-FX: schlanker HP-Balken ÜBER dem Kopf, RAHMEN = Fraktionsfarbe (ersetzt die redundante Flagge —
+  // der König trägt schon eine Krone). bg = Fraktions-Rahmen, fill = HP (grün->gelb->rot).
+  interface KingFX { i: number; bg: Sprite; fill: Sprite; }
   const kingFX: KingFX[] = [];
   const addKingFX = (i: number, f: number): void => {
-    const banner = new Sprite(bannerTex[f]); banner.anchor.set(0.12, 1); banner.scale.set(1.4); bannersLayer.addChild(banner);
-    const bg = new Sprite(Texture.WHITE); bg.anchor.set(0, 0.5); bg.tint = 0x101418; bg.width = 22; bg.height = 4; bannersLayer.addChild(bg);
+    const bg = new Sprite(Texture.WHITE); bg.anchor.set(0.5, 0.5); bg.tint = FACTION_COL[f]; bg.height = 6; bannersLayer.addChild(bg);
     const fill = new Sprite(Texture.WHITE); fill.anchor.set(0, 0.5); fill.height = 4; bannersLayer.addChild(fill);
-    kingFX.push({ i, banner, bg, fill });
+    kingFX.push({ i, bg, fill });
   };
   // BATTLE-ROYALE-STURMZONE: sicherer Kreis schrumpft in Phasen; außerhalb Dauerschaden.
   let zoneX = MAP / 2, zoneY = MAP / 2, zoneR = 380, zoneTarget = 380, zoneTimer = 0;
@@ -1212,7 +1212,7 @@ async function main(): Promise<void> {
   };
   // RUNDE: PLAYERS Horden frisch spawnen (Gesamtzahl = reqUnits) + Sturm zurücksetzen.
   const newRound = (): void => {
-    for (const kf of kingFX) { kf.banner.destroy(); kf.bg.destroy(); kf.fill.destroy(); }
+    for (const kf of kingFX) { kf.bg.destroy(); kf.fill.destroy(); }
     kingFX.length = 0;
     for (const a of arrows) a.spr.destroy(); arrows.length = 0;
     for (const s of souls) s.spr.destroy(); souls.length = 0;
@@ -1639,12 +1639,13 @@ async function main(): Promise<void> {
     sortMs = performance.now() - tSort;
     for (const kf of kingFX) {
       const i = kf.i, on = ealive[i] === 1 && evis[i] === 1; // off-screen Könige: FX aus (Pos wäre stale)
-      kf.banner.visible = on; kf.bg.visible = on; kf.fill.visible = on;
+      kf.bg.visible = on; kf.fill.visible = on;
       if (!on) continue;
-      kf.banner.x = screenX[i]; kf.banner.y = footY[i] - 50;
+      const sc = T_scale[etype[i]] * FAC_SCALE[efac[i]] * UNIT_DRAW * (i === playerKing ? playerSizeMult : 1);
+      const barY = footY[i] - 36 * sc - 5, w = i === playerKing ? 32 : 24;  // klar ÜBER dem Kopf (skaliert mit Königsgröße)
       const hpf = Math.max(0, ehp[i] / emaxhp[i]);
-      kf.bg.x = screenX[i] - 11; kf.bg.y = footY[i] - 44;
-      kf.fill.x = screenX[i] - 11; kf.fill.y = footY[i] - 44; kf.fill.width = 22 * hpf;
+      kf.bg.x = screenX[i]; kf.bg.y = barY; kf.bg.width = w + 2;
+      kf.fill.x = screenX[i] - w / 2; kf.fill.y = barY; kf.fill.width = w * hpf;
       kf.fill.tint = hpf > 0.5 ? 0x6fe06f : hpf > 0.25 ? 0xe0c040 : 0xe05050;
     }
     drawMini(); drawOrderMarker();
