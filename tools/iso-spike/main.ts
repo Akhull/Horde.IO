@@ -987,6 +987,8 @@ async function main(): Promise<void> {
   // König-Fähigkeiten (Sekunden): Dash = Burst in Laufrichtung (5s CD), Schild = -50% Schaden 5s (10s CD).
   let dashCd = 0, shieldCd = 0, shieldTimer = 0;
   let buffSpeed = 0, buffDmg = 0; // Power-Up-Timer (Sekunden): Tempo ×1.5 / Schaden ×1.5
+  let eCd = 0, rCd = 0;                 // Fraktions-Fähigkeiten (E/R) Cooldowns
+  let hordeBuffSpeed = 0, hordeBuffDmg = 0; // horden-weite Buffs (alle Spieler-Units) aus Fähigkeiten
   let survT = 0;                  // überlebte Zeit der laufenden Runde (Sekunden) für den End-Screen
   let nEnt = 0;                                                         // höchster je belegter Index +1
   const freeStack = new Int32Array(CAP); let freeTop = 0;               // O(1) Tod/Spawn (keine .filter-Kompaktierung)
@@ -1229,7 +1231,7 @@ async function main(): Promise<void> {
     const dx = ex[tgt] - ex[i], dy = ey[tgt] - ey[i], d = Math.hypot(dx, dy) || 1;
     const bolt = etype[i] === 6 ? 1 : 0, fac = efac[i];
     const spr = new Sprite(bolt ? boltTex[fac] : arrowTex); spr.anchor.set(0.5); if (bolt) spr.scale.set(1 + Math.min(0.5, d * 0.01)); arrowsLayer.addChild(spr);
-    arrows.push({ sx: ex[i], sy: ey[i], tx: ex[tgt], ty: ey[tgt], gx: ex[i], gy: ey[i], tgt, dmg: T_atk[etype[i]] * FAC_DMG[fac] * (playerActive && i === playerKing ? playerDmgMult * (buffDmg > 0 ? 1.5 : 1) : 1), age: 0, T: Math.max(0.28, d * 0.02 + 0.12), apex: bolt ? Math.min(22, 4 + d * 0.4) : Math.min(60, 12 + d * 1.1), spr, psx: 0, psy: 0, bolt, fac });
+    arrows.push({ sx: ex[i], sy: ey[i], tx: ex[tgt], ty: ey[tgt], gx: ex[i], gy: ey[i], tgt, dmg: T_atk[etype[i]] * FAC_DMG[fac] * (playerActive && i === playerKing ? playerDmgMult * (buffDmg > 0 ? 1.5 : 1) : 1) * (eowner[i] === PLAYER && hordeBuffDmg > 0 ? 1.35 : 1), age: 0, T: Math.max(0.28, d * 0.02 + 0.12), apex: bolt ? Math.min(22, 4 + d * 0.4) : Math.min(60, 12 + d * 1.1), spr, psx: 0, psy: 0, bolt, fac });
     if (bolt) audio.magic(ex[i], ey[i], fac); else audio.play("arrow", ex[i], ey[i]); // Magier: prozedurale Magie; Bogen: Pfeil-Sound
   };
   // RUNDE: PLAYERS Horden frisch spawnen (Gesamtzahl = reqUnits) + Sturm zurücksetzen.
@@ -1257,7 +1259,7 @@ async function main(): Promise<void> {
     }
     playerKing = kingIdx[PLAYER]; camInit = false;                       // Kamera beim Rundenstart auf Spieler-König snappen
     playerXP = 0; playerLevel = 1; playerSizeMult = 1; playerDmgMult = 1; // König-Progression zurücksetzen
-    dashCd = 0; shieldCd = 0; shieldTimer = 0; buffSpeed = 0; buffDmg = 0; pkvx = 0; pkvy = 0; orderMode = 0; // Fähigkeiten + Buffs + Momentum + Befehl zurücksetzen
+    dashCd = 0; shieldCd = 0; shieldTimer = 0; buffSpeed = 0; buffDmg = 0; eCd = 0; rCd = 0; hordeBuffSpeed = 0; hordeBuffDmg = 0; pkvx = 0; pkvy = 0; orderMode = 0; // Fähigkeiten + Buffs + Momentum + Befehl zurücksetzen
     spawnPows();                                                           // Power-Ups neu verteilen
   };
   let lastDrawn = 0;
@@ -1348,6 +1350,46 @@ async function main(): Promise<void> {
   // SPIELER-STEUERUNG: WASD/Pfeile bewegen den eigenen König (owner 0). Bildschirm-Richtung -> Iso-Grid.
   const keys = new Set<string>();
   let pInX = 0, pInY = 0; // normalisierte Grid-Bewegungsrichtung des Spieler-Königs (im Ticker gesetzt)
+  // ── FRAKTIONS-FÄHIGKEITEN (E/R) ── jede Fraktion eigener Kit. Effekte zentriert am Spieler-König,
+  // nutzen das (zuletzt im Tick gebaute) Spatial-Grid. AoE-Schaden / Heilen / Horden-Buff / Beschwören.
+  const aoeDamage = (radius: number, dmg: number): void => {
+    if (playerKing < 0 || !ealive[playerKing]) return;
+    const cx = ex[playerKing], cy = ey[playerKing], r2 = radius * radius;
+    const ccx = clampCell(cx), ccy = clampCell(cy), R = Math.ceil(radius / CELL) + 1;
+    for (let oy = -R; oy <= R; oy++) for (let ox = -R; ox <= R; ox++) {
+      const ng = ccx + ox, mg = ccy + oy; if (ng < 0 || mg < 0 || ng >= GW || mg >= GW) continue;
+      for (let j = gridHead[mg * GW + ng]; j !== -1; j = gridNext[j]) {
+        if (!ealive[j] || eowner[j] === PLAYER || edecor[j]) continue;
+        const dx = ex[j] - cx, dy = ey[j] - cy; if (dx * dx + dy * dy < r2) { ehp[j] -= dmg; eflash[j] = 6; if (ehp[j] <= 0) killE(j); }
+      }
+    }
+    addPuff(cx, cy, FAC_PROJ[playerFaction].glow, radius / 18); addPuff(cx, cy, FAC_PROJ[playerFaction].core, radius / 26);
+  };
+  const healAllies = (radius: number, amt: number): void => {
+    if (playerKing < 0 || !ealive[playerKing]) return;
+    const cx = ex[playerKing], cy = ey[playerKing], r2 = radius * radius;
+    const ccx = clampCell(cx), ccy = clampCell(cy), R = Math.ceil(radius / CELL) + 1;
+    for (let oy = -R; oy <= R; oy++) for (let ox = -R; ox <= R; ox++) {
+      const ng = ccx + ox, mg = ccy + oy; if (ng < 0 || mg < 0 || ng >= GW || mg >= GW) continue;
+      for (let j = gridHead[mg * GW + ng]; j !== -1; j = gridNext[j]) {
+        if (!ealive[j] || eowner[j] !== PLAYER || edecor[j]) continue;
+        const dx = ex[j] - cx, dy = ey[j] - cy; if (dx * dx + dy * dy < r2 && ehp[j] < emaxhp[j]) ehp[j] = Math.min(emaxhp[j], ehp[j] + amt);
+      }
+    }
+    ehp[playerKing] = Math.min(emaxhp[playerKing], ehp[playerKing] + amt); addPuff(cx, cy, 0x6fe06f, 1.6);
+  };
+  const buffHorde = (dur: number): void => { hordeBuffSpeed = dur; hordeBuffDmg = dur; if (playerKing >= 0) addPuff(ex[playerKing], ey[playerKing], 0xffd24a, 1.8); };
+  const raiseDead = (n: number): void => { if (playerKing < 0 || !ealive[playerKing]) return; const kx = ex[playerKing], ky = ey[playerKing]; for (let s = 0; s < n; s++) if (freeTop > 0 || nEnt < CAP) { spawnE(kx + (rng() - 0.5) * 24, ky + (rng() - 0.5) * 24, playerFaction, rng() < 0.7 ? 0 : 2, PLAYER); } addPuff(kx, ky, FAC_PROJ[playerFaction].glow, 1.8); };
+  interface Abil { n: string; cd: number; go: () => void; }
+  // E + R je Fraktion (0 Mensch .. 5 Riese). Schaden/Heilung/Buff/Beschwören passend zum Fraktions-Charakter.
+  const ABIL: { e: Abil; r: Abil }[] = [
+    { e: { n: "Heilruf", cd: 13, go: () => healAllies(72, 55) }, r: { n: "Schlachtruf", cd: 20, go: () => buffHorde(9) } },              // Mensch
+    { e: { n: "Pfeilhagel", cd: 11, go: () => aoeDamage(52, 50) }, r: { n: "Segen", cd: 18, go: () => { healAllies(72, 32); buffHorde(7); } } }, // Elf
+    { e: { n: "Wuchtschlag", cd: 10, go: () => aoeDamage(44, 80) }, r: { n: "Blutrausch", cd: 18, go: () => buffHorde(10) } },              // Ork
+    { e: { n: "Erwecken", cd: 16, go: () => raiseDead(7) }, r: { n: "Seuche", cd: 14, go: () => aoeDamage(54, 46) } },                       // Untot
+    { e: { n: "Sprengladung", cd: 12, go: () => aoeDamage(40, 100) }, r: { n: "Steinhaut", cd: 20, go: () => { shieldTimer = 8; if (playerKing >= 0) addPuff(ex[playerKing], ey[playerKing], 0x9aa890, 1.6); } } }, // Zwerg
+    { e: { n: "Stampfer", cd: 10, go: () => aoeDamage(56, 80) }, r: { n: "Urzorn", cd: 20, go: () => { buffHorde(9); shieldTimer = Math.max(shieldTimer, 5); } } }, // Riese
+  ];
   // DASH: Burst ~26 Grid in Laufrichtung (begehbar bleiben). SCHILD: -50% Schaden für 5s.
   // Richtung direkt aus den Tasten (nicht aus pInX -> funktioniert auch wenn Richtung+Space gleichzeitig kommen).
   const doDash = (): boolean => {
@@ -1366,6 +1408,8 @@ async function main(): Promise<void> {
     if (!playerActive) return;
     if ((k === " " || e.code === "Space") && dashCd <= 0) { if (doDash()) dashCd = 5; }
     else if (k === "q" && shieldCd <= 0 && playerKing >= 0 && ealive[playerKing]) { shieldTimer = 5; shieldCd = 10; addPuff(ex[playerKing], ey[playerKing], 0x7fb0ff, 1.2); }
+    else if (k === "e" && eCd <= 0 && playerKing >= 0 && ealive[playerKing]) { const a = ABIL[playerFaction].e; a.go(); eCd = a.cd; audio.magic(ex[playerKing], ey[playerKing], playerFaction); } // E = Fraktions-Fähigkeit 1
+    else if (k === "r" && rCd <= 0 && playerKing >= 0 && ealive[playerKing]) { const a = ABIL[playerFaction].r; a.go(); rCd = a.cd; audio.magic(ex[playerKing], ey[playerKing], playerFaction); } // R = Fraktions-Fähigkeit 2
     else if (k === "f") { orderMode = orderMode === 2 ? 0 : 2; audio.play("ui"); }     // F = RÜCKZUG an König (toggle)
     else if (k === "g") { orderMode = 0; audio.play("ui"); }                            // G = FOLGEN/Sammeln (Befehl aufheben)
   });
@@ -1393,7 +1437,8 @@ async function main(): Promise<void> {
     for (let i = decorCount; i < nEnt; i++) {
       if (!ealive[i]) continue;
       const isPlayer = playerActive && i === playerKing;
-      const ty = etype[i], sp = T_speed[ty] * FAC_SPD[efac[i]] * (isPlayer && buffSpeed > 0 ? 1.5 : 1);
+      const mine = eowner[i] === PLAYER;
+      const ty = etype[i], sp = T_speed[ty] * FAC_SPD[efac[i]] * (isPlayer && buffSpeed > 0 ? 1.5 : 1) * (mine && hordeBuffSpeed > 0 ? 1.35 : 1);
       let tg = etarget[i];
       if (tg < 0 || !ealive[tg] || i % 32 === simFrame % 32) { const e = findEnemy(i); if (e >= 0) { etarget[i] = e; tg = e; } else if (tg >= 0 && !ealive[tg]) { etarget[i] = -1; tg = -1; } }
       let mvx = 0, mvy = 0;
@@ -1402,7 +1447,7 @@ async function main(): Promise<void> {
         const rng = ty === 5 && efac[i] === 1 ? 28 : T_range[ty];                          // Elf-Champion: große Reichweite
         if (d <= rng) {                                                                   // in Reichweite -> angreifen (auch Spieler)
           ecd[i] -= DT_FIX;
-          if (ecd[i] <= 0) { ecd[i] = T_cd[ty]; if (eranged[i]) { fireArrow(i, tg); eatk[i] = 10; } else { eatk[i] = 14; audio.play("melee", ex[i], ey[i]); ehp[tg] -= T_atk[ty] * FAC_DMG[efac[i]] * (isPlayer ? playerDmgMult * (buffDmg > 0 ? 1.5 : 1) : 1) * (tg === playerKing && shieldTimer > 0 ? 0.5 : 1); eflash[tg] = 6; if (ty === 5 && efac[i] === 2) cleave(i, tg); if (ehp[tg] <= 0) killE(tg); } } // Ork-Champion: Cleave
+          if (ecd[i] <= 0) { ecd[i] = T_cd[ty]; if (eranged[i]) { fireArrow(i, tg); eatk[i] = 10; } else { eatk[i] = 14; audio.play("melee", ex[i], ey[i]); ehp[tg] -= T_atk[ty] * FAC_DMG[efac[i]] * (isPlayer ? playerDmgMult * (buffDmg > 0 ? 1.5 : 1) : 1) * (mine && hordeBuffDmg > 0 ? 1.35 : 1) * (tg === playerKing && shieldTimer > 0 ? 0.5 : 1); eflash[tg] = 6; if (ty === 5 && efac[i] === 2) cleave(i, tg); if (ehp[tg] <= 0) killE(tg); } } // Ork-Champion: Cleave
           if (eranged[i] && d < 16 && !isPlayer) { mvx = -dx / d * sp; mvy = -dy / d * sp; } // Fernkämpfer kitet
         } else if (!isPlayer) { mvx = dx / d * sp; mvy = dy / d * sp; }                   // hinlaufen (Spieler steuert selbst)
       }
@@ -1418,7 +1463,7 @@ async function main(): Promise<void> {
         }
       }
       if (!isPlayer && mvx === 0 && mvy === 0) {                                          // kein Kampf-Move -> Zielpunkt je Befehl ansteuern
-        const k = kingIdx[eowner[i]], mine = eowner[i] === PLAYER;
+        const k = kingIdx[eowner[i]];
         let gxT: number, gyT: number, hold: number, viaFlow: boolean;
         if (orderMode === 1 && mine) { gxT = orderX; gyT = orderY; hold = 9; viaFlow = false; }                // ANGRIFF: zum Rallypunkt marschieren
         else if (k >= 0 && k !== i) { gxT = ex[k]; gyT = ey[k]; hold = orderMode === 2 && mine ? 5 : 15; viaFlow = true; } // FOLGEN/RÜCKZUG: zum König (Flow umgeht Wasser/Berge)
@@ -1509,7 +1554,7 @@ async function main(): Promise<void> {
       <div class="row"><span>Fraktion</span>${FAC_NAMES.map((n, i) => mbtn(n, "fac" + i, playerFaction === i)).join("")}</div>
       <div class="row"><span>Schwierigkeit</span>${DIFF.map((d, i) => mbtn(d.label, "dif" + i, difficulty === i)).join("")}</div>
       <button class="play" data-on="play">SPIELEN</button>
-      <p class="hint">WASD / Pfeile bewegen · bei deiner Horde bleiben · grüne Seelen einsammeln</p></div>`;
+      <p class="hint">WASD bewegen · Space Dash · Q Schild · E/R Fraktions-Fähigkeiten · Rechtsklick Angriff · F Rückzug · G Folgen · Seelen sammeln · Bäume fällt der König</p></div>`;
   };
   const showMenu = (): void => { gameState = "menu"; playerActive = false; audio.setAmbient(false); newRound(); overlay.style.display = "flex"; renderMenu(); };
   const startGame = (): void => { gameState = "playing"; playerActive = true; survT = 0; audio.start(); audio.setAmbient(true); newRound(); overlay.style.display = "none"; };
@@ -1571,7 +1616,7 @@ async function main(): Promise<void> {
       const gdx = ksx + ksy, gdy = -ksx + ksy, m = Math.hypot(gdx, gdy);
       if (m > 0) { pInX = gdx / m; pInY = gdy / m; } else { pInX = 0; pInY = 0; } }
     // Fähigkeits-Cooldowns + Buff-Timer + Überlebenszeit (Echtzeit)
-    { const sdt = dms / 1000; if (dashCd > 0) dashCd = Math.max(0, dashCd - sdt); if (shieldCd > 0) shieldCd = Math.max(0, shieldCd - sdt); if (shieldTimer > 0) shieldTimer = Math.max(0, shieldTimer - sdt); if (buffSpeed > 0) buffSpeed = Math.max(0, buffSpeed - sdt); if (buffDmg > 0) buffDmg = Math.max(0, buffDmg - sdt); if (gameState === "playing") survT += sdt; }
+    { const sdt = dms / 1000; if (dashCd > 0) dashCd = Math.max(0, dashCd - sdt); if (shieldCd > 0) shieldCd = Math.max(0, shieldCd - sdt); if (shieldTimer > 0) shieldTimer = Math.max(0, shieldTimer - sdt); if (buffSpeed > 0) buffSpeed = Math.max(0, buffSpeed - sdt); if (buffDmg > 0) buffDmg = Math.max(0, buffDmg - sdt); if (eCd > 0) eCd = Math.max(0, eCd - sdt); if (rCd > 0) rCd = Math.max(0, rCd - sdt); if (hordeBuffSpeed > 0) hordeBuffSpeed = Math.max(0, hordeBuffSpeed - sdt); if (hordeBuffDmg > 0) hordeBuffDmg = Math.max(0, hordeBuffDmg - sdt); if (gameState === "playing") survT += sdt; }
     // Fixed-Step-Sim: so viele 30Hz-Ticks wie nötig (max 5 gegen Spiral-of-Death).
     accSim += dms;
     let steps = 0;
@@ -1706,7 +1751,9 @@ async function main(): Promise<void> {
       const dashS = dashCd > 0 ? `${Math.ceil(dashCd)}s` : "●", shieldS = shieldTimer > 0 ? `aktiv ${Math.ceil(shieldTimer)}s` : shieldCd > 0 ? `${Math.ceil(shieldCd)}s` : "●";
       const buffs = (buffSpeed > 0 ? " ⚡Tempo" : "") + (buffDmg > 0 ? " ⚔Schaden" : "");
       const cmd = ["Folgen", "⚔ANGRIFF", "🛡RÜCKZUG"][orderMode];
-      hud.textContent = `Horde.IO — ${me} · Könige ${kingsAlive}/${PLAYERS} · ${total} Units · Befehl: ${cmd} (Rechtsklick=Angriff F=Rückzug G=Folgen) · WASD · Dash(Space) ${dashS} · Schild(Q) ${shieldS}${buffs} · ${app.ticker.FPS.toFixed(0)} FPS (sim ${simMs.toFixed(1)}/sort ${sortMs.toFixed(1)}) · Sturm R${zoneR | 0}`;
+      const ab = ABIL[playerFaction], eS = eCd > 0 ? `${Math.ceil(eCd)}s` : "●", rS = rCd > 0 ? `${Math.ceil(rCd)}s` : "●";
+      const hb = (hordeBuffSpeed > 0 || hordeBuffDmg > 0) ? " ★Buff" : "";
+      hud.textContent = `Horde.IO — ${me} · Könige ${kingsAlive}/${PLAYERS} · ${total} Units · Befehl: ${cmd} (Rechtsklick/F/G) · Dash(Space) ${dashS} · Schild(Q) ${shieldS} · ${ab.e.n}(E) ${eS} · ${ab.r.n}(R) ${rS}${buffs}${hb} · ${app.ticker.FPS.toFixed(0)} FPS (sim ${simMs.toFixed(1)}) · Sturm R${zoneR | 0}`;
       const roundOver = kingsAlive <= 1;
       if (playerActive && gameState === "playing" && (roundOver || !pAlive)) {
         const place = pAlive ? 1 : kingsAlive + 1, tsec = survT | 0;
