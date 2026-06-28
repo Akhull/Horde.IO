@@ -385,13 +385,15 @@ function palette(cloth: number, skin: number, accent: number, metalBase = 0x9aa3
 }
 // 6 FRAKTIONEN mit EIGENER Identität (Palette + Körper-Profil + Kopf + Signatur) — nicht nur Recolor.
 // human Argent Crown · elf Sylvan Wardens · orc Broken Tusk · undead Pale Legion · dwarf Ironbeards · giant Trollkin.
+// HINWEIS: cloth ist absichtlich NEUTRAL-hell (nimmt die TEAM-Farbe als Tint sauber an, 16 Teams trennbar).
+// Fraktions-Identität kommt aus Haut/Kopf/Waffe/Akzent/Haltung (skin/accent/metal bleiben fraktionsspezifisch).
 const PAL: Record<string, Palette> = {
-  human: palette(0x35508f, 0xe6b088, 0xffcf3d, 0xc4ccd8), // Königsblau + helle Haut + Gold + helles Stahl
-  elf: palette(0x2f7d4f, 0xe6d2b8, 0xe8d27a, 0x8c9a82),   // Blattgrün + Elfenbein + Pale-Gold + Salbei-Metall
-  orc: palette(0x6e5740, 0x4e6e38, 0xb23a2a, 0x3a3d40),   // Lederbraun + Moosgrün-Haut + Blut + fast-schwarzes Eisen
-  undead: palette(0x3c4636, 0x9aa890, 0x6cff8a, 0x6b7d68), // Oliv-Lumpen + Knochen + Nekro-Grün + Grünspan
-  dwarf: palette(0x8a4f2a, 0xb8410f, 0xd9a441, 0x7d8388), // Rost + Kupfer-Bart(skin) + Gold + Eisen
-  giant: palette(0x6f5b48, 0x7d8a72, 0x6fae4a, 0x55504a), // Lederbraun + grau-grüner Stein + Moos + Steingrau
+  human: palette(0xc8ccd4, 0xe6b088, 0xffcf3d, 0xc4ccd8), // neutrale Tunika + helle Haut + Gold + helles Stahl
+  elf: palette(0xccd2d8, 0xe6d2b8, 0xe8d27a, 0x8c9a82),   // helle Robe + Elfenbein + Pale-Gold + Salbei-Metall
+  orc: palette(0xb6bac2, 0x4e6e38, 0xb23a2a, 0x3a3d40),   // raue Felle + Moosgrün-Haut + Blut + fast-schwarzes Eisen
+  undead: palette(0xacb0b8, 0x9aa890, 0x6cff8a, 0x6b7d68), // Lumpen + Knochen + Nekro-Grün + Grünspan
+  dwarf: palette(0xc0c4cc, 0xb8410f, 0xd9a441, 0x7d8388), // Kittel + Kupfer-Bart(skin) + Gold + Eisen
+  giant: palette(0xb2b6be, 0x7d8a72, 0x6fae4a, 0x55504a), // Lendenschurz + grau-grüner Stein + Moos + Steingrau
 };
 // FRAKTIONS-PROJEKTILE (Magier-Bolt + Stab-Orb + Treffer/Tod-FX): core = heller Kern, glow = Hülle/Spur.
 // Auf einen Blick distinkt: Mensch gold-weiß · Elf mint · Ork rot-orange · Untot giftgrün · Zwerg bernstein · Riese grau-staub.
@@ -941,7 +943,13 @@ async function main(): Promise<void> {
   const T_hp = Float32Array.from(T, (s) => s.hp), T_atk = Float32Array.from(T, (s) => s.atk);
   const T_range = Float32Array.from(T, (s) => s.range), T_cd = Float32Array.from(T, (s) => s.cd);
   const T_speed = Float32Array.from(T, (s) => s.speed), T_scale = Float32Array.from(T, (s) => s.scale);
-  const FACTION_COL = [0x9fb8ff, 0x8fe39a, 0xe2795a, 0xb6f0c0, 0xe8a24a, 0x9aa890]; // blau·grün·rot·nekro-grün·kupfer·stein
+  const FACTION_COL = [0x9fb8ff, 0x8fe39a, 0xe2795a, 0xb6f0c0, 0xe8a24a, 0x9aa890]; // blau·grün·rot·nekro-grün·kupfer·stein (Tod-FX)
+  // 16 TEAM-Farben unabhängig von der Fraktion (Körper-Tint je König/Owner) -> Teams auf einen Blick trennbar.
+  // Fraktion liest man an der SILHOUETTE (Waffe/Haltung/Kopf), das Team an der FARBE. Gut getrennte Hues.
+  const TEAM_COL = [
+    0x4a78ff, 0xff4d4d, 0x46d24a, 0xffd23a, 0xb060ff, 0xff8a3a, 0x2ad6c8, 0xff5ab0,
+    0x9acb3a, 0x8c8cff, 0xc8503a, 0x3ad29a, 0xe8e8e8, 0xa86a2a, 0x7a5ad6, 0xd0d040,
+  ];
   // Fraktions-Identität (Werte aus den Profilen): hp/speed/damage-Mults + Anzeige-Skala je Fraktion.
   const FAC_HP = Float32Array.from(FAC_ORDER, (f) => PROF[f].hp), FAC_SPD = Float32Array.from(FAC_ORDER, (f) => PROF[f].spd);
   const FAC_DMG = Float32Array.from(FAC_ORDER, (f) => PROF[f].dmg), FAC_SCALE = Float32Array.from(FAC_ORDER, (f) => PROF[f].scale);
@@ -1166,8 +1174,9 @@ async function main(): Promise<void> {
   // der König trägt schon eine Krone). bg = Fraktions-Rahmen, fill = HP (grün->gelb->rot).
   interface KingFX { i: number; bg: Sprite; fill: Sprite; }
   const kingFX: KingFX[] = [];
-  const addKingFX = (i: number, f: number): void => {
-    const bg = new Sprite(Texture.WHITE); bg.anchor.set(0.5, 0.5); bg.tint = FACTION_COL[f]; bg.height = 6; bannersLayer.addChild(bg);
+  const addKingFX = (i: number, owner: number): void => {
+    const bg = new Sprite(Texture.WHITE); bg.anchor.set(0.5, 0.5); bg.tint = TEAM_COL[owner]; bg.height = 6; bannersLayer.addChild(bg); // Rahmen = Team-Farbe
+
     const fill = new Sprite(Texture.WHITE); fill.anchor.set(0, 0.5); fill.height = 4; bannersLayer.addChild(fill);
     kingFX.push({ i, bg, fill });
   };
@@ -1204,7 +1213,7 @@ async function main(): Promise<void> {
     const ox = app.screen.width - MINI - MINI_PAD, oy = app.screen.height - MINI - MINI_PAD, sc = MINI / MAP;
     mini.rect(ox, oy, MINI, MINI).fill({ color: 0x0a1422, alpha: 0.72 }).stroke({ color: 0x3a5a86, width: 2 });
     mini.circle(ox + zoneX * sc, oy + zoneY * sc, zoneR * sc).stroke({ color: 0x8af0ff, width: 1.5, alpha: 0.85 });
-    for (let p = 0; p < PLAYERS; p++) { const k = kingIdx[p]; if (k < 0) continue; const isP = k === playerKing; mini.circle(ox + ex[k] * sc, oy + ey[k] * sc, isP ? 4 : 2.2).fill(isP ? 0xffffff : FACTION_COL[efac[k]]); }
+    for (let p = 0; p < PLAYERS; p++) { const k = kingIdx[p]; if (k < 0) continue; const isP = k === playerKing; mini.circle(ox + ex[k] * sc, oy + ey[k] * sc, isP ? 4 : 2.2).fill(isP ? 0xffffff : TEAM_COL[eowner[k]]); }
   };
   // BALLISTISCHE PFEILE (Feel aus dem Original: Bogen-Wurf mit z-Höhe+Schwerkraft, dreht zur Flugrichtung,
   // Staub beim Einschlag). gx/gy homen aufs Ziel, z = Sinus-Bogen über die Flugdauer. tgt = Entity-ID.
@@ -1237,7 +1246,7 @@ async function main(): Promise<void> {
     const spreadR = Math.min(110, Math.max(8, Math.sqrt(perHorde) * 1.5)); // Streuung skaliert mit Hordengröße -> keine 1000+-Units-pro-Zelle (findEnemy/Separation bezahlbar)
     for (let pi = 0; pi < PLAYERS; pi++) {
       const f = pi === PLAYER ? playerFaction : pi % 6, c = placeOnLand(); // owner = pi (König-Team); Spieler bekommt gewählte Fraktion
-      const king = spawnE(c.gx, c.gy, f, 4, pi); kingIdx[pi] = king; addKingFX(king, f);
+      const king = spawnE(c.gx, c.gy, f, 4, pi); kingIdx[pi] = king; addKingFX(king, pi);
       if (pi === PLAYER) { emaxhp[king] *= DIFF[difficulty].hp; ehp[king] = emaxhp[king]; } // Schwierigkeit -> Spieler-König-HP
       for (let i = 0; i < perHorde; i++) {
         const r = rng(), ty = r < 0.50 ? 0 : r < 0.68 ? 1 : r < 0.80 ? 2 : r < 0.90 ? 3 : 6; // ~10% Magier
@@ -1319,7 +1328,8 @@ async function main(): Promise<void> {
         if (eatk[u] > 0) fr = eatk[u] > 8 ? 4 : 5;
         else { const moving = Math.abs(ex[u] - prevX[u]) + Math.abs(ey[u] - prevY[u]) > 0.05; fr = moving ? (((time * 8 + u * 0.7) | 0) & 3) : 1; }
         p.texture = FRAMES[unitFrame(efac[u], etype[u], fr)];
-        p.tint = eflash[u] > 0 ? 0xff5555 : u === playerKing && shieldTimer > 0 ? 0x8fc4ff : 0xffffff; p.alpha = 1;
+        p.tint = eflash[u] > 0 ? 0xff5555 : u === playerKing && shieldTimer > 0 ? 0x8fc4ff : TEAM_COL[eowner[u]]; p.alpha = 1; // Team-Farbe als Körper-Tint
+
       }
     }
     for (let k = n; k < lastDrawn; k++) pool[k].alpha = 0; // pensionierte Slots einmalig parken
