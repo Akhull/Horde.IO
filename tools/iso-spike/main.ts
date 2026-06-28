@@ -675,10 +675,12 @@ class AudioManager {
   private rr: Record<string, number> = {};
   private last: Record<string, number> = {};
   private def: Record<string, SoundDef> = {
-    arrow: { gap: 45, vol: 0.5 }, melee: { gap: 40, vol: 0.55 }, collapse: { gap: 120, vol: 0.9 },
+    arrow: { gap: 45, vol: 0.45 }, melee: { gap: 40, vol: 0.3 }, collapse: { gap: 120, vol: 0.9 }, // Schwerthieb leiser (war zu dominant)
     death_human: { gap: 60, vol: 0.5 }, death_elf: { gap: 60, vol: 0.5 }, death_orc: { gap: 60, vol: 0.5 },
     footstep: { gap: 240, vol: 0.4 }, ui: { gap: 30, vol: 0.7 },
   };
+  private actx: AudioContext | null = null;          // WebAudio nur für prozedurale Magie-Sounds (es gibt keine Magie-Dateien)
+  private magicLast = -1e9;
   constructor() {
     try { const s = JSON.parse(localStorage.getItem("hordeio_audio") || "{}"); if (typeof s.master === "number") this.master = s.master; if (typeof s.music === "number") this.music = s.music; if (typeof s.sfx === "number") this.sfx = s.sfx; if (typeof s.muted === "boolean") this.muted = s.muted; } catch { /* defaults */ }
     this.musicEl = new Audio(A_ENC(SND.music[0])); this.musicEl.loop = true; this.musicEl.preload = "auto";
@@ -731,7 +733,33 @@ class AudioManager {
     this.last[name] = now;
     const pool = this.pools[name]; const i = this.rr[name] = (this.rr[name] + 1) % pool.length;
     const el = pool[i];
+    el.playbackRate = 0.9 + Math.random() * 0.2;       // Tempo/Pitch leicht variieren -> nicht 100x exakt derselbe Sound
     el.volume = v > 1 ? 1 : v; el.currentTime = 0; el.play().catch(() => {});
+  }
+  private ensureCtx(): AudioContext | null {
+    if (!this.actx) { try { this.actx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)(); } catch { return null; } }
+    if (this.actx.state === "suspended") this.actx.resume().catch(() => {});
+    return this.actx;
+  }
+  // PROZEDURALE MAGIE: kurzer abfallender Ton (Oszillator-Sweep), Grundfrequenz je Fraktion + Zufalls-Variation.
+  // Distanz-Gate + Throttle wie SFX. Riese tief/grollend, Elf hell/schimmernd, Ork tief, Untot verstimmt.
+  magic(gx: number, gy: number, fac: number): void {
+    if (!this.started || this.muted) return;
+    const dx = gx - this.lx, dy = gy - this.ly, d2 = dx * dx + dy * dy;
+    if (d2 > this.hearR2) return;
+    let v = this.master * this.sfx * 0.32;
+    if (d2 > this.falloff2) v *= 1 - (Math.sqrt(d2) - this.falloff) / (this.hearR - this.falloff);
+    if (v < 0.02) return;
+    const now = performance.now(); if (now - this.magicLast < 55) return; this.magicLast = now;
+    const ac = this.ensureCtx(); if (!ac) return;
+    const FBASE = [560, 720, 360, 470, 430, 300][fac] ?? 500;            // Fraktions-Tonhöhe
+    const base = FBASE * (0.9 + Math.random() * 0.2), t = ac.currentTime;
+    const osc = ac.createOscillator(), g = ac.createGain();
+    osc.type = fac === 3 ? "sawtooth" : fac === 1 ? "sine" : "triangle"; // Untot verstimmt-rau, Elf rein
+    osc.frequency.setValueAtTime(base * 1.7, t); osc.frequency.exponentialRampToValueAtTime(base * 0.55, t + 0.17);
+    if (fac === 3) osc.detune.setValueAtTime(-30, t);
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(v, t + 0.012); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.22);
+    osc.connect(g).connect(ac.destination); osc.start(t); osc.stop(t + 0.24);
   }
 }
 
@@ -1142,7 +1170,7 @@ async function main(): Promise<void> {
     const bolt = etype[i] === 6 ? 1 : 0, fac = efac[i];
     const spr = new Sprite(bolt ? boltTex[fac] : arrowTex); spr.anchor.set(0.5); if (bolt) spr.scale.set(1 + Math.min(0.5, d * 0.01)); arrowsLayer.addChild(spr);
     arrows.push({ sx: ex[i], sy: ey[i], tx: ex[tgt], ty: ey[tgt], gx: ex[i], gy: ey[i], tgt, dmg: T_atk[etype[i]] * FAC_DMG[fac] * (playerActive && i === playerKing ? playerDmgMult * (buffDmg > 0 ? 1.5 : 1) : 1), age: 0, T: Math.max(0.28, d * 0.02 + 0.12), apex: bolt ? Math.min(22, 4 + d * 0.4) : Math.min(60, 12 + d * 1.1), spr, psx: 0, psy: 0, bolt, fac });
-    audio.play("arrow", ex[i], ey[i]);
+    if (bolt) audio.magic(ex[i], ey[i], fac); else audio.play("arrow", ex[i], ey[i]); // Magier: prozedurale Magie; Bogen: Pfeil-Sound
   };
   // RUNDE: PLAYERS Horden frisch spawnen (Gesamtzahl = reqUnits) + Sturm zurücksetzen.
   const newRound = (): void => {
