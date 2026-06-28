@@ -932,21 +932,27 @@ async function main(): Promise<void> {
     if (!ok) continue;
     decorPlan.push({ gx, gy, dt: 3 + (i % 2) });
   }
-  // STÄDTE: Zentren auf flachem Gras, Gebäude drumherum clustern.
-  const towns: { gx: number; gy: number }[] = [];
-  for (let g = 0; g < 20000 && towns.length < 26; g++) {
+  // SIEDLUNGEN in TIERS: DÖRFER (klein, billo Scheunen/Häuser, keine Türme) vs STÄDTE (groß, mehr Häuser,
+  // zentrale Kaserne + Verteidigungstürme am Rand, die zurückschießen). Tier entscheidet Loot + Gegenwehr.
+  const towns: { gx: number; gy: number; town: boolean }[] = [];
+  for (let g = 0; g < 20000 && towns.length < 24; g++) {
     const gx = 14 + rng() * (MAP - 28), gy = 14 + rng() * (MAP - 28), h = sampleH(gx, gy);
-    if (h > 0.43 && h < 0.58 && slopeAt(gx, gy) < 0.022 && dry(gx, gy) && towns.every((t) => Math.hypot(t.gx - gx, t.gy - gy) > 34)) towns.push({ gx, gy });
+    if (h > 0.43 && h < 0.58 && slopeAt(gx, gy) < 0.022 && dry(gx, gy) && towns.every((t) => Math.hypot(t.gx - gx, t.gy - gy) > 34)) towns.push({ gx, gy, town: rng() < 0.4 });
   }
+  const baseTarget = Math.ceil(BUILDINGS / Math.max(1, towns.length));
   for (const t of towns) {
-    let n = 0, g2 = 0;
-    const target = Math.ceil(BUILDINGS / Math.max(1, towns.length));
-    while (n < target && g2 < 800) {
+    const rad = t.town ? 22 : 12, want = t.town ? Math.ceil(baseTarget * 1.35) : Math.max(4, Math.ceil(baseTarget * 0.6));
+    let n = 0, g2 = 0, towersPlaced = 0;
+    if (t.town) { decorPlan.push({ gx: t.gx, gy: t.gy, dt: 8 }); n++; } // STADT: zentrale Kaserne (Rekruten-Hub)
+    while (n < want && g2 < 1400) {
       g2++;
-      const a = rng() * Math.PI * 2, r = rng() * 20;
+      const a = rng() * Math.PI * 2, r = (t.town ? 4 : 0) + rng() * rad;
       const gx = t.gx + Math.cos(a) * r, gy = t.gy + Math.sin(a) * r, h = sampleH(gx, gy);
       if (h < 0.42 || h > 0.62 || slopeAt(gx, gy) > 0.03 || !dry(gx, gy)) continue;
-      decorPlan.push({ gx, gy, dt: 5 + ((rng() * 4) | 0) }); n++;
+      let dt: number;
+      if (t.town && towersPlaced < 3 && r > rad * 0.62 && rng() < 0.5) { dt = 7; towersPlaced++; } // Türme am Stadtrand
+      else dt = rng() < (t.town ? 0.45 : 0.72) ? 5 : 6;                  // Dorf = mehr Scheunen (billo), Stadt = mehr Häuser
+      decorPlan.push({ gx, gy, dt }); n++;
     }
   }
 
@@ -978,11 +984,16 @@ async function main(): Promise<void> {
   // Fraktions-Identität (Werte aus den Profilen): hp/speed/damage-Mults + Anzeige-Skala je Fraktion.
   const FAC_HP = Float32Array.from(FAC_ORDER, (f) => PROF[f].hp), FAC_SPD = Float32Array.from(FAC_ORDER, (f) => PROF[f].spd);
   const FAC_DMG = Float32Array.from(FAC_ORDER, (f) => PROF[f].dmg), FAC_SCALE = Float32Array.from(FAC_ORDER, (f) => PROF[f].scale);
+  // MINION-STUFEN (Vasallen-Tiers wie im Original): Index = elevel. Höhere Stufe = mehr HP/Schaden/Größe.
+  const LV_HP = [1, 1, 1.5, 2.1], LV_DMG = [1, 1, 1.32, 1.7], LV_SCALE = [1, 1, 1.13, 1.27];
+  // ORB-ARTEN: 0 grün (rekrutieren) · 1 blau (L1->L2) · 2 lila (L2->L3) · 3 gold (Champion). Farbe = Funktion.
+  const SOUL_TINT = [0x8fe39a, 0x6fbfff, 0xc06bff, 0xffd24a];
 
   // Unit-Anzahl per ?units=N skalierbar (Benchmark) — Default = 16 Horden wie bisher.
   const reqUnits = Math.max(PLAYERS * 4, parseInt(params.get("units") ?? "", 10) || PLAYERS * (HORDE + 1));
-  const DECOR_MAX = TREES + ((TREES * 0.2) | 0) + BUILDINGS + 100;      // Deko als Entities (Bäume/Steine/Gebäude)
-  const CAP = reqUnits + DECOR_MAX + 64;                               // SoA-Kapazität: Units + Deko + Headroom
+  const DECOR_MAX = TREES + ((TREES * 0.2) | 0) + ((BUILDINGS * 1.5) | 0) + 120; // Deko (Bäume/Steine/Gebäude); Stadt-Tier kann mehr Häuser haben
+  const GROWTH = Math.min(4000, Math.max(512, (reqUnits * 0.6) | 0));  // Wachstums-Headroom für rekrutierte Vasallen (Orb-Economy)
+  const CAP = reqUnits + DECOR_MAX + GROWTH + 64;                      // SoA-Kapazität: Units + Deko + Wachstum + Headroom
   // — SoA-Felder (Index i = Entity-ID). Kein Objekt-Pointer mehr (target = Int32-ID), kein GC. —
   const ex = new Float32Array(CAP), ey = new Float32Array(CAP);         // Welt gx/gy (Sim-Stand nach letztem Tick)
   const prevX = new Float32Array(CAP), prevY = new Float32Array(CAP);   // gx/gy vor dem letzten Tick (Render-Interpolation)
@@ -992,8 +1003,11 @@ async function main(): Promise<void> {
   const efac = new Uint8Array(CAP), etype = new Uint8Array(CAP), eking = new Uint8Array(CAP), eranged = new Uint8Array(CAP), ealive = new Uint8Array(CAP), evis = new Uint8Array(CAP);
   const eowner = new Uint8Array(CAP);   // König-/Team-ID (0..PLAYERS-1). FFA: anderer Owner = Feind. efac = nur Optik.
   const edecor = new Uint8Array(CAP);   // 0 = Unit, sonst Deko-Typ+1 (Baum/Stein/Gebäude) -> sortiert mit Units, keine Sim
+  const elevel = new Uint8Array(CAP);   // Minion-Stufe 1..3 (0 = König/Champion/Deko). Blau-Orb L1->L2, Lila-Orb L2->L3 -> stärkere Horde.
   let decorCount = 0;                   // erste decorCount Indizes = Deko (bleiben über Runden erhalten)
-  const buildingIdx: number[] = [];     // zerstörbare Gebäude (im Grid -> Units greifen an -> Rekruten-Seelen)
+  const buildingIdx: number[] = [];     // zerstörbare Gebäude (im Grid -> Units greifen an -> Rekruten-/Upgrade-Orbs)
+  const towers: { i: number; cd: number }[] = []; // VERTEIDIGUNGSTÜRME (Stadt-Tier): schießen auf die nächste Unit in Reichweite
+  const TOWER_RANGE2 = 30 * 30, TOWER_CD = 90;    // Turm-Reichweite² / Feuer-Cooldown (Sim-Ticks)
   const etarget = new Int32Array(CAP);
   const PLAYER = 0;                      // owner 0 = der Spieler-König
   const kingIdx = new Int32Array(PLAYERS).fill(-1); // Entity-ID des Königs je Owner (-1 = tot) -> Horde folgt IHM
@@ -1108,17 +1122,17 @@ async function main(): Promise<void> {
   const hitFX = (gx: number, gy: number, fac: number): void => { addPuff(gx, gy, FAC_PROJ[fac].glow, 0.5); addPuff(gx, gy, FAC_PROJ[fac].core, 0.28); };
   // SEELEN (Kern-Loop): gefallene Units lassen NAHE dem Spieler-König eine Seele fallen; der König
   // sammelt sie ein -> seine Horde wächst (kämpfen -> Seelen -> größere Horde). Nur nahe Spawns, gedeckelt.
-  interface Soul { gx: number; gy: number; spr: Sprite; gold: boolean; }
+  interface Soul { gx: number; gy: number; spr: Sprite; kind: number; } // kind: 0 grün · 1 blau · 2 lila · 3 gold
   const souls: Soul[] = [];
   const SOUL_CAP = 500;
-  const dropSoul = (gx: number, gy: number): void => {
+  const dropSoul = (gx: number, gy: number, kind = 0): void => {
     if (souls.length >= SOUL_CAP || playerKing < 0 || !ealive[playerKing]) return;
     const dx = gx - ex[playerKing], dy = gy - ey[playerKing];
     if (dx * dx + dy * dy > 250 * 250) return;                          // nur nahe dem Spieler -> keine Sprite-Flut
-    const gold = rng() < 0.045;                                 // seltene Gold-Seele -> Champion
-    const spr = new Sprite(orbTex); spr.anchor.set(0.5); spr.tint = gold ? 0xffd24a : 0x8fe39a; spr.scale.set(gold ? 0.62 : 0.42);
+    if (kind === 0 && rng() < 0.045) kind = 3;                          // seltene Gold-Seele aus grünen Drops -> Champion
+    const spr = new Sprite(orbTex); spr.anchor.set(0.5); spr.tint = SOUL_TINT[kind]; spr.scale.set(kind === 3 ? 0.62 : 0.44);
     const p = worldToIso(gx, gy); spr.x = p.x; spr.y = p.y - elevLift(sampleH(gx, gy)) - 4;
-    fxLayer.addChild(spr); souls.push({ gx, gy, spr, gold });
+    fxLayer.addChild(spr); souls.push({ gx, gy, spr, kind });
   };
   // Seele eingesammelt -> König-XP; bei Stufenaufstieg +HP (sofort geheilt), +Schaden, +Größe (gedeckelt St. 6).
   const onPlayerSoul = (): void => {
@@ -1128,6 +1142,22 @@ async function main(): Promise<void> {
       playerSizeMult = Math.min(1.3, 1 + (playerLevel - 1) * 0.05); playerDmgMult = 1 + (playerLevel - 1) * 0.08;
       if (playerKing >= 0 && ealive[playerKing]) { emaxhp[playerKing] += 28; ehp[playerKing] = Math.min(emaxhp[playerKing], ehp[playerKing] + 28); addPuff(ex[playerKing], ey[playerKing], 0xffd24a, 1.2); }
     }
+  };
+  // MINION aufstufen: +Stufe, +40% HP (sofort anteilig geheilt); Größe/Schaden skalieren automatisch (LV_*).
+  const upgradeMinion = (i: number): void => {
+    if (elevel[i] >= 3) return;
+    elevel[i]++; const add = emaxhp[i] * 0.4; emaxhp[i] += add; ehp[i] = Math.min(emaxhp[i], ehp[i] + add);
+    addPuff(ex[i], ey[i], elevel[i] === 3 ? 0xc06bff : 0x6fbfff, 1.1);
+  };
+  // nächsten Spieler-Vasall der Stufe fromLv (zum König) finden + aufstufen (Blau/Lila-Orb). false = kein Kandidat.
+  const upgradePlayerMinion = (fromLv: number): boolean => {
+    if (playerKing < 0) return false;
+    let best = -1, bestD = 1e9; const kx = ex[playerKing], ky = ey[playerKing];
+    for (let i = decorCount; i < nEnt; i++) {
+      if (!ealive[i] || eowner[i] !== PLAYER || elevel[i] !== fromLv) continue;
+      const dx = ex[i] - kx, dy = ey[i] - ky, d = dx * dx + dy * dy; if (d < bestD) { bestD = d; best = i; }
+    }
+    if (best < 0) return false; upgradeMinion(best); return true;
   };
   // POWER-UPS: verstreute Buffs (0 Tempo · 1 Schaden · 2 Heilung · 3 Schild). Beim Aufsammeln neu platziert
   // (bleiben als Karten-Ressource). Nur der Spieler-König nutzt sie.
@@ -1142,7 +1172,7 @@ async function main(): Promise<void> {
   const spawnE = (gx: number, gy: number, f: number, ty: number, owner: number): number => {
     const i = freeTop > 0 ? freeStack[--freeTop] : nEnt++;
     ex[i] = gx; ey[i] = gy; prevX[i] = gx; prevY[i] = gy; evx[i] = 0; evy[i] = 0; emaxhp[i] = T_hp[ty] * FAC_HP[f]; ehp[i] = emaxhp[i]; ecd[i] = rng() * T_cd[ty]; eflash[i] = 0; eatk[i] = 0;
-    efac[i] = f; etype[i] = ty; eowner[i] = owner; edecor[i] = 0; eking[i] = ty === 4 ? 1 : 0; eranged[i] = T_range[ty] > 20 || (ty === 5 && f === 1) ? 1 : 0; ealive[i] = 1; etarget[i] = -1; // Elf-Champion = Fernkämpfer
+    efac[i] = f; etype[i] = ty; eowner[i] = owner; edecor[i] = 0; eking[i] = ty === 4 ? 1 : 0; eranged[i] = T_range[ty] > 20 || (ty === 5 && f === 1) ? 1 : 0; elevel[i] = ty === 4 || ty === 5 ? 0 : 1; ealive[i] = 1; etarget[i] = -1; // Elf-Champion = Fernkämpfer; Vasallen starten L1
     const p = worldToIso(gx, gy); screenX[i] = p.x; footY[i] = p.y - elevLift(sampleH(gx, gy));
     return i;
   };
@@ -1151,7 +1181,7 @@ async function main(): Promise<void> {
     const i = nEnt++;
     ex[i] = gx; ey[i] = gy; prevX[i] = gx; prevY[i] = gy; ealive[i] = 1; edecor[i] = dt + 1;
     efac[i] = 0; etype[i] = 0; eowner[i] = 255; eflash[i] = 0; eatk[i] = 0; etarget[i] = -1; eking[i] = 0; eranged[i] = 0;
-    if (dt >= 5) { ehp[i] = 200; emaxhp[i] = 200; buildingIdx.push(i); }   // Gebäude: zerstörbar (Rekruten-Quelle)
+    if (dt >= 5) { const hp = dt === 7 ? 320 : dt === 8 ? 260 : 160; ehp[i] = hp; emaxhp[i] = hp; buildingIdx.push(i); if (dt === 7) towers.push({ i, cd: rng() * TOWER_CD }); } // Turm zäh+schießt · Kaserne mittel · Häuser/Scheunen billo
     else if (dt < 3) { ehp[i] = TREE_HP_V; emaxhp[i] = TREE_HP_V; treeAt[(gx | 0) * N + (gy | 0)] = i; } // Baum: vom König fällbar
     const p = worldToIso(gx, gy); screenX[i] = p.x; footY[i] = p.y - elevLift(sampleH(gx, gy));
   };
@@ -1159,9 +1189,17 @@ async function main(): Promise<void> {
   decorCount = nEnt;                                                    // Units spawnen ab hier; Deko bleibt unten
   const killE = (i: number): void => {
     if (!ealive[i]) return;
-    if (edecor[i]) { // Gebäude/Deko zerstört: Gebäude (edecor>=6) droppt Rekruten-Seelen -> Armee wächst. KEIN Freelist (Deko-Slot bleibt reserviert).
+    if (edecor[i]) { // Gebäude/Deko zerstört: Gebäude droppen TYP-Orbs (Scheune grün · Haus blau · Turm lila · Kaserne grün-Bündel+Gold). KEIN Freelist (Deko-Slot bleibt reserviert).
       ealive[i] = 0;
-      if (edecor[i] >= 6) { addPuff(ex[i], ey[i], 0xffd24a, 1.6); audio.play("collapse", ex[i], ey[i]); for (let s = 0; s < 5; s++) dropSoul(ex[i] + (rng() - 0.5) * 10, ey[i] + (rng() - 0.5) * 10); }
+      if (edecor[i] >= 6) {
+        addPuff(ex[i], ey[i], 0xffd24a, 1.6); audio.play("collapse", ex[i], ey[i]);
+        const drop = (k: number): void => dropSoul(ex[i] + (rng() - 0.5) * 10, ey[i] + (rng() - 0.5) * 10, k);
+        const bt = edecor[i]; // 6 Scheune · 7 Haus · 8 Turm · 9 Kaserne
+        if (bt === 6) { drop(0); drop(0); }
+        else if (bt === 7) { drop(1); drop(0); }
+        else if (bt === 8) { drop(2); drop(1); }
+        else { drop(0); drop(0); drop(0); if (rng() < 0.5) drop(3); }
+      }
       return;
     }
     ealive[i] = 0; etarget[i] = -1; if (eking[i]) kingIdx[eowner[i]] = -1; audio.play(DEATH_SND[efac[i]], ex[i], ey[i]); deathFX(ex[i], ey[i], efac[i]); if (rng() < 0.5) dropSoul(ex[i], ey[i]); freeStack[freeTop++] = i;
@@ -1258,8 +1296,30 @@ async function main(): Promise<void> {
     const dx = ex[tgt] - ex[i], dy = ey[tgt] - ey[i], d = Math.hypot(dx, dy) || 1;
     const bolt = etype[i] === 6 ? 1 : 0, fac = efac[i];
     const spr = new Sprite(bolt ? boltTex[fac] : arrowTex); spr.anchor.set(0.5); if (bolt) spr.scale.set(1 + Math.min(0.5, d * 0.01)); arrowsLayer.addChild(spr);
-    arrows.push({ sx: ex[i], sy: ey[i], tx: ex[tgt], ty: ey[tgt], gx: ex[i], gy: ey[i], tgt, dmg: T_atk[etype[i]] * FAC_DMG[fac] * (playerActive && i === playerKing ? playerDmgMult * (buffDmg > 0 ? 1.5 : 1) : 1) * (eowner[i] === PLAYER && hordeBuffDmg > 0 ? 1.35 : 1), age: 0, T: Math.max(0.28, d * 0.02 + 0.12), apex: bolt ? Math.min(22, 4 + d * 0.4) : Math.min(60, 12 + d * 1.1), spr, psx: 0, psy: 0, bolt, fac });
+    arrows.push({ sx: ex[i], sy: ey[i], tx: ex[tgt], ty: ey[tgt], gx: ex[i], gy: ey[i], tgt, dmg: T_atk[etype[i]] * FAC_DMG[fac] * LV_DMG[elevel[i]] * (playerActive && i === playerKing ? playerDmgMult * (buffDmg > 0 ? 1.5 : 1) : 1) * (eowner[i] === PLAYER && hordeBuffDmg > 0 ? 1.35 : 1), age: 0, T: Math.max(0.28, d * 0.02 + 0.12), apex: bolt ? Math.min(22, 4 + d * 0.4) : Math.min(60, 12 + d * 1.1), spr, psx: 0, psy: 0, bolt, fac });
     if (bolt) audio.magic(ex[i], ey[i], fac); else audio.play("arrow", ex[i], ey[i]); // Magier: prozedurale Magie; Bogen: Pfeil-Sound
+  };
+  // VERTEIDIGUNGSTURM-GESCHOSS: schwerer Ballista-Bolzen (grau), trifft JEDE Unit (auch den Spieler) -> Stadt wehrt sich.
+  const fireTowerBolt = (ti: number, tgt: number): void => {
+    if (arrows.length >= ARROW_CAP) return;
+    const dx = ex[tgt] - ex[ti], dy = ey[tgt] - ey[ti], d = Math.hypot(dx, dy) || 1;
+    const spr = new Sprite(arrowTex); spr.anchor.set(0.5); spr.tint = 0xc8d0d8; spr.scale.set(1.6); arrowsLayer.addChild(spr);
+    arrows.push({ sx: ex[ti], sy: ey[ti], tx: ex[tgt], ty: ey[tgt], gx: ex[ti], gy: ey[ti], tgt, dmg: 16, age: 0, T: Math.max(0.32, d * 0.018 + 0.12), apex: Math.min(72, 20 + d * 1.1), spr, psx: 0, psy: 0, bolt: 0, fac: 0 });
+    audio.play("arrow", ex[ti], ey[ti]);
+  };
+  // nächste lebende UNIT (keine Deko/Gebäude) im Umkreis range² eines Turms -> Ziel für den Beschuss.
+  const nearestUnit = (ti: number, range2: number): number => {
+    const cx = clampCell(ex[ti]), cy = clampCell(ey[ti]), R = Math.ceil(Math.sqrt(range2) / CELL) + 1;
+    let best = -1, bestD = range2;
+    for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) {
+      const nx = cx + dx, ny = cy + dy; if (nx < 0 || ny < 0 || nx >= GW || ny >= GW) continue;
+      for (let j = gridHead[ny * GW + nx]; j !== -1; j = gridNext[j]) {
+        if (!ealive[j] || edecor[j] || j === ti) continue;             // nur Units (keine Gebäude/Deko)
+        const ddx = ex[j] - ex[ti], ddy = ey[j] - ey[ti], dd = ddx * ddx + ddy * ddy;
+        if (dd < bestD) { bestD = dd; best = j; }
+      }
+    }
+    return best;
   };
   // RUNDE: PLAYERS Horden frisch spawnen (Gesamtzahl = reqUnits) + Sturm zurücksetzen.
   const newRound = (): void => {
@@ -1269,6 +1329,7 @@ async function main(): Promise<void> {
     for (const s of souls) s.spr.destroy(); souls.length = 0;
     nEnt = decorCount; freeTop = 0; ealive.fill(0, decorCount); kingIdx.fill(-1); // Deko (0..decorCount) bleibt erhalten
     for (let b = 0; b < buildingIdx.length; b++) { const i = buildingIdx[b]; ealive[i] = 1; ehp[i] = emaxhp[i]; } // Gebäude pro Runde neu aufbauen
+    for (const tw of towers) tw.cd = rng() * TOWER_CD;                  // Turm-Cooldowns gestaffelt neu starten
     for (const p of pool) p.alpha = 0; lastDrawn = 0;
     zoneR = 380; zoneTarget = 380; zoneTimer = 0; drawZone();
     const perHorde = Math.max(1, Math.floor((reqUnits - PLAYERS) / PLAYERS));
@@ -1352,7 +1413,7 @@ async function main(): Promise<void> {
         pb.texture = FRAMES[2 * UNIT_FRAMES + j]; pb.anchorY = DECOR_ANCHOR[j]; pb.scaleX = dsc; pb.scaleY = dsc; pb.tint = 0xffffff; pb.alpha = 1;
         pt.alpha = 0;
       } else {                                                                           // UNIT: Body in Fraktionsfarbe + Team-Wappen-Overlay
-        const sc = T_scale[etype[u]] * FAC_SCALE[efac[u]] * UNIT_DRAW * (u === playerKing ? playerSizeMult : 1);
+        const sc = T_scale[etype[u]] * FAC_SCALE[efac[u]] * UNIT_DRAW * LV_SCALE[elevel[u]] * (u === playerKing ? playerSizeMult : 1);
         let fr: number;                                                                   // Pose: Angriff (Ausholen 4 -> Schlag 5) > Gang (0..3) > Idle (1)
         if (eatk[u] > 0) fr = eatk[u] > 8 ? 4 : 5;
         else { const moving = Math.abs(ex[u] - prevX[u]) + Math.abs(ey[u] - prevY[u]) > 0.05; fr = moving ? (((time * 8 + u * 0.7) | 0) & 3) : 1; }
@@ -1478,7 +1539,7 @@ async function main(): Promise<void> {
         const rng = ty === 5 && efac[i] === 1 ? 28 : T_range[ty];                          // Elf-Champion: große Reichweite
         if (d <= rng) {                                                                   // in Reichweite -> angreifen (auch Spieler)
           ecd[i] -= DT_FIX;
-          if (ecd[i] <= 0) { ecd[i] = T_cd[ty]; if (eranged[i]) { fireArrow(i, tg); eatk[i] = 10; } else { eatk[i] = 14; audio.play("melee", ex[i], ey[i]); ehp[tg] -= T_atk[ty] * FAC_DMG[efac[i]] * (isPlayer ? playerDmgMult * (buffDmg > 0 ? 1.5 : 1) : 1) * (mine && hordeBuffDmg > 0 ? 1.35 : 1) * (tg === playerKing && shieldTimer > 0 ? 0.5 : 1); eflash[tg] = 6; if (ty === 5 && efac[i] === 2) cleave(i, tg); if (ehp[tg] <= 0) killE(tg); } } // Ork-Champion: Cleave
+          if (ecd[i] <= 0) { ecd[i] = T_cd[ty]; if (eranged[i]) { fireArrow(i, tg); eatk[i] = 10; } else { eatk[i] = 14; audio.play("melee", ex[i], ey[i]); ehp[tg] -= T_atk[ty] * FAC_DMG[efac[i]] * LV_DMG[elevel[i]] * (isPlayer ? playerDmgMult * (buffDmg > 0 ? 1.5 : 1) : 1) * (mine && hordeBuffDmg > 0 ? 1.35 : 1) * (tg === playerKing && shieldTimer > 0 ? 0.5 : 1); eflash[tg] = 6; if (ty === 5 && efac[i] === 2) cleave(i, tg); if (ehp[tg] <= 0) killE(tg); } } // Ork-Champion: Cleave
           if (eranged[i] && d < 16 && !isPlayer) { mvx = -dx / d * sp; mvy = -dy / d * sp; } // Fernkämpfer kitet
         } else if (!isPlayer) { mvx = dx / d * sp; mvy = dy / d * sp; }                   // hinlaufen (Spieler steuert selbst)
       }
@@ -1539,6 +1600,14 @@ async function main(): Promise<void> {
       if (mvx !== 0 || mvy !== 0) { const nx = ex[i] + mvx * DT_FIX, ny = ey[i] + mvy * DT_FIX; if (passable(nx, ey[i])) ex[i] = nx; if (passable(ex[i], ny)) ey[i] = ny; }
       if (eflash[i] > 0) eflash[i] -= DT_FIX;
       if (eatk[i] > 0) eatk[i] -= DT_FIX;
+    }
+    // 3) VERTEIDIGUNGSTÜRME: neutrale Stadt-Türme beschießen die nächste Unit in Reichweite (Stadt-Tier wehrt sich).
+    for (let ti = 0; ti < towers.length; ti++) {
+      const tw = towers[ti], bi = tw.i; if (!ealive[bi]) continue;
+      tw.cd -= DT_FIX; if (tw.cd > 0) continue;
+      const tgt = nearestUnit(bi, TOWER_RANGE2);
+      if (tgt < 0) { tw.cd = 16; continue; }                            // niemand in Reichweite -> bald wieder spähen
+      fireTowerBolt(bi, tgt); tw.cd = TOWER_CD;
     }
   };
   // Render-Projektion + FRUSTUM-CULL: interpolierte gx/gy -> iso screenX/footY, aber nur für SICHTBARE
@@ -1690,10 +1759,14 @@ async function main(): Promise<void> {
       for (let i = souls.length - 1; i >= 0; i--) {
         const s = souls[i], dx = kx - s.gx, dy = ky - s.gy, d2 = dx * dx + dy * dy;
         if (d2 < 64) {                                                   // eingesammelt (< 8 grid)
-          if (s.gold) {                                                  // Gold-Seele -> Champion beschwören (+ extra XP)
+          if (s.kind === 3) {                                            // GOLD -> Champion beschwören (+ extra XP)
             if (freeTop > 0 || nEnt < CAP) spawnE(kx + (rng() - 0.5) * 16, ky + (rng() - 0.5) * 16, pf, 5, PLAYER);
             onPlayerSoul(); onPlayerSoul(); addPuff(kx, ky, 0xffd24a, 1.5);
-          } else {                                                       // grüne Seele -> Vasall + König-XP
+          } else if (s.kind === 1) {                                     // BLAU -> einen L1-Vasall auf L2 aufstufen (sonst König-XP)
+            if (!upgradePlayerMinion(1)) onPlayerSoul();
+          } else if (s.kind === 2) {                                     // LILA -> einen L2 auf L3 (sonst L1->L2, sonst König-XP)
+            if (!upgradePlayerMinion(2) && !upgradePlayerMinion(1)) onPlayerSoul();
+          } else {                                                       // GRÜN -> neuen Vasall rekrutieren + König-XP
             if (freeTop > 0 || nEnt < CAP) { const r = rng(), ty = r < 0.72 ? 0 : r < 0.86 ? 1 : r < 0.94 ? 2 : 6; spawnE(kx + (rng() - 0.5) * 16, ky + (rng() - 0.5) * 16, pf, ty, PLAYER); } // gel. Seele -> Vasall (auch Magier)
             onPlayerSoul();
           }
@@ -1776,9 +1849,9 @@ async function main(): Promise<void> {
     if (acc > 250) {
       acc = 0;
       let kingsAlive = 0; for (let p = 0; p < PLAYERS; p++) if (kingIdx[p] >= 0) kingsAlive++;
-      let total = 0, myHorde = 0; for (let i = decorCount; i < nEnt; i++) if (ealive[i]) { total++; if (eowner[i] === PLAYER) myHorde++; }
+      let total = 0, myHorde = 0, hL2 = 0, hL3 = 0; for (let i = decorCount; i < nEnt; i++) if (ealive[i]) { total++; if (eowner[i] === PLAYER) { myHorde++; if (elevel[i] === 2) hL2++; else if (elevel[i] === 3) hL3++; } }
       const pAlive = playerKing >= 0 && ealive[playerKing] === 1;
-      const me = pAlive ? `Du: Lv${playerLevel} · ${Math.max(0, ehp[playerKing]) | 0}/${emaxhp[playerKing] | 0} HP · Horde ${myHorde}` : `besiegt (Zuschauer)`;
+      const me = pAlive ? `Du: Lv${playerLevel} · ${Math.max(0, ehp[playerKing]) | 0}/${emaxhp[playerKing] | 0} HP · Horde ${myHorde}${hL2 + hL3 > 0 ? ` (L2·${hL2} L3·${hL3})` : ""}` : `besiegt (Zuschauer)`;
       const dashS = dashCd > 0 ? `${Math.ceil(dashCd)}s` : "●", shieldS = shieldTimer > 0 ? `aktiv ${Math.ceil(shieldTimer)}s` : shieldCd > 0 ? `${Math.ceil(shieldCd)}s` : "●";
       const buffs = (buffSpeed > 0 ? " ⚡Tempo" : "") + (buffDmg > 0 ? " ⚔Schaden" : "");
       const cmd = ["Folgen", "⚔ANGRIFF", "🛡RÜCKZUG"][orderMode];
